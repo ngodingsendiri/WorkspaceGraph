@@ -9,7 +9,8 @@ import type {
   GraphForceSettings,
   GraphSettings,
   GraphSavedView,
-  GraphPerfMode
+  GraphPerfMode,
+  GraphSearchMode
 } from '../../store/graphStore'
 import { Icon } from '../ui/Icons'
 
@@ -39,10 +40,26 @@ export interface GraphFiltersPanelProps {
   onShowLabels: (v: boolean) => void
   showLegend: boolean
   onShowLegend: (v: boolean) => void
+  /** Obsidian "Existing files only" */
+  existingFilesOnly: boolean
+  onExistingFilesOnly: (v: boolean) => void
+  showTags: boolean
+  onShowTags: (v: boolean) => void
+  showAttachments: boolean
+  onShowAttachments: (v: boolean) => void
+  animateForces: boolean
+  onAnimateForces: (v: boolean) => void
+  onForcePreset?: (key: string) => void
+  /** spotlight | filter (Obsidian search subtraction) */
+  searchMode: GraphSearchMode
+  onSearchMode: (m: GraphSearchMode) => void
   orphanCount: number
   hubCount: number
   totalNodes: number
   visibleNodes: number
+  ghostCount?: number
+  tagCount?: number
+  attachmentCount?: number
   /** Phase 3 */
   forces: GraphForceSettings
   onForcesChange: (next: GraphForceSettings) => void
@@ -66,8 +83,8 @@ export interface GraphFiltersPanelProps {
   hasPath: boolean
   onFindPath: () => void
   onClearPath: () => void
-  focusDepth: 1 | 2
-  onFocusDepth: (d: 1 | 2) => void
+  focusDepth: number
+  onFocusDepth: (d: number) => void
   hasFocus: boolean
   onFocusNeighbors: () => void
   onClearFocus: () => void
@@ -107,12 +124,20 @@ function displayPatch(
     arrows: extra?.arrows ?? false,
     textFade: extra?.textFade ?? 1,
     nodeSize: extra?.nodeSize ?? 1,
-    lineThickness: extra?.lineThickness ?? 1
+    lineThickness: extra?.lineThickness ?? 1,
+    existingFilesOnly: extra?.existingFilesOnly ?? true,
+    showTags: extra?.showTags ?? false,
+    showAttachments: extra?.showAttachments ?? false,
+    animateForces: extra?.animateForces ?? false
   }
 }
 
-function modesPatch(orphanMode: OrphanMode, hubMode: HubMode): Partial<GraphSettings['filters']> {
-  return { orphanMode, hubMode }
+function modesPatch(
+  orphanMode: OrphanMode,
+  hubMode: HubMode,
+  searchMode: GraphSearchMode = 'spotlight'
+): Partial<GraphSettings['filters']> {
+  return { orphanMode, hubMode, searchMode }
 }
 
 const FORCE_SLIDERS: {
@@ -237,10 +262,24 @@ export const GraphFiltersPanel: React.FC<GraphFiltersPanelProps> = ({
   onShowLabels,
   showLegend,
   onShowLegend,
+  existingFilesOnly,
+  onExistingFilesOnly,
+  showTags,
+  onShowTags,
+  showAttachments,
+  onShowAttachments,
+  animateForces,
+  onAnimateForces,
+  onForcePreset,
+  searchMode,
+  onSearchMode,
   orphanCount,
   hubCount,
   totalNodes,
   visibleNodes,
+  ghostCount = 0,
+  tagCount = 0,
+  attachmentCount = 0,
   forces,
   onForcesChange,
   onForcesCommit,
@@ -287,17 +326,32 @@ export const GraphFiltersPanel: React.FC<GraphFiltersPanelProps> = ({
   const [groupQuery, setGroupQuery] = useState('')
   const [groupColor, setGroupColor] = useState(GROUP_COLOR_SWATCHES[5])
 
-  const persistModes = (nextOrphan: OrphanMode, nextHub: HubMode): void => {
+  const persistModes = (
+    nextOrphan: OrphanMode,
+    nextHub: HubMode,
+    nextSearch: GraphSearchMode = searchMode
+  ): void => {
     onPersist?.({
-      display: displayPatch(showLabels, showTagEdges, showLegend, nextOrphan, nextHub, displayOpts),
-      filters: modesPatch(nextOrphan, nextHub) as GraphSettings['filters']
+      display: displayPatch(showLabels, showTagEdges, showLegend, nextOrphan, nextHub, {
+        ...displayOpts,
+        existingFilesOnly
+      }),
+      filters: modesPatch(nextOrphan, nextHub, nextSearch) as GraphSettings['filters']
     })
   }
 
-  const persistDisplayToggles = (labels: boolean, tagEdges: boolean, legend: boolean): void => {
+  const persistDisplayToggles = (
+    labels: boolean,
+    tagEdges: boolean,
+    legend: boolean,
+    existingOnly: boolean = existingFilesOnly
+  ): void => {
     onPersist?.({
-      display: displayPatch(labels, tagEdges, legend, orphanMode, hubMode, displayOpts),
-      filters: modesPatch(orphanMode, hubMode) as GraphSettings['filters']
+      display: displayPatch(labels, tagEdges, legend, orphanMode, hubMode, {
+        ...displayOpts,
+        existingFilesOnly: existingOnly
+      }),
+      filters: modesPatch(orphanMode, hubMode, searchMode) as GraphSettings['filters']
     })
   }
 
@@ -324,18 +378,115 @@ export const GraphFiltersPanel: React.FC<GraphFiltersPanelProps> = ({
       {/* ─── Filters (Obsidian: search + toggles) ─── */}
       <Section title="Filters" defaultOpen>
         <div className="graph-settings-row">
-          <label htmlFor="graph-spotlight">Spotlight judul</label>
+          <label htmlFor="graph-spotlight">Search</label>
           <input
             id="graph-spotlight"
             type="search"
             className="input graph-filter-search"
-            placeholder="Highlight match · non-match redup…"
+            placeholder={
+              searchMode === 'filter'
+                ? 'Filter: hanya match ditampilkan…'
+                : 'Spotlight: match disorot…'
+            }
             value={searchQuery}
             onChange={(e) => onSearchChange(e.target.value)}
             autoComplete="off"
             spellCheck={false}
           />
         </div>
+        <div className="graph-settings-row">
+          <label>Mode search</label>
+          <div className="graph-filter-seg" role="group" aria-label="Search mode">
+            {(
+              [
+                ['spotlight', 'Spotlight'],
+                ['filter', 'Filter']
+              ] as const
+            ).map(([id, lab]) => (
+              <button
+                key={id}
+                type="button"
+                className={`local-graph-chip ${searchMode === id ? 'active' : ''}`}
+                aria-pressed={searchMode === id}
+                title={
+                  id === 'filter'
+                    ? 'Sembunyikan non-match (seperti filter Obsidian)'
+                    : 'Redupkan non-match, tetap tampil'
+                }
+                onClick={() => {
+                  onSearchMode(id)
+                  persistModes(orphanMode, hubMode, id)
+                }}
+              >
+                {lab}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        <label className="graph-check">
+          <input
+            type="checkbox"
+            checked={existingFilesOnly}
+            onChange={(e) => {
+              onExistingFilesOnly(e.target.checked)
+              persistDisplayToggles(showLabels, showTagEdges, showLegend, e.target.checked)
+            }}
+          />
+          Existing files only
+          {ghostCount > 0 ? (
+            <span className="graph-filter-hint"> · {ghostCount} ghost</span>
+          ) : null}
+        </label>
+        <label className="graph-check">
+          <input
+            type="checkbox"
+            checked={showTags}
+            onChange={(e) => {
+              onShowTags(e.target.checked)
+              onPersist?.({
+                display: {
+                  ...displayPatch(showLabels, showTagEdges, showLegend, orphanMode, hubMode, {
+                    ...displayOpts,
+                    existingFilesOnly,
+                    showTags: e.target.checked,
+                    showAttachments,
+                    animateForces
+                  })
+                }
+              })
+            }}
+          />
+          Tags
+          {tagCount > 0 ? <span className="graph-filter-hint"> · {tagCount}</span> : null}
+        </label>
+        <label className="graph-check">
+          <input
+            type="checkbox"
+            checked={showAttachments}
+            onChange={(e) => {
+              onShowAttachments(e.target.checked)
+              onPersist?.({
+                display: {
+                  ...displayPatch(showLabels, showTagEdges, showLegend, orphanMode, hubMode, {
+                    ...displayOpts,
+                    existingFilesOnly,
+                    showTags,
+                    showAttachments: e.target.checked,
+                    animateForces
+                  })
+                }
+              })
+            }}
+          />
+          Attachments
+          {attachmentCount > 0 ? (
+            <span className="graph-filter-hint"> · {attachmentCount}</span>
+          ) : null}
+        </label>
+        <p className="graph-filter-hint">
+          Tags = diamond #tag · Attachments = file non-md · Ghost = hollow.
+        </p>
 
         <div className="graph-settings-row">
           <label>Orphans ({orphanCount})</label>
@@ -635,6 +786,49 @@ export const GraphFiltersPanel: React.FC<GraphFiltersPanelProps> = ({
 
       {/* ─── Forces ─── */}
       <Section title="Forces" defaultOpen>
+        <div className="graph-settings-row">
+          <label>Preset</label>
+          <div className="graph-filter-seg" role="group" aria-label="Force presets">
+            {(
+              [
+                ['default', 'Default'],
+                ['compact', 'Compact'],
+                ['relaxed', 'Relaxed'],
+                ['clustered', 'Cluster']
+              ] as const
+            ).map(([id, lab]) => (
+              <button
+                key={id}
+                type="button"
+                className="local-graph-chip"
+                onClick={() => onForcePreset?.(id)}
+              >
+                {lab}
+              </button>
+            ))}
+          </div>
+        </div>
+        <label className="graph-check">
+          <input
+            type="checkbox"
+            checked={animateForces}
+            onChange={(e) => {
+              onAnimateForces(e.target.checked)
+              onPersist?.({
+                display: {
+                  ...displayPatch(showLabels, showTagEdges, showLegend, orphanMode, hubMode, {
+                    ...displayOpts,
+                    existingFilesOnly,
+                    showTags,
+                    showAttachments,
+                    animateForces: e.target.checked
+                  })
+                }
+              })
+            }}
+          />
+          Animate (graph tetap hidup pelan)
+        </label>
         {FORCE_SLIDERS.map((s) => (
           <label key={s.key} className="graph-filter-range">
             <span>
@@ -737,15 +931,16 @@ export const GraphFiltersPanel: React.FC<GraphFiltersPanelProps> = ({
         <div className="graph-settings-row" style={{ marginTop: 8 }}>
           <label>Focus tetangga</label>
           <div className="graph-filter-seg" role="group" aria-label="Focus depth">
-            {([1, 2] as const).map((d) => (
+            {([1, 2, 3, 4, 5] as const).map((d) => (
               <button
                 key={d}
                 type="button"
                 className={`local-graph-chip ${focusDepth === d ? 'active' : ''}`}
                 aria-pressed={focusDepth === d}
                 onClick={() => onFocusDepth(d)}
+                title={`Neighborhood depth ${d}`}
               >
-                Depth {d}
+                D{d}
               </button>
             ))}
           </div>
@@ -904,10 +1099,4 @@ export const GraphFiltersPanel: React.FC<GraphFiltersPanelProps> = ({
   )
 }
 
-export const DEFAULT_FORCE_SETTINGS: GraphForceSettings = {
-  center: 0.06,
-  charge: -90,
-  linkDist: 68,
-  linkStr: 0.4,
-  collide: 0.6
-}
+export { DEFAULT_FORCE_SETTINGS } from './graphShared'

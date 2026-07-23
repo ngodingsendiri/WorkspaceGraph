@@ -1,323 +1,5 @@
-var __require = /* @__PURE__ */ ((x) => typeof require !== "undefined" ? require : typeof Proxy !== "undefined" ? new Proxy(x, {
-  get: (a, b) => (typeof require !== "undefined" ? require : a)[b]
-}) : x)(function(x) {
-  if (typeof require !== "undefined") return require.apply(this, arguments);
-  throw Error('Dynamic require of "' + x + '" is not supported');
-});
-
-// src/main/engine/SearchEngine.ts
-import Fuse from "fuse.js";
-
-// src/main/engine/IndexDatabase.ts
-import fs from "fs";
-import path from "path";
-var IndexDatabase = class {
-  db = null;
-  dbPath = null;
-  available = false;
-  isOpen() {
-    return this.db !== null && this.available;
-  }
-  getPath() {
-    return this.dbPath;
-  }
-  open(workspaceRoot) {
-    this.close();
-    try {
-      const Database = __require("better-sqlite3");
-      const dir = path.join(workspaceRoot, ".workspacegraph");
-      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-      this.dbPath = path.join(dir, "index.db");
-      this.db = new Database(this.dbPath);
-      this.db.pragma("journal_mode = WAL");
-      this.db.pragma("synchronous = NORMAL");
-      this.migrate();
-      this.available = true;
-      return true;
-    } catch (err) {
-      console.error("[IndexDatabase] open failed, Fuse-only mode:", err);
-      this.db = null;
-      this.available = false;
-      return false;
-    }
-  }
-  close() {
-    if (this.db) {
-      try {
-        this.db.close();
-      } catch {
-      }
-    }
-    this.db = null;
-    this.dbPath = null;
-    this.available = false;
-  }
-  migrate() {
-    if (!this.db) return;
-    this.db.exec(`
-      CREATE TABLE IF NOT EXISTS meta (
-        key TEXT PRIMARY KEY,
-        value TEXT
-      );
-
-      CREATE TABLE IF NOT EXISTS notes (
-        id TEXT PRIMARY KEY,
-        path TEXT NOT NULL UNIQUE,
-        relative_path TEXT NOT NULL,
-        title TEXT NOT NULL,
-        content TEXT NOT NULL,
-        tags TEXT NOT NULL DEFAULT '[]',
-        type TEXT NOT NULL DEFAULT 'note',
-        headings TEXT NOT NULL DEFAULT '',
-        frontmatter TEXT NOT NULL DEFAULT '{}',
-        updated_at TEXT NOT NULL DEFAULT ''
-      );
-
-      CREATE INDEX IF NOT EXISTS idx_notes_updated ON notes(updated_at);
-      CREATE INDEX IF NOT EXISTS idx_notes_type ON notes(type);
-
-      CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(
-        title,
-        content,
-        tags,
-        relative_path,
-        headings,
-        content='notes',
-        content_rowid='rowid',
-        tokenize='porter unicode61'
-      );
-
-      CREATE TRIGGER IF NOT EXISTS notes_ai AFTER INSERT ON notes BEGIN
-        INSERT INTO notes_fts(rowid, title, content, tags, relative_path, headings)
-        VALUES (new.rowid, new.title, new.content, new.tags, new.relative_path, new.headings);
-      END;
-
-      CREATE TRIGGER IF NOT EXISTS notes_ad AFTER DELETE ON notes BEGIN
-        INSERT INTO notes_fts(notes_fts, rowid, title, content, tags, relative_path, headings)
-        VALUES ('delete', old.rowid, old.title, old.content, old.tags, old.relative_path, old.headings);
-      END;
-
-      CREATE TRIGGER IF NOT EXISTS notes_au AFTER UPDATE ON notes BEGIN
-        INSERT INTO notes_fts(notes_fts, rowid, title, content, tags, relative_path, headings)
-        VALUES ('delete', old.rowid, old.title, old.content, old.tags, old.relative_path, old.headings);
-        INSERT INTO notes_fts(rowid, title, content, tags, relative_path, headings)
-        VALUES (new.rowid, new.title, new.content, new.tags, new.relative_path, new.headings);
-      END;
-    `);
-  }
-  clear() {
-    if (!this.db) return;
-    this.db.exec("DELETE FROM notes");
-    try {
-      this.db.exec(`INSERT INTO notes_fts(notes_fts) VALUES('rebuild')`);
-    } catch {
-    }
-  }
-  upsertNote(file) {
-    if (!this.db) return;
-    const tags = JSON.stringify(file.tags || []);
-    const headings = (file.headings || []).map((h) => h.text).join(" ");
-    const fm = JSON.stringify(file.frontmatter || {});
-    const updated = String(file.frontmatter.updated || file.frontmatter.date || "") || (/* @__PURE__ */ new Date()).toISOString();
-    const type = file.frontmatter.type || "note";
-    this.db.prepare("DELETE FROM notes WHERE path = ? AND id != ?").run(file.filePath, file.id);
-    this.db.prepare(
-      `INSERT INTO notes (id, path, relative_path, title, content, tags, type, headings, frontmatter, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(id) DO UPDATE SET
-           path=excluded.path,
-           relative_path=excluded.relative_path,
-           title=excluded.title,
-           content=excluded.content,
-           tags=excluded.tags,
-           type=excluded.type,
-           headings=excluded.headings,
-           frontmatter=excluded.frontmatter,
-           updated_at=excluded.updated_at`
-    ).run(
-      file.id,
-      file.filePath,
-      file.relativePath,
-      file.title,
-      file.content,
-      tags,
-      type,
-      headings,
-      fm,
-      updated
-    );
-  }
-  /** Full rebuild from parsed files (transaction) */
-  rebuild(parsedFiles) {
-    if (!this.db) return 0;
-    const run = this.db.transaction(() => {
-      this.clear();
-      for (const f of parsedFiles) {
-        this.upsertNote(f);
-      }
-      this.db.prepare(
-        `INSERT INTO meta(key, value) VALUES('last_rebuild', ?)
-         ON CONFLICT(key) DO UPDATE SET value=excluded.value`
-      ).run((/* @__PURE__ */ new Date()).toISOString());
-      return parsedFiles.length;
-    });
-    return run();
-  }
-  removeById(id) {
-    if (!this.db) return;
-    this.db.prepare("DELETE FROM notes WHERE id = ?").run(id);
-  }
-  removeByPath(filePath) {
-    if (!this.db) return;
-    this.db.prepare("DELETE FROM notes WHERE path = ?").run(filePath);
-  }
-  count() {
-    if (!this.db) return 0;
-    const row = this.db.prepare("SELECT COUNT(*) as c FROM notes").get();
-    return row?.c || 0;
-  }
-  getStats() {
-    if (!this.db) {
-      return { count: 0, path: this.dbPath, lastRebuild: null, open: false };
-    }
-    const meta = this.db.prepare(`SELECT value FROM meta WHERE key = 'last_rebuild'`).get();
-    return {
-      count: this.count(),
-      path: this.dbPath,
-      lastRebuild: meta?.value || null,
-      open: true
-    };
-  }
-  /**
-   * FTS5 query. Escapes user input to safe token query (AND of terms).
-   */
-  searchFts(query, limit = 20) {
-    if (!this.db || !query.trim()) return [];
-    const terms = query.trim().split(/\s+/).map((t) => t.replace(/["'*()^~{}[\]\\]/g, "").trim()).filter((t) => t.length > 0 && !t.includes(":")).slice(0, 12);
-    if (terms.length === 0) return [];
-    const ftsQuery = terms.map((t) => `"${t.replace(/"/g, "")}"*`).join(" ");
-    try {
-      const rows = this.db.prepare(
-        `SELECT n.id, n.path, n.relative_path, n.title, n.type, n.tags, n.updated_at,
-                  bm25(notes_fts) AS rank,
-                  snippet(notes_fts, 1, '\xAB', '\xBB', '\u2026', 12) AS snip
-           FROM notes_fts
-           JOIN notes n ON n.rowid = notes_fts.rowid
-           WHERE notes_fts MATCH ?
-           ORDER BY rank
-           LIMIT ?`
-      ).all(ftsQuery, limit);
-      return rows.map((r) => ({
-        id: r.id,
-        path: r.path,
-        relativePath: r.relative_path,
-        title: r.title,
-        type: r.type,
-        tags: this.parseTags(r.tags),
-        updatedAt: r.updated_at,
-        rank: typeof r.rank === "number" ? r.rank : 0,
-        snippet: (r.snip || "").replace(/\n/g, " ")
-      }));
-    } catch (err) {
-      console.error("[IndexDatabase] FTS query failed:", err);
-      return [];
-    }
-  }
-  searchByTag(tag, limit = 50) {
-    if (!this.db) return [];
-    const needle = tag.toLowerCase();
-    const rows = this.db.prepare(`SELECT * FROM notes ORDER BY updated_at DESC LIMIT 2000`).all();
-    return rows.filter((r) => this.parseTags(r.tags).some((t) => t.toLowerCase() === needle)).slice(0, limit).map((r) => ({
-      id: r.id,
-      path: r.path,
-      relativePath: r.relative_path,
-      title: r.title,
-      type: r.type,
-      tags: this.parseTags(r.tags),
-      updatedAt: r.updated_at,
-      rank: 0,
-      snippet: this.parseTags(r.tags).join(", ")
-    }));
-  }
-  getRecent(limit = 10) {
-    if (!this.db) return [];
-    const rows = this.db.prepare(
-      `SELECT id, path, relative_path, title, type, tags, updated_at, content
-         FROM notes ORDER BY updated_at DESC LIMIT ?`
-    ).all(limit);
-    return rows.map((r) => ({
-      id: r.id,
-      path: r.path,
-      relativePath: r.relative_path,
-      title: r.title,
-      type: r.type,
-      tags: this.parseTags(r.tags),
-      updatedAt: r.updated_at,
-      rank: 0,
-      snippet: (r.content || "").slice(0, 100).replace(/\n/g, " ").trim()
-    }));
-  }
-  getByIds(ids) {
-    if (!this.db || ids.length === 0) return [];
-    const out = [];
-    const stmt = this.db.prepare(
-      `SELECT id, path, relative_path, title, type, tags, updated_at, content FROM notes WHERE id = ?`
-    );
-    for (const id of ids) {
-      const r = stmt.get(id);
-      if (!r) continue;
-      out.push({
-        id: r.id,
-        path: r.path,
-        relativePath: r.relative_path,
-        title: r.title,
-        type: r.type,
-        tags: this.parseTags(r.tags),
-        updatedAt: r.updated_at,
-        rank: 0,
-        snippet: (r.content || "").slice(0, 100).replace(/\n/g, " ").trim()
-      });
-    }
-    return out;
-  }
-  /** Notes under Rules/, SOP/, Templates/, Prompt/ for Context Engine auto-include */
-  listSystemNotes(limit = 20) {
-    if (!this.db) return [];
-    const rows = this.db.prepare(
-      `SELECT id, path, relative_path, title, type, tags, updated_at, content
-         FROM notes
-         WHERE lower(relative_path) LIKE 'rules/%'
-            OR lower(relative_path) LIKE 'sop/%'
-            OR lower(relative_path) LIKE 'templates/%'
-            OR lower(relative_path) LIKE 'prompt/%'
-         ORDER BY relative_path
-         LIMIT ?`
-    ).all(limit);
-    return rows.map((r) => ({
-      id: r.id,
-      path: r.path,
-      relativePath: r.relative_path,
-      title: r.title,
-      type: r.type,
-      tags: this.parseTags(r.tags),
-      updatedAt: r.updated_at,
-      rank: 0,
-      snippet: (r.content || "").slice(0, 400).replace(/\n/g, " ").trim()
-    }));
-  }
-  parseTags(raw) {
-    try {
-      const arr = JSON.parse(raw || "[]");
-      return Array.isArray(arr) ? arr.map(String) : [];
-    } catch {
-      return [];
-    }
-  }
-};
-var indexDatabase = new IndexDatabase();
-
 // src/main/engine/GraphEngine.ts
-import path2 from "path";
+import path from "path";
 function tagNodeId(tag) {
   const t = (tag || "").replace(/^#/, "").trim().toLowerCase();
   return t ? `tag:${t}` : "";
@@ -392,7 +74,7 @@ function buildLookupMaps(items) {
   for (const file of items) {
     const id = file.id;
     addKey(maps, file.title.toLowerCase().trim(), id);
-    const baseName = path2.basename(file.path, path2.extname(file.path));
+    const baseName = path.basename(file.path, path.extname(file.path));
     addKey(maps, baseName, id);
     const rel = file.relativePath.replace(/\\/g, "/").replace(/\.md$/i, "");
     addKey(maps, rel, id);
@@ -538,7 +220,7 @@ var GraphEngine = class {
       if (existing && !existing.isAttachment) continue;
       this.nodes.set(a.id, {
         id: a.id,
-        title: a.title || path2.basename(a.path),
+        title: a.title || path.basename(a.path),
         type: "attachment",
         path: a.path,
         relativePath: a.relativePath || "",
@@ -565,7 +247,7 @@ var GraphEngine = class {
     }
     this.nodes.set(meta.id, {
       id: meta.id,
-      title: meta.title || path2.basename(meta.path),
+      title: meta.title || path.basename(meta.path),
       type: "attachment",
       path: meta.path,
       relativePath: meta.relativePath || "",
@@ -713,7 +395,7 @@ var GraphEngine = class {
     if (fmTitle && fmTitle.length > 0 && fmTitle.length <= 48 && !/^#+\s/.test(fmTitle)) {
       return fmTitle;
     }
-    return path2.basename(parsedFile.filePath, path2.extname(parsedFile.filePath));
+    return path.basename(parsedFile.filePath, path.extname(parsedFile.filePath));
   }
   outLinksFromParsed(parsedFile) {
     const seen = /* @__PURE__ */ new Set();
@@ -740,7 +422,7 @@ var GraphEngine = class {
       const node = {
         id: file.id,
         // Prefer filename for graph label (Obsidian-like); keep full title in data via path
-        title: path2.basename(file.filePath, path2.extname(file.filePath)),
+        title: path.basename(file.filePath, path.extname(file.filePath)),
         type: nodeTypeFromPath(file.relativePath),
         path: file.filePath,
         relativePath: file.relativePath,
@@ -761,7 +443,7 @@ var GraphEngine = class {
         if (this.nodes.has(a.id)) continue;
         this.nodes.set(a.id, {
           id: a.id,
-          title: a.title || path2.basename(a.path),
+          title: a.title || path.basename(a.path),
           type: "attachment",
           path: a.path,
           relativePath: a.relativePath || "",
@@ -867,16 +549,8 @@ var GraphEngine = class {
   getNeighbors(nodeId, depth = 1, options) {
     const maxDepth = Math.min(5, Math.max(1, Math.floor(depth) || 1));
     const includeTag = Boolean(options?.includeTagEdges);
-    const includeGhosts = Boolean(options?.includeGhosts);
     const visitedNodes = /* @__PURE__ */ new Set([nodeId]);
     let currentLayer = [nodeId];
-    const okNode = (id) => {
-      const n = this.nodes.get(id);
-      if (!n) return false;
-      if (!includeGhosts && n.isGhost) return false;
-      if (!includeTag && n.isTag) return false;
-      return true;
-    };
     for (let d = 0; d < maxDepth; d++) {
       const nextLayer = [];
       for (const currId of currentLayer) {
@@ -886,7 +560,7 @@ var GraphEngine = class {
           let other = null;
           if (edge.source === currId) other = edge.target;
           else if (edge.target === currId) other = edge.source;
-          if (other && !visitedNodes.has(other) && okNode(other)) {
+          if (other && !visitedNodes.has(other) && this.nodes.has(other)) {
             visitedNodes.add(other);
             nextLayer.push(other);
           }
@@ -899,15 +573,10 @@ var GraphEngine = class {
       if (!includeTag && edge.type === "tag") continue;
       if (edge.type !== "wiki_link" && edge.type !== "tag") continue;
       if (visitedNodes.has(edge.source) && visitedNodes.has(edge.target)) {
-        if (!includeGhosts) {
-          const a = this.nodes.get(edge.source);
-          const b = this.nodes.get(edge.target);
-          if (a?.isGhost || b?.isGhost) continue;
-        }
         resultEdges.push(edge);
       }
     }
-    const neighborNodes = Array.from(visitedNodes).filter((id) => id !== nodeId).map((id) => this.nodes.get(id)).filter((n) => n !== void 0).map((n) => this.stripInternal(n));
+    const neighborNodes = Array.from(visitedNodes).filter((id) => id !== nodeId).map((id) => this.nodes.get(id)).filter((n) => n !== void 0);
     return { nodes: neighborNodes, edges: resultEdges };
   }
   getNodeById(id) {
@@ -1000,7 +669,7 @@ var GraphEngine = class {
       }
       layer = next;
     }
-    const nodes = Array.from(visited).map((id) => this.nodes.get(id)).filter((n) => n !== void 0).map((n) => this.stripInternal(n));
+    const nodes = Array.from(visited).map((id) => this.nodes.get(id)).filter((n) => n !== void 0);
     const edges = [];
     for (const edge of this.edges.values()) {
       if (!includeTag && edge.type === "tag") continue;
@@ -1039,34 +708,14 @@ var GraphEngine = class {
    * Build undirected adjacency for wiki_link edges (tag optional).
    * Phase 4 path-finding foundation.
    */
-  /**
-   * Undirected adjacency for path / neighborhood.
-   * Default: real notes + attachments only (no ghosts, no tag-hub hops).
-   */
-  buildAdj(includeTagEdges = false, options) {
-    const includeGhosts = Boolean(options?.includeGhosts);
+  buildAdj(includeTagEdges = false) {
     const adj = /* @__PURE__ */ new Map();
     const ensure = (id) => {
       if (!adj.has(id)) adj.set(id, /* @__PURE__ */ new Set());
     };
-    const allowed = (id) => {
-      const n = this.nodes.get(id);
-      if (!n) return false;
-      if (!includeGhosts && n.isGhost) return false;
-      if (n.isTag && !includeTagEdges) return false;
-      return true;
-    };
-    for (const id of this.nodes.keys()) {
-      if (allowed(id)) ensure(id);
-    }
+    for (const n of this.nodes.keys()) ensure(n);
     for (const e of this.edges.values()) {
-      if (!allowed(e.source) || !allowed(e.target)) continue;
-      if (e.type === "wiki_link") {
-        ensure(e.source);
-        ensure(e.target);
-        adj.get(e.source).add(e.target);
-        adj.get(e.target).add(e.source);
-      } else if (includeTagEdges && e.type === "tag") {
+      if (e.type === "wiki_link" || includeTagEdges && e.type === "tag") {
         ensure(e.source);
         ensure(e.target);
         adj.get(e.source).add(e.target);
@@ -1074,10 +723,6 @@ var GraphEngine = class {
       }
     }
     return adj;
-  }
-  stripInternal(n) {
-    const { outLinks: _ol, ...rest } = n;
-    return rest;
   }
   /**
    * Shortest path (BFS) between two notes on wiki links (Obsidian-like path highlight).
@@ -1100,7 +745,7 @@ var GraphEngine = class {
         edges: []
       };
     }
-    const maxDepth = Math.min(256, Math.max(1, options?.maxDepth ?? 64));
+    const maxDepth = Math.min(50, Math.max(1, options?.maxDepth ?? 32));
     const adj = this.buildAdj(Boolean(options?.includeTagEdges));
     const prev = /* @__PURE__ */ new Map();
     const q = [fromId];
@@ -1230,398 +875,11 @@ var GraphEngine = class {
   }
 };
 var graphEngine = new GraphEngine();
-
-// src/main/engine/SearchEngine.ts
-var SearchEngine = class {
-  index = /* @__PURE__ */ new Map();
-  fuse = null;
-  useFts = true;
-  initFuse() {
-    this.fuse = new Fuse(Array.from(this.index.values()), {
-      keys: [
-        { name: "title", weight: 0.4 },
-        { name: "tags", weight: 0.2 },
-        { name: "content", weight: 0.3 },
-        { name: "relativePath", weight: 0.1 }
-      ],
-      includeScore: true,
-      includeMatches: true,
-      threshold: 0.4,
-      ignoreLocation: true
-    });
-  }
-  setUseFts(enabled) {
-    this.useFts = enabled;
-  }
-  /** Drop in-memory search state (workspace close / switch). SQLite closed separately. */
-  clear() {
-    this.index.clear();
-    this.fuse = null;
-    this.orphanIds = /* @__PURE__ */ new Set();
-  }
-  buildIndex(parsedFiles) {
-    this.index.clear();
-    for (const file of parsedFiles) {
-      this.addToIndex(file, false, false);
-    }
-    this.initFuse();
-    if (indexDatabase.isOpen()) {
-      indexDatabase.rebuild(parsedFiles);
-    }
-  }
-  coerceDate(val) {
-    if (val == null || val === "") return void 0;
-    if (val instanceof Date) return val.toISOString();
-    if (typeof val === "number") return new Date(val).toISOString();
-    if (typeof val === "string") return val;
-    return String(val);
-  }
-  addToIndex(file, rebuildFuse = true, writeDb = true) {
-    this.index.set(file.id, {
-      id: file.id,
-      title: file.title,
-      path: file.filePath,
-      relativePath: file.relativePath,
-      content: file.content,
-      tags: file.tags,
-      type: file.frontmatter.type || "note",
-      rawContent: file.content,
-      updatedAt: this.coerceDate(file.frontmatter.updated) || this.coerceDate(file.frontmatter.date) || void 0,
-      headings: (file.headings || []).map((h) => h.text).join(" ")
-    });
-    if (writeDb && indexDatabase.isOpen()) {
-      indexDatabase.upsertNote(file);
-    }
-    if (rebuildFuse) {
-      this.initFuse();
-    }
-  }
-  removeFromIndex(fileId) {
-    this.index.delete(fileId);
-    if (indexDatabase.isOpen()) {
-      indexDatabase.removeById(fileId);
-    }
-    this.initFuse();
-  }
-  rebuildSqliteFromMemory() {
-    if (!indexDatabase.isOpen()) return 0;
-    const files = Array.from(this.index.values()).map((e) => ({
-      id: e.id,
-      filePath: e.path,
-      relativePath: e.relativePath,
-      title: e.title,
-      frontmatter: { type: e.type, updated: e.updatedAt },
-      content: e.content,
-      rawContent: e.rawContent,
-      wikiLinks: [],
-      tags: e.tags,
-      wordCount: 0,
-      headings: (e.headings || "").split(/\s+/).filter(Boolean).map((text) => ({ level: 1, text }))
-    }));
-    return indexDatabase.rebuild(files);
-  }
-  search(options) {
-    const { query, limit = 20, filterType, filterTag } = options;
-    const q = (query || "").trim();
-    if (!q) {
-      return this.getRecentFiles(limit);
-    }
-    const lower = q.toLowerCase();
-    if (lower === "orphan:true" || lower === "is:orphan") {
-      return this.searchOrphans(limit);
-    }
-    const backMatch = q.match(/^backlinks?:(.+)$/i);
-    if (backMatch) {
-      return this.searchBacklinks(backMatch[1].trim(), limit);
-    }
-    const pathMatch = q.match(/^path:(.+)$/i);
-    if (pathMatch) {
-      return this.searchByPathFragment(pathMatch[1].trim(), limit);
-    }
-    const tagMatch = q.match(/^#([a-zA-Z0-9_/-]+)$/);
-    if (tagMatch) {
-      return this.searchByTagExact(tagMatch[1], limit);
-    }
-    const results = [];
-    const seen = /* @__PURE__ */ new Set();
-    if (this.useFts && indexDatabase.isOpen()) {
-      const ftsHits = indexDatabase.searchFts(q, limit);
-      for (const hit of ftsHits) {
-        if (filterType && hit.type !== filterType) continue;
-        if (filterTag && !hit.tags.some((t) => t.toLowerCase() === filterTag.toLowerCase()))
-          continue;
-        seen.add(hit.id);
-        const score = Math.max(0, Math.min(100, 80 + hit.rank * -2));
-        results.push({
-          id: hit.id,
-          title: hit.title,
-          path: hit.path,
-          relativePath: hit.relativePath,
-          score,
-          type: hit.type,
-          tags: hit.tags,
-          preview: hit.snippet || void 0,
-          matchedField: "content",
-          source: "fts"
-        });
-      }
-    }
-    if (results.length < limit && this.fuse) {
-      const fuseResults = this.fuse.search(q);
-      for (const res of fuseResults) {
-        const entry = res.item;
-        if (seen.has(entry.id)) continue;
-        if (filterType && entry.type !== filterType) continue;
-        if (filterTag && !entry.tags.some((t) => t.toLowerCase() === filterTag.toLowerCase()))
-          continue;
-        let preview;
-        let matchedField = "content";
-        if (res.matches && res.matches.length > 0) {
-          const match = res.matches[0];
-          if (match.key === "title") matchedField = "title";
-          else if (match.key === "tags") matchedField = "tag";
-          else if (match.key === "relativePath") matchedField = "path";
-          if (match.key === "content" && match.indices && match.indices.length > 0) {
-            const matchStart = match.indices[0][0];
-            const start = Math.max(0, matchStart - 60);
-            const end = Math.min(entry.rawContent.length, matchStart + q.length + 60);
-            preview = "..." + entry.rawContent.slice(start, end).replace(/\n/g, " ").trim() + "...";
-          }
-        }
-        if (!preview) {
-          preview = entry.rawContent.slice(0, 120).replace(/\n/g, " ").trim();
-        }
-        results.push({
-          id: entry.id,
-          title: entry.title,
-          path: entry.path,
-          relativePath: entry.relativePath,
-          score: (1 - (res.score || 0)) * 100,
-          type: entry.type,
-          tags: entry.tags,
-          preview,
-          matchedField,
-          source: "fuse"
-        });
-        seen.add(entry.id);
-        if (results.length >= limit) break;
-      }
-    }
-    return results.slice(0, limit);
-  }
-  searchBacklinks(targetTitle, limit = 50) {
-    const key = targetTitle.toLowerCase().replace(/\.md$/, "").trim();
-    if (!key) return [];
-    let targetId = null;
-    for (const entry of this.index.values()) {
-      if (entry.title.toLowerCase() === key) {
-        targetId = entry.id;
-        break;
-      }
-      const base = entry.relativePath.replace(/\\/g, "/").split("/").pop()?.replace(/\.md$/i, "") || "";
-      if (base.toLowerCase() === key) {
-        targetId = entry.id;
-        break;
-      }
-    }
-    if (!targetId) {
-      const p = graphEngine.resolveTitleToPath(targetTitle);
-      if (p) {
-        const node = graphEngine.getNodeByPath(p);
-        if (node) targetId = node.id;
-      }
-    }
-    if (targetId) {
-      const { nodes } = graphEngine.getBacklinks(targetId);
-      if (nodes.length > 0) {
-        return nodes.slice(0, limit).map((n) => ({
-          id: n.id,
-          title: n.title,
-          path: n.path,
-          relativePath: n.relativePath,
-          score: 100,
-          type: n.type,
-          tags: n.tags,
-          matchedField: "backlink",
-          preview: `\u2192 links to [[${targetTitle}]]`,
-          source: "meta"
-        }));
-      }
-    }
-    const wikiRe = /\[\[([^\]]+?)\]\]/g;
-    const results = [];
-    for (const e of this.index.values()) {
-      if (targetId && e.id === targetId) continue;
-      if (e.title.toLowerCase() === key) continue;
-      const body = (e.content || e.rawContent || "").replace(/```[\s\S]*?```/g, "").replace(/`[^`\n]+`/g, "");
-      wikiRe.lastIndex = 0;
-      let m;
-      let hit = false;
-      while ((m = wikiRe.exec(body)) !== null) {
-        const inner = m[1].replace(/\\\|/g, "|");
-        const pipe = inner.indexOf("|");
-        let t = (pipe >= 0 ? inner.slice(0, pipe) : inner).split("#")[0].split("^")[0].trim();
-        t = t.replace(/\\/g, "/").replace(/\/+$/g, "").toLowerCase();
-        const base = t.includes("/") ? t.split("/").pop() : t;
-        if (t === key || base === key) {
-          hit = true;
-          break;
-        }
-      }
-      if (hit) {
-        results.push({
-          id: e.id,
-          title: e.title,
-          path: e.path,
-          relativePath: e.relativePath,
-          score: 100,
-          type: e.type,
-          tags: e.tags,
-          matchedField: "backlink",
-          preview: `\u2192 links to [[${targetTitle}]]`,
-          source: "meta"
-        });
-        if (results.length >= limit) break;
-      }
-    }
-    return results;
-  }
-  searchByPathFragment(fragment, limit) {
-    const f = fragment.toLowerCase().replace(/\\/g, "/");
-    return Array.from(this.index.values()).filter((e) => e.relativePath.toLowerCase().replace(/\\/g, "/").includes(f)).slice(0, limit).map((e) => ({
-      id: e.id,
-      title: e.title,
-      path: e.path,
-      relativePath: e.relativePath,
-      score: 90,
-      type: e.type,
-      tags: e.tags,
-      matchedField: "path",
-      preview: e.relativePath,
-      source: "meta"
-    }));
-  }
-  searchByTag(tag) {
-    return this.searchByTagExact(tag.replace(/^#/, ""), 50);
-  }
-  searchByTagExact(tag, limit) {
-    if (indexDatabase.isOpen()) {
-      return indexDatabase.searchByTag(tag, limit).map((e) => ({
-        id: e.id,
-        title: e.title,
-        path: e.path,
-        relativePath: e.relativePath,
-        score: 100,
-        type: e.type,
-        tags: e.tags,
-        matchedField: "tag",
-        preview: e.tags.join(", "),
-        source: "fts"
-      }));
-    }
-    const t = tag.toLowerCase();
-    return Array.from(this.index.values()).filter((e) => e.tags.some((x) => x.toLowerCase() === t)).slice(0, limit).map((e) => ({
-      id: e.id,
-      title: e.title,
-      path: e.path,
-      relativePath: e.relativePath,
-      score: 100,
-      type: e.type,
-      tags: e.tags,
-      matchedField: "tag",
-      preview: e.tags.join(", "),
-      source: "meta"
-    }));
-  }
-  orphanIds = /* @__PURE__ */ new Set();
-  setOrphanIds(ids) {
-    this.orphanIds = new Set(ids);
-  }
-  searchOrphans(limit = 50) {
-    return Array.from(this.index.values()).filter((e) => this.orphanIds.has(e.id)).slice(0, limit).map((e) => ({
-      id: e.id,
-      title: e.title,
-      path: e.path,
-      relativePath: e.relativePath,
-      score: 0,
-      type: e.type,
-      tags: e.tags,
-      matchedField: "title",
-      preview: "Orphan note (no graph connections)",
-      source: "meta"
-    }));
-  }
-  getRecentFiles(limit = 10) {
-    if (indexDatabase.isOpen()) {
-      const hits = indexDatabase.getRecent(limit);
-      if (hits.length > 0) {
-        return hits.map((e) => ({
-          id: e.id,
-          title: e.title,
-          path: e.path,
-          relativePath: e.relativePath,
-          score: 0,
-          type: e.type,
-          tags: e.tags,
-          matchedField: "title",
-          preview: e.snippet,
-          source: "fts"
-        }));
-      }
-    }
-    return Array.from(this.index.values()).sort((a, b) => {
-      const ta = String(a.updatedAt || "");
-      const tb = String(b.updatedAt || "");
-      if (ta !== tb) return tb.localeCompare(ta);
-      return a.title.localeCompare(b.title);
-    }).slice(0, limit).map((e) => ({
-      id: e.id,
-      title: e.title,
-      path: e.path,
-      relativePath: e.relativePath,
-      score: 0,
-      type: e.type,
-      tags: e.tags,
-      matchedField: "title",
-      preview: e.rawContent.slice(0, 100).replace(/\n/g, " ").trim(),
-      source: "meta"
-    }));
-  }
-  getIndexSize() {
-    return this.index.size;
-  }
-  getIndexStats() {
-    return {
-      memoryCount: this.index.size,
-      sqlite: indexDatabase.getStats()
-    };
-  }
-  getAllTags() {
-    const tagMap = /* @__PURE__ */ new Map();
-    for (const entry of this.index.values()) {
-      for (const tag of entry.tags) {
-        tagMap.set(tag, (tagMap.get(tag) || 0) + 1);
-      }
-    }
-    return Array.from(tagMap.entries()).map(([tag, count]) => ({ tag, count })).sort((a, b) => b.count - a.count);
-  }
-  /** Paths under Rules/SOP/Templates for context auto-include */
-  getSystemFolderNotes() {
-    return Array.from(this.index.values()).filter((e) => {
-      const p = e.relativePath.replace(/\\/g, "/").toLowerCase();
-      return p.startsWith("rules/") || p.startsWith("sop/") || p.startsWith("templates/") || p.startsWith("prompt/");
-    });
-  }
-  getEntryByPath(filePath) {
-    const norm = filePath.replace(/\\/g, "/");
-    for (const e of this.index.values()) {
-      if (e.path.replace(/\\/g, "/") === norm) return e;
-    }
-    return void 0;
-  }
-};
-var searchEngine = new SearchEngine();
 export {
-  SearchEngine,
-  searchEngine
+  GraphEngine,
+  ghostNodeId,
+  graphEngine,
+  normalizeLinkTarget,
+  resolveLinkTarget,
+  tagNodeId
 };

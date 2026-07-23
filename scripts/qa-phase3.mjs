@@ -91,6 +91,12 @@ Then create a note.
   const ipc = fs.readFileSync(path.join(root, 'src/main/ipc/index.ts'), 'utf8')
   assert(ipc.includes('ai:applyProposal') && ipc.includes('ai:rejectProposal'), 'IPC proposals')
   assert(ipc.includes('chat:save') && ipc.includes('chat:load'), 'IPC chat persist')
+  // Conversation id path-traversal guard (ConversationStore.safeConversationId)
+  const convStore = fs.readFileSync(path.join(root, 'src/main/ai/ConversationStore.ts'), 'utf8')
+  assert(
+    convStore.includes('safeConversationId') && convStore.includes('^[a-zA-Z0-9_-]{1,80}$'),
+    'chat id path traversal guard'
+  )
   assert(ipc.includes('enableTools'), 'IPC enableTools')
 
   const pre = fs.readFileSync(path.join(root, 'src/preload/index.ts'), 'utf8')

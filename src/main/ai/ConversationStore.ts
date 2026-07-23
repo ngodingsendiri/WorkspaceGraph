@@ -31,6 +31,15 @@ function chatsDir(): string | null {
   return dir
 }
 
+/** Only allow safe conversation ids (no path traversal). */
+function safeConversationId(id: string): string | null {
+  if (!id || typeof id !== 'string') return null
+  const clean = id.trim()
+  // IDs are generated as YYYYMMDD_HHMMSS_xxxx — reject anything path-like
+  if (!/^[a-zA-Z0-9_-]{1,80}$/.test(clean)) return null
+  return clean
+}
+
 export function saveConversation(conv: StoredConversation): {
   ok: boolean
   path?: string
@@ -38,9 +47,15 @@ export function saveConversation(conv: StoredConversation): {
 } {
   const dir = chatsDir()
   if (!dir) return { ok: false, error: 'No workspace open' }
+  const clean = safeConversationId(conv.id)
+  if (!clean) return { ok: false, error: 'Invalid conversation id' }
   try {
-    const filePath = path.join(dir, `${conv.id}.json`)
-    fs.writeFileSync(filePath, JSON.stringify(conv, null, 2), 'utf-8')
+    const filePath = path.join(dir, `${clean}.json`)
+    const rel = path.relative(path.resolve(dir), path.resolve(filePath))
+    if (rel.startsWith('..') || path.isAbsolute(rel)) {
+      return { ok: false, error: 'Invalid conversation path' }
+    }
+    fs.writeFileSync(filePath, JSON.stringify({ ...conv, id: clean }, null, 2), 'utf-8')
     return { ok: true, path: filePath }
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) }
@@ -75,7 +90,12 @@ export function listConversations(limit = 30): StoredConversation[] {
 export function loadConversation(id: string): StoredConversation | null {
   const dir = chatsDir()
   if (!dir) return null
-  const filePath = path.join(dir, `${id}.json`)
+  const clean = safeConversationId(id)
+  if (!clean) return null
+  const filePath = path.join(dir, `${clean}.json`)
+  // Defense-in-depth: resolved path must stay under chats dir
+  const rel = path.relative(path.resolve(dir), path.resolve(filePath))
+  if (rel.startsWith('..') || path.isAbsolute(rel)) return null
   if (!fs.existsSync(filePath)) return null
   try {
     return JSON.parse(fs.readFileSync(filePath, 'utf-8')) as StoredConversation

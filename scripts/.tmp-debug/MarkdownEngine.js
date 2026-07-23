@@ -121,14 +121,6 @@ function parseGfmAligns(sep) {
 }
 function renderInline(text) {
   let s = text.length > 2e4 ? text.slice(0, 2e4) : text;
-  s = s.replace(
-    /!\[([^\]]*?)\]\((https?:[^)\s]+|mailto:[^)\s]+)\)/gi,
-    (_m, alt, url) => `<img src="${escapeHtml(url)}" alt="${escapeHtml(alt)}" />`
-  );
-  s = s.replace(
-    /\[([^\]]+?)\]\((https?:[^)\s]+|mailto:[^)\s]+)\)/gi,
-    (_m, label, url) => `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${label}</a>`
-  );
   s = s.replace(/`([^`\n]+?)`/g, "<code>$1</code>");
   s = s.replace(/\*\*\*([^*]+?)\*\*\*/g, "<strong><em>$1</em></strong>");
   s = s.replace(/\*\*([^*]+?)\*\*/g, "<strong>$1</strong>");
@@ -163,6 +155,25 @@ function renderMarkdownToHtml(content) {
     wikiSlots.push({ target, label });
     return `\xA7\xA7WIKI${idx}\xA7\xA7`;
   });
+  const extSlots = [];
+  src = src.replace(
+    /!\[([^\]]*?)\]\((https?:[^)\s]+|mailto:[^)\s]+)\)/gi,
+    (_m, alt, url) => {
+      const idx = extSlots.length;
+      extSlots.push(`<img src="${escapeHtml(url)}" alt="${escapeHtml(alt)}" />`);
+      return `\xA7\xA7EXT${idx}\xA7\xA7`;
+    }
+  );
+  src = src.replace(
+    /\[([^\]]+?)\]\((https?:[^)\s]+|mailto:[^)\s]+)\)/gi,
+    (_m, label, url) => {
+      const idx = extSlots.length;
+      extSlots.push(
+        `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(label)}</a>`
+      );
+      return `\xA7\xA7EXT${idx}\xA7\xA7`;
+    }
+  );
   const lines = src.split("\n");
   const out = [];
   let i = 0;
@@ -301,6 +312,9 @@ function renderMarkdownToHtml(content) {
     const slot = wikiSlots[Number(n)];
     if (!slot) return "[[?]]";
     return `<span class="wiki-link" data-target="${escapeHtml(slot.target)}">${escapeHtml(slot.label)}</span>`;
+  });
+  html = html.replace(/§§EXT(\d+)§§/g, (_m, n) => {
+    return extSlots[Number(n)] || "";
   });
   return html;
 }

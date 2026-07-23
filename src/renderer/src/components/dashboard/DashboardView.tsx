@@ -26,7 +26,7 @@ interface DomainOverview {
 export const DashboardView: React.FC<{ onOpenSearch: () => void }> = ({ onOpenSearch }) => {
   const { rootPath, totalFiles, totalNotes, setActiveView } = useWorkspaceStore()
   const openTab = useEditorStore((s) => s.openTab)
-  const { nodes, edges, fetchGraph, setFocusedNode } = useGraphStore()
+  const { nodes, edges, fetchGraph, setFocusedNode, setOpenIntent } = useGraphStore()
 
   const [recentNotes, setRecentNotes] = useState<
     { id: string; title: string; path: string; relativePath: string; type?: string }[]
@@ -84,9 +84,21 @@ export const DashboardView: React.FC<{ onOpenSearch: () => void }> = ({ onOpenSe
   }
 
   const handleOpenInGraph = (notePath: string) => {
-    const node = nodes.find((n) => n.path === notePath)
+    // Windows paths: case/separators may differ between search index and graph nodes
+    const norm = (p: string) => p.replace(/\\/g, '/').toLowerCase()
+    const target = norm(notePath)
+    const node = nodes.find(
+      (n) =>
+        norm(n.path) === target ||
+        norm(n.relativePath) === target ||
+        norm(n.path).endsWith('/' + target) ||
+        target.endsWith('/' + norm(n.relativePath))
+    )
     if (node) {
       setFocusedNode(node.id)
+      setActiveView('graph')
+    } else {
+      // Still open Graph View so user can search — focus is best-effort
       setActiveView('graph')
     }
   }
@@ -99,13 +111,23 @@ export const DashboardView: React.FC<{ onOpenSearch: () => void }> = ({ onOpenSe
   }
 
   const handleOrphanClick = () => {
+    // Open Graph with orphans-only filter (primary); search remains available via search
+    setOpenIntent({ orphanMode: 'only' })
+    setActiveView('graph')
+  }
+
+  const handleOrphanSearch = () => {
     onOpenSearch()
     setTimeout(() => {
       window.dispatchEvent(new CustomEvent('search:prefill', { detail: 'orphan:true' }))
     }, 50)
   }
 
-  const orphanNodes = nodes.filter((n) => n.degree === 0)
+  /** Real notes only — exclude ghosts/tags/attachments */
+  const orphanNodes = nodes.filter(
+    (n) => !n.isGhost && !n.isTag && !n.isAttachment && n.degree === 0
+  )
+  const realNoteCount = nodes.filter((n) => !n.isGhost && !n.isTag && !n.isAttachment).length
 
   const metrics = [
     {
@@ -143,11 +165,12 @@ export const DashboardView: React.FC<{ onOpenSearch: () => void }> = ({ onOpenSe
       label: 'Orphans',
       value: orphanNodes.length,
       color: orphanNodes.length > 0 ? 'var(--color-warning)' : 'var(--text-muted)',
-      onClick: orphanNodes.length > 0 ? handleOrphanClick : undefined
+      onClick: orphanNodes.length > 0 ? handleOrphanClick : undefined,
+      hint: 'Buka Graph · orphans only'
     },
     {
       label: 'Graph',
-      value: `${nodes.length}/${edges.length}`,
+      value: `${realNoteCount}/${edges.filter((e) => e.type !== 'tag').length}`,
       color: 'var(--color-accent)',
       onClick: () => setActiveView('graph')
     },
@@ -391,6 +414,59 @@ export const DashboardView: React.FC<{ onOpenSearch: () => void }> = ({ onOpenSe
               </span>
             ))}
           </div>
+
+          <div
+            className="section-title"
+            style={{
+              padding: 'var(--space-4) 0 var(--space-2) 0',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              gap: 8
+            }}
+          >
+            <span>Orphan notes</span>
+            {orphanNodes.length > 0 && (
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                style={{ fontSize: 10, padding: '2px 6px' }}
+                onClick={handleOrphanClick}
+                title="Buka Graph · orphans only"
+              >
+                Graph
+              </button>
+            )}
+          </div>
+          {orphanNodes.length === 0 ? (
+            <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', padding: 8 }}>
+              Tidak ada orphan — semua note terhubung.
+            </div>
+          ) : (
+            orphanNodes.slice(0, 8).map((n) =>
+              listItem(n.title, n.relativePath || n.type, () => openNote(n.path), '0 links')
+            )
+          )}
+          {orphanNodes.length > 8 && (
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              style={{ marginTop: 4, fontSize: 11 }}
+              onClick={handleOrphanClick}
+            >
+              +{orphanNodes.length - 8} lagi di Graph
+            </button>
+          )}
+          {orphanNodes.length > 0 && (
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm"
+              style={{ marginTop: 2, fontSize: 10, color: 'var(--text-muted)' }}
+              onClick={handleOrphanSearch}
+            >
+              Cari orphan:true
+            </button>
+          )}
         </div>
       </div>
 

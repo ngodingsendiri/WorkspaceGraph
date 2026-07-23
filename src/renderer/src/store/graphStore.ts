@@ -8,6 +8,10 @@ export interface GraphNodeData {
   relativePath: string
   tags: string[]
   degree: number
+  /** Unresolved wikilink target (Obsidian ghost) */
+  isGhost?: boolean
+  isTag?: boolean
+  isAttachment?: boolean
 }
 
 export interface GraphEdgeData {
@@ -40,6 +44,14 @@ export interface GraphDisplaySettings {
   nodeSize: number
   /** Obsidian-like: edge thickness multiplier */
   lineThickness: number
+  /** Obsidian "Existing files only" — hide ghost/unresolved nodes when true */
+  existingFilesOnly: boolean
+  /** Show #tag as nodes */
+  showTags: boolean
+  /** Show non-md attachments */
+  showAttachments: boolean
+  /** Keep force sim gently alive */
+  animateForces: boolean
 }
 
 /** Obsidian-like color group: query match → node color override */
@@ -57,6 +69,7 @@ export type GraphDisplayOpts = Pick<
 
 export type GraphOrphanMode = 'all' | 'hide' | 'only'
 export type GraphHubMode = 'all' | 'dim' | 'hide'
+export type GraphSearchMode = 'spotlight' | 'filter'
 
 export interface GraphFilterSettings {
   hubDegreeThreshold: number
@@ -65,6 +78,8 @@ export interface GraphFilterSettings {
   orphanMode: GraphOrphanMode
   /** Phase 2 — global hub filter */
   hubMode: GraphHubMode
+  /** spotlight = dim non-matches; filter = hide non-matches (Obsidian) */
+  searchMode: GraphSearchMode
 }
 
 export interface GraphSettings {
@@ -86,6 +101,12 @@ export interface GraphLayoutNodePos {
   x: number
   y: number
   pinned?: boolean
+}
+
+export interface GraphCamera {
+  x: number
+  y: number
+  k: number
 }
 
 export interface LocalGraphData {
@@ -116,6 +137,12 @@ export interface GraphViewSnapshot {
   textFade: number
   nodeSize: number
   lineThickness: number
+  existingFilesOnly: boolean
+  searchMode: GraphSearchMode
+  showTags?: boolean
+  showAttachments?: boolean
+  animateForces?: boolean
+  camera?: GraphCamera | null
   groups: GraphColorGroup[]
 }
 
@@ -126,15 +153,30 @@ export interface GraphSavedView {
   snapshot: GraphViewSnapshot
 }
 
+/** One-shot intent when opening Graph from dashboard/search (consumed by GraphCanvas). */
+export interface GraphOpenIntent {
+  orphanMode?: GraphOrphanMode
+  hubMode?: GraphHubMode
+  searchQuery?: string
+  searchMode?: GraphSearchMode
+  showTags?: boolean
+  showAttachments?: boolean
+  focusNodeId?: string
+}
+
 export interface GraphStore {
   nodes: GraphNodeData[]
   edges: GraphEdgeData[]
   focusedNodeId: string | null
   filterType: string | null
   filterTag: string | null
+  /** Consumed once when Graph view mounts / becomes active */
+  openIntent: GraphOpenIntent | null
 
   /** Phase 0: layout positions from vault file */
   layoutNodes: Record<string, GraphLayoutNodePos>
+  /** Last saved camera from graph-layout.json */
+  layoutCamera: GraphCamera | null
   /** Phase 0: persisted graph preferences */
   graphSettings: GraphSettings | null
   orphanIds: string[]
@@ -170,6 +212,7 @@ export interface GraphStore {
     nodes: Record<string, GraphLayoutNodePos>,
     replaceAll?: boolean
   ) => Promise<boolean>
+  saveGraphCamera: (camera: GraphCamera) => Promise<boolean>
   loadGraphSettings: () => Promise<GraphSettings | null>
   updateGraphSettings: (partial: GraphSettingsPatch) => Promise<GraphSettings | null>
   fetchGraphViews: () => Promise<GraphSavedView[]>
@@ -182,6 +225,8 @@ export interface GraphStore {
   setFocusedNode: (nodeId: string | null) => void
   setFilterType: (type: string | null) => void
   setFilterTag: (tag: string | null) => void
+  setOpenIntent: (intent: GraphOpenIntent | null) => void
+  consumeOpenIntent: () => GraphOpenIntent | null
 }
 
 const emptySettingsHint: GraphSettings = {
@@ -195,9 +240,19 @@ const emptySettingsHint: GraphSettings = {
     arrows: false,
     textFade: 1,
     nodeSize: 1,
-    lineThickness: 1
+    lineThickness: 1,
+    existingFilesOnly: true,
+    showTags: false,
+    showAttachments: false,
+    animateForces: false
   },
-  filters: { hubDegreeThreshold: 15, localDepth: 1, orphanMode: 'all', hubMode: 'dim' },
+  filters: {
+    hubDegreeThreshold: 15,
+    localDepth: 1,
+    orphanMode: 'all',
+    hubMode: 'dim',
+    searchMode: 'spotlight'
+  },
   groups: []
 }
 
@@ -207,7 +262,9 @@ export const useGraphStore = create<GraphStore>((set, get) => ({
   focusedNodeId: null,
   filterType: null,
   filterTag: null,
+  openIntent: null,
   layoutNodes: {},
+  layoutCamera: null,
   graphSettings: null,
   orphanIds: [],
   hubIds: [],
@@ -215,10 +272,68 @@ export const useGraphStore = create<GraphStore>((set, get) => ({
 
   fetchGraph: async () => {
     try {
+      if (!window.api?.getGraphData) {
+        console.error('Failed to fetch graph data: window.api.getGraphData missing')
+        set({ nodes: [], edges: [] })
+        return
+      }
       const data = await window.api.getGraphData()
-      set({ nodes: data.nodes || [], edges: data.edges || [] })
+      const rawNodes = Array.isArray(data?.nodes) ? data.nodes : []
+      const rawEdges = Array.isArray(data?.edges) ? data.edges : []
+      // Normalize — bad/partial IPC payloads must not crash GraphCanvas
+      const nodes = rawNodes
+        .filter((n: { id?: string }) => n && typeof n.id === 'string' && n.id)
+        .map(
+          (n: {
+            id: string
+            title?: string
+            type?: string
+            path?: string
+            relativePath?: string
+            tags?: string[]
+            degree?: number
+            isGhost?: boolean
+          }) => ({
+            id: n.id,
+            title: n.title || n.relativePath || n.id,
+            type: n.isGhost ? 'ghost' : n.type || 'other',
+            path: n.path || '',
+            relativePath: n.relativePath || '',
+            tags: Array.isArray(n.tags) ? n.tags.map(String) : [],
+            degree: typeof n.degree === 'number' && Number.isFinite(n.degree) ? n.degree : 0,
+            isGhost: Boolean(n.isGhost || n.type === 'ghost'),
+            isTag: Boolean((n as { isTag?: boolean }).isTag || n.type === 'tag'),
+            isAttachment: Boolean(
+              (n as { isAttachment?: boolean }).isAttachment || n.type === 'attachment'
+            )
+          })
+        )
+      const edges = rawEdges
+        .map(
+          (e: {
+            id?: string
+            source?: string
+            target?: string
+            type?: string
+            weight?: number
+          }) => {
+            const source = typeof e?.source === 'string' ? e.source : ''
+            const target = typeof e?.target === 'string' ? e.target : ''
+            if (!source || !target) return null
+            return {
+              id: e.id || `${source}->${target}`,
+              source,
+              target,
+              type: e.type || 'wiki_link',
+              weight: typeof e.weight === 'number' ? e.weight : 1
+            }
+          }
+        )
+        .filter(Boolean) as GraphEdgeData[]
+      set({ nodes, edges })
     } catch (err) {
       console.error('Failed to fetch graph data:', err)
+      set({ nodes: [], edges: [] })
     }
   },
 
@@ -233,11 +348,21 @@ export const useGraphStore = create<GraphStore>((set, get) => ({
       ])
       const thr = settings?.filters?.hubDegreeThreshold ?? 15
       const hubs = await window.api.getGraphHubs(thr)
+      const cam = layout?.camera
+      const layoutCamera =
+        cam &&
+        typeof cam.x === 'number' &&
+        typeof cam.y === 'number' &&
+        typeof cam.k === 'number' &&
+        Number.isFinite(cam.k)
+          ? { x: cam.x, y: cam.y, k: cam.k }
+          : null
       set({
         orphanIds: orphans?.ids || [],
         hubIds: hubs?.ids || [],
         graphSettings: settings || emptySettingsHint,
         layoutNodes: layout?.nodes || {},
+        layoutCamera,
         savedViews: (viewsFile?.views || []) as unknown as GraphSavedView[]
       })
     } catch (err) {
@@ -298,12 +423,35 @@ export const useGraphStore = create<GraphStore>((set, get) => ({
       const res = await window.api.saveGraphLayout({ nodes, replaceAll })
       if (res?.ok) {
         const layout = await window.api.getGraphLayout()
-        set({ layoutNodes: layout?.nodes || {} })
+        const cam = layout?.camera
+        set({
+          layoutNodes: layout?.nodes || {},
+          layoutCamera:
+            cam && Number.isFinite(cam.k) ? { x: cam.x, y: cam.y, k: cam.k } : get().layoutCamera
+        })
         return true
       }
       return false
     } catch (err) {
       console.error('Failed to save graph layout:', err)
+      return false
+    }
+  },
+
+  saveGraphCamera: async (camera) => {
+    try {
+      if (!camera || !Number.isFinite(camera.k)) return false
+      const res = await window.api.saveGraphLayout({
+        camera: { x: camera.x, y: camera.y, k: camera.k },
+        cameraOnly: true
+      })
+      if (res?.ok) {
+        set({ layoutCamera: { x: camera.x, y: camera.y, k: camera.k } })
+        return true
+      }
+      return false
+    } catch (err) {
+      console.error('Failed to save graph camera:', err)
       return false
     }
   },
@@ -382,5 +530,11 @@ export const useGraphStore = create<GraphStore>((set, get) => ({
 
   setFocusedNode: (nodeId) => set({ focusedNodeId: nodeId }),
   setFilterType: (type) => set({ filterType: type }),
-  setFilterTag: (tag) => set({ filterTag: tag })
+  setFilterTag: (tag) => set({ filterTag: tag }),
+  setOpenIntent: (intent) => set({ openIntent: intent }),
+  consumeOpenIntent: () => {
+    const intent = get().openIntent
+    if (intent) set({ openIntent: null })
+    return intent
+  }
 }))

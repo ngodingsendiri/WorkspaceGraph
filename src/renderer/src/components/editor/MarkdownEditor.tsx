@@ -5,6 +5,7 @@ import { EditorView } from '@codemirror/view'
 import { useEditorStore, normPath } from '../../store/editorStore'
 import { useWorkspaceStore } from '../../store/workspaceStore'
 import { BacklinksPanel } from './BacklinksPanel'
+import { LocalGraphView } from '../graph/LocalGraphView'
 import { Icon } from '../ui/Icons'
 import { getActiveMode, subscribeThemePreferenceChange, type ThemeMode } from '../../utils/theme'
 import {
@@ -480,6 +481,9 @@ export const MarkdownEditor: React.FC = () => {
           </aside>
         )}
       </div>
+
+      {/* Obsidian-like local graph dock under the note */}
+      <LocalGraphView />
     </div>
   )
 }

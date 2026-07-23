@@ -1,5 +1,6 @@
-import { ipcMain, dialog, BrowserWindow } from 'electron'
+import { ipcMain, dialog, BrowserWindow, shell } from 'electron'
 import fs from 'fs'
+import crypto from 'crypto'
 import { workspaceEngine } from '../engine/WorkspaceEngine'
 import { markdownEngine } from '../engine/MarkdownEngine'
 import { graphEngine } from '../engine/GraphEngine'
@@ -68,20 +69,65 @@ function requireOpenVault(): string {
   return root
 }
 
-function syncWorkspaceData(rootPath: string): void {
-  const fileTree = workspaceEngine.refreshFiles()
+const ATTACH_EXTS = new Set([
+  '.png',
+  '.jpg',
+  '.jpeg',
+  '.gif',
+  '.webp',
+  '.svg',
+  '.bmp',
+  '.pdf',
+  '.mp3',
+  '.mp4',
+  '.wav',
+  '.webm',
+  '.zip',
+  '.csv',
+  '.json',
+  '.xlsx',
+  '.docx',
+  '.pptx',
+  '.txt'
+])
 
+function collectVaultFiles(fileTree: ReturnType<typeof workspaceEngine.refreshFiles>): {
+  mdFiles: string[]
+  attachments: { path: string; relativePath: string; extension: string }[]
+} {
   const mdFiles: string[] = []
-  function collectMd(files: typeof fileTree) {
+  const attachments: { path: string; relativePath: string; extension: string }[] = []
+  function walk(files: typeof fileTree) {
     for (const f of files) {
       if (f.isDirectory && f.children) {
-        collectMd(f.children)
-      } else if (!f.isDirectory && f.extension === '.md') {
-        mdFiles.push(f.path)
+        walk(f.children)
+      } else if (!f.isDirectory) {
+        const ext = (f.extension || '').toLowerCase()
+        if (ext === '.md') mdFiles.push(f.path)
+        else if (ATTACH_EXTS.has(ext) || (ext && ext !== '.md')) {
+          // Prefer known types; still allow other non-md (capped later in engine)
+          attachments.push({
+            path: f.path,
+            relativePath: f.relativePath || f.name,
+            extension: ext
+          })
+        }
       }
     }
   }
-  collectMd(fileTree)
+  walk(fileTree)
+  return { mdFiles, attachments }
+}
+
+function filePathId(filePath: string): string {
+  // Must match MarkdownEngine.generateId (sha256 path, 24 hex)
+  const key = filePath.replace(/\\/g, '/').toLowerCase()
+  return crypto.createHash('sha256').update(key).digest('hex').slice(0, 24)
+}
+
+function syncWorkspaceData(rootPath: string): void {
+  const fileTree = workspaceEngine.refreshFiles()
+  const { mdFiles, attachments } = collectVaultFiles(fileTree)
 
   const parsedFiles: ParsedMarkdown[] = []
   for (const filePath of mdFiles) {
@@ -94,8 +140,17 @@ function syncWorkspaceData(rootPath: string): void {
     }
   }
 
-  // Build wiki + light tag edges; UI defaults hide tag edges (Obsidian-like)
+  // Build wiki + co-tag star edges; UI defaults hide tag edges (Obsidian-like)
   graphEngine.buildFromParsedFiles(parsedFiles, true)
+  // Attachments after notes so [[file.png]] resolves to real nodes
+  graphEngine.setAttachments(
+    attachments.map((a) => ({
+      id: filePathId(a.path),
+      path: a.path,
+      relativePath: a.relativePath,
+      title: a.path.split(/[/\\]/).pop() || a.relativePath
+    }))
+  )
   domainEngine.setParsedFiles(parsedFiles)
   // Ensure SQLite FTS cache is open before buildIndex writes rebuild
   if (!indexDatabase.isOpen()) {
@@ -106,15 +161,33 @@ function syncWorkspaceData(rootPath: string): void {
 }
 
 function syncSingleFile(filePath: string, rootPath: string): void {
-  if (!filePath.toLowerCase().endsWith('.md')) return
+  const lower = filePath.toLowerCase()
+  if (lower.endsWith('.md')) {
+    try {
+      const raw = workspaceEngine.readFile(filePath)
+      const parsed = stampMtime(markdownEngine.parseFile(filePath, raw, rootPath), filePath)
+      graphEngine.updateNodeAndEdges(parsed)
+      searchEngine.addToIndex(parsed)
+      searchEngine.setOrphanIds(graphEngine.getOrphanNodeIds())
+    } catch (err) {
+      console.error(`Failed to sync single file: ${filePath}`, err)
+    }
+    return
+  }
+  // Non-md: lightweight upsert (no full attachment rebuild)
   try {
-    const raw = workspaceEngine.readFile(filePath)
-    const parsed = stampMtime(markdownEngine.parseFile(filePath, raw, rootPath), filePath)
-    graphEngine.updateNodeAndEdges(parsed)
-    searchEngine.addToIndex(parsed)
+    const ext = path.extname(filePath).toLowerCase()
+    if (!ext || ext === '.md') return
+    const rel = path.relative(rootPath, filePath).replace(/\\/g, '/')
+    graphEngine.upsertAttachment({
+      id: filePathId(filePath),
+      path: filePath,
+      relativePath: rel,
+      title: path.basename(filePath)
+    })
     searchEngine.setOrphanIds(graphEngine.getOrphanNodeIds())
   } catch (err) {
-    console.error(`Failed to sync single file: ${filePath}`, err)
+    console.error(`Failed to sync attachment: ${filePath}`, err)
   }
 }
 
@@ -150,13 +223,24 @@ function refreshDomainFromDisk(rootPath: string): void {
 }
 
 function handleFileRemove(filePath: string): void {
-  if (!filePath.toLowerCase().endsWith('.md')) return
   const node = graphEngine.getNodeByPath(filePath)
-  if (node) {
-    graphEngine.removeNode(node.id)
-    searchEngine.removeFromIndex(node.id)
-    searchEngine.setOrphanIds(graphEngine.getOrphanNodeIds())
+  if (!node) {
+    // Attachment may exist only in registry
+    if (!filePath.toLowerCase().endsWith('.md')) {
+      graphEngine.removeAttachment(filePath)
+      searchEngine.setOrphanIds(graphEngine.getOrphanNodeIds())
+    }
+    return
   }
+  if (node.isAttachment) {
+    graphEngine.removeAttachment(node.id)
+  } else {
+    graphEngine.removeNode(node.id)
+    if (filePath.toLowerCase().endsWith('.md')) {
+      searchEngine.removeFromIndex(node.id)
+    }
+  }
+  searchEngine.setOrphanIds(graphEngine.getOrphanNodeIds())
 }
 
 let emitTimeout: NodeJS.Timeout | null = null
@@ -317,19 +401,23 @@ export function registerIPCHandlers(): void {
       return { ok: false, error: `Vault kerja tidak ditemukan. Diharapkan: ${DEFAULT_KERJA_VAULT}` }
     }
     indexDatabase.close()
-    indexDatabase.open(resolved)
+    graphEngine.clear()
+    searchEngine.clear()
+    domainEngine.clear()
     const state = workspaceEngine.openWorkspace(resolved)
-    syncWorkspaceData(resolved)
-    attachFileWatcher(resolved)
+    const root = state.rootPath || resolved
+    indexDatabase.open(root)
+    syncWorkspaceData(root)
+    attachFileWatcher(root)
     const perms = readPermissions(workspaceEngine.getSettings())
-    automationEngine.load(resolved)
+    automationEngine.load(root)
     automationEngine.setEnabled(perms.automation)
     pluginHost.setAllowed(perms.plugins)
-    pluginHost.load(resolved)
+    pluginHost.load(root)
     if (perms.automation) automationEngine.handleEvent('workspace_opened')
     // Remember as preferred
     const settings = workspaceEngine.getSettings() as Record<string, unknown>
-    settings.defaultVault = resolved
+    settings.defaultVault = root
     settings.kerjaMode = true
     workspaceEngine.saveSettings(settings)
     return { ok: true, state }
@@ -337,16 +425,24 @@ export function registerIPCHandlers(): void {
 
   // --- Workspace Handlers ---
   ipcMain.handle('workspace:open', async (_, folderPath: string) => {
+    if (!folderPath || typeof folderPath !== 'string') {
+      throw new Error('Invalid workspace path')
+    }
     indexDatabase.close()
-    indexDatabase.open(folderPath)
+    graphEngine.clear()
+    searchEngine.clear()
+    domainEngine.clear()
     const state = workspaceEngine.openWorkspace(folderPath)
-    syncWorkspaceData(folderPath)
-    attachFileWatcher(folderPath)
+    const root = state.rootPath
+    if (!root) throw new Error('Failed to open workspace')
+    indexDatabase.open(root)
+    syncWorkspaceData(root)
+    attachFileWatcher(root)
     const perms = readPermissions(workspaceEngine.getSettings())
-    automationEngine.load(folderPath)
+    automationEngine.load(root)
     automationEngine.setEnabled(perms.automation)
     pluginHost.setAllowed(perms.plugins)
-    pluginHost.load(folderPath)
+    pluginHost.load(root)
     if (perms.automation) {
       automationEngine.handleEvent('workspace_opened')
     }
@@ -356,9 +452,19 @@ export function registerIPCHandlers(): void {
   ipcMain.handle(
     'workspace:create',
     async (_, { parentPath, name }: { parentPath: string; name: string }) => {
+      if (!parentPath || !name || typeof parentPath !== 'string' || typeof name !== 'string') {
+        throw new Error('Invalid parent path or workspace name')
+      }
+      // Reject path separators in name to avoid nested create surprises
+      if (/[/\\]/.test(name) || name === '.' || name === '..') {
+        throw new Error('Invalid workspace name')
+      }
       const state = workspaceEngine.createWorkspace(parentPath, name)
       if (state.rootPath) {
         indexDatabase.close()
+        graphEngine.clear()
+        searchEngine.clear()
+        domainEngine.clear()
         indexDatabase.open(state.rootPath)
         syncWorkspaceData(state.rootPath)
         attachFileWatcher(state.rootPath)
@@ -377,6 +483,9 @@ export function registerIPCHandlers(): void {
     indexDatabase.close()
     automationEngine.unload()
     pluginHost.unload()
+    graphEngine.clear()
+    searchEngine.clear()
+    domainEngine.clear()
     workspaceEngine.closeWorkspace()
     return true
   })
@@ -390,6 +499,18 @@ export function registerIPCHandlers(): void {
   })
 
   // --- File Handlers (path sandbox) ---
+  /** Open any vault file (attachments) with OS default app — sandboxed to vault. */
+  ipcMain.handle('file:openExternal', async (_, filePath: string) => {
+    const root = requireOpenVault()
+    assertPathInVault(filePath, root)
+    if (!fs.existsSync(filePath)) {
+      return { ok: false, error: 'File not found' }
+    }
+    const err = await shell.openPath(filePath)
+    if (err) return { ok: false, error: err }
+    return { ok: true }
+  })
+
   ipcMain.handle('file:read', async (_, filePath: string) => {
     const root = requireOpenVault()
     assertPathInVault(filePath, root)
@@ -581,15 +702,20 @@ export function registerIPCHandlers(): void {
     async (
       _,
       payload: {
-        nodes: Record<string, { x: number; y: number; pinned?: boolean }>
+        nodes?: Record<string, { x: number; y: number; pinned?: boolean }>
+        camera?: { x: number; y: number; k: number } | null
         replaceAll?: boolean
+        cameraOnly?: boolean
       }
     ) => {
       const root = workspaceEngine.getState().rootPath
       return saveGraphLayout(
         root,
-        { nodes: payload?.nodes || {} },
-        { replaceAll: payload?.replaceAll }
+        {
+          nodes: payload?.nodes || {},
+          camera: payload?.camera
+        },
+        { replaceAll: payload?.replaceAll, cameraOnly: payload?.cameraOnly }
       )
     }
   )
@@ -804,6 +930,10 @@ export function registerIPCHandlers(): void {
   ipcMain.handle(
     'ai:sendMessage',
     async (_, { request, activeFilePath, useContext, agentRole }) => {
+      const perms = readPermissions(workspaceEngine.getSettings())
+      if (!perms.aiAccess) {
+        throw new Error('AI access disabled in Settings → Security.')
+      }
       if (activeFilePath) assertPathInVault(activeFilePath, requireOpenVault())
       return aiMiddleware.sendMessage(request, activeFilePath, useContext, agentRole)
     }

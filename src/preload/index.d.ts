@@ -24,6 +24,7 @@ export interface API {
   createFile: (filePath: string, content?: string) => Promise<boolean>
   createFolder: (folderPath: string) => Promise<boolean>
   renameFile: (oldPath: string, newPath: string) => Promise<boolean>
+  openFileExternal: (filePath: string) => Promise<{ ok: boolean; error?: string }>
 
   getGraphData: () => Promise<any>
   getGraphNeighbors: (nodeId: string, depth?: number) => Promise<any>
@@ -71,10 +72,13 @@ export interface API {
     vaultPath?: string
     updatedAt: string
     nodes: Record<string, { x: number; y: number; pinned?: boolean }>
+    camera?: { x: number; y: number; k: number } | null
   }>
   saveGraphLayout: (payload: {
-    nodes: Record<string, { x: number; y: number; pinned?: boolean }>
+    nodes?: Record<string, { x: number; y: number; pinned?: boolean }>
+    camera?: { x: number; y: number; k: number } | null
     replaceAll?: boolean
+    cameraOnly?: boolean
   }) => Promise<{ ok: boolean; path?: string; count?: number; error?: string }>
   getGraphSettings: () => Promise<{
     forces: {
@@ -94,12 +98,17 @@ export interface API {
       textFade: number
       nodeSize: number
       lineThickness: number
+      existingFilesOnly: boolean
+      showTags: boolean
+      showAttachments: boolean
+      animateForces: boolean
     }
     filters: {
       hubDegreeThreshold: number
       localDepth: number
       orphanMode: 'all' | 'hide' | 'only'
       hubMode: 'all' | 'dim' | 'hide'
+      searchMode: 'spotlight' | 'filter'
     }
     groups: Array<{ id: string; query: string; color: string }>
   }>

@@ -347,6 +347,7 @@ html:not([data-theme]) {
 .app-body {
   display: flex;
   flex: 1;
+  min-height: 0; /* critical: allow flex children to get a real height */
   overflow: hidden;
 }
 
@@ -503,6 +504,11 @@ html:not([data-theme]) {
   flex-direction: column;
   overflow: hidden;
   min-width: 0;
+  min-height: 0; /* graph/editor fill height — without this canvas is often 0×0 */
+  position: relative;
+  /* Ensure absolute children (graph) have a real containing block */
+  height: 100%;
+  align-self: stretch;
 }
 
 .main-tabs {
@@ -1214,22 +1220,31 @@ html:not([data-theme]) {
    Graph Canvas — quiet Obsidian-like
    ================================================ */
 .graph-container {
-  width: 100%;
-  height: 100%;
+  /* Absolute fill of .main-content — most reliable on Windows Electron flex layouts */
+  position: absolute;
+  inset: 0;
+  width: auto;
+  height: auto;
+  min-width: 0;
+  min-height: 0;
   background:
     radial-gradient(ellipse 80% 60% at 50% 45%, var(--graph-bg-glow) 0%, transparent 70%),
     var(--bg-app);
-  position: relative;
   overflow: hidden;
+  z-index: 0;
 }
 
 .graph-canvas {
-  width: 100%;
-  height: 100%;
+  position: absolute;
+  left: 0;
+  top: 0;
+  /* width/height set in JS from measured box — do not rely on % alone */
   display: block;
   cursor: grab;
-  /* Canvas 2D — Obsidian-like; avoid CSS filter costs */
   touch-action: none;
+  pointer-events: auto;
+  z-index: 1;
+  background: transparent;
 }
 .graph-canvas:active {
   cursor: grabbing;
@@ -1717,9 +1732,22 @@ html:not([data-theme]) {
   opacity: 0.9;
 }
 
+.graph-empty--soft {
+  background: transparent;
+  pointer-events: none;
+}
+.graph-empty--soft p {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  padding: 8px 12px;
+  box-shadow: var(--shadow-sm, 0 1px 4px rgba(0, 0, 0, 0.12));
+}
 .graph-empty {
   position: absolute;
   inset: 0;
+  z-index: 2;
+  pointer-events: none;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -1727,10 +1755,112 @@ html:not([data-theme]) {
   color: var(--text-secondary);
   font-size: var(--text-sm);
   gap: 6px;
+  background: transparent;
+  padding: 24px;
+  text-align: center;
+  max-width: 420px;
+  margin: 0 auto;
+  left: 0;
+  right: 0;
 }
 .graph-empty .muted {
   font-size: 12px;
   color: var(--text-muted);
+  line-height: 1.45;
+  max-width: 360px;
+}
+
+.graph-diag-code {
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-subtle);
+  color: var(--color-primary, #8b7cf6);
+  margin-right: 6px;
+}
+
+.graph-filter-live-chip {
+  position: absolute;
+  top: 44px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: var(--z-panel, 20);
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 10px 6px 12px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--color-warning, #c4923a) 50%, var(--border-subtle));
+  background: var(--bg-surface);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.16);
+  font-size: 12px;
+  color: var(--text-secondary);
+  pointer-events: auto;
+  max-width: min(92%, 560px);
+}
+.graph-filter-live-chip strong {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+.graph-filter-live-chip .graph-chip {
+  pointer-events: auto;
+  flex-shrink: 0;
+}
+
+.graph-diag-banner {
+  position: absolute;
+  left: 12px;
+  right: 12px;
+  bottom: 48px;
+  z-index: var(--z-panel, 20);
+  max-width: 520px;
+  margin: 0 auto;
+  padding: 10px 12px;
+  border-radius: 10px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-surface);
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.18);
+  font-size: 12px;
+  pointer-events: auto;
+}
+.graph-diag-banner--warn {
+  border-color: color-mix(in srgb, var(--color-warning, #c4923a) 55%, var(--border-subtle));
+}
+.graph-diag-banner--error {
+  border-color: color-mix(in srgb, var(--color-danger, #c45a5a) 55%, var(--border-subtle));
+}
+.graph-diag-banner--info {
+  border-color: var(--border-subtle);
+}
+.graph-diag-banner-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+.graph-diag-banner-row strong {
+  flex: 1;
+  font-size: 13px;
+}
+.graph-diag-banner .muted {
+  margin: 2px 0;
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+.graph-diag-dismiss {
+  all: unset;
+  cursor: pointer;
+  font-size: 16px;
+  line-height: 1;
+  padding: 2px 6px;
+  color: var(--text-muted);
+  border-radius: 4px;
+}
+.graph-diag-dismiss:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
 }
 
 .graph-tooltip {
@@ -1790,6 +1920,10 @@ html:not([data-theme]) {
   display: flex;
   flex-direction: column;
   min-height: 0;
+  max-height: 42vh;
+}
+.local-graph.is-collapsed {
+  max-height: none;
 }
 .local-graph.is-collapsed .local-graph-body {
   display: none;

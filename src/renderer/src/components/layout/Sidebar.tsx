@@ -139,10 +139,20 @@ export const Sidebar: React.FC<{ onOpenSearch: () => void }> = ({ onOpenSearch }
     if (!rootPath) return
     const name = window.prompt('Nama folder baru:')
     if (!name?.trim()) return
+    const clean = name.trim()
+    // Reject path segments that would create nested escapes (../, a/b, …)
+    if (/[/\\]/.test(clean) || clean === '.' || clean === '..') {
+      window.alert('Nama folder tidak valid (tanpa / \\ atau ..)')
+      return
+    }
     const base = parentPath || rootPath
     const sep = base.includes('\\') ? '\\' : '/'
-    await window.api.createFolder(`${base}${sep}${name.trim()}`)
-    await fetchState()
+    try {
+      await window.api.createFolder(`${base}${sep}${clean}`)
+      await fetchState()
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : String(err))
+    }
     setCtx(null)
   }
 
@@ -152,11 +162,33 @@ export const Sidebar: React.FC<{ onOpenSearch: () => void }> = ({ onOpenSearch }
       setCtx(null)
       return
     }
+    const clean = next.trim()
+    if (/[/\\]/.test(clean) || clean === '.' || clean === '..') {
+      window.alert('Nama tidak valid (tanpa / \\ atau ..)')
+      setCtx(null)
+      return
+    }
     const sep = item.path.includes('\\') ? '\\' : '/'
     const parent = item.path.split(/[/\\]/).slice(0, -1).join(sep)
-    const newPath = `${parent}${sep}${next.trim()}`
-    await window.api.renameFile(item.path, newPath)
-    await fetchState()
+    const newPath = `${parent}${sep}${clean}`
+    try {
+      await window.api.renameFile(item.path, newPath)
+      // Update open tab path if this file was open
+      const editor = useEditorStore.getState()
+      const open = editor.tabs.find((t) => normPath(t.path) === normPath(item.path))
+      if (open) {
+        useEditorStore.setState({
+          tabs: editor.tabs.map((t) =>
+            t.id === open.id
+              ? { ...t, path: newPath, title: clean.replace(/\.md$/i, '') || t.title }
+              : t
+          )
+        })
+      }
+      await fetchState()
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : String(err))
+    }
     setCtx(null)
   }
 
@@ -168,8 +200,14 @@ export const Sidebar: React.FC<{ onOpenSearch: () => void }> = ({ onOpenSearch }
       setCtx(null)
       return
     }
-    await window.api.deleteFile(item.path)
-    await fetchState()
+    try {
+      // Discard editor tabs first (cancels autosave) so delete is not undone by a late write
+      useEditorStore.getState().discardTabsUnder(item.path)
+      await window.api.deleteFile(item.path)
+      await fetchState()
+    } catch (err) {
+      window.alert(err instanceof Error ? err.message : String(err))
+    }
     setCtx(null)
   }
 

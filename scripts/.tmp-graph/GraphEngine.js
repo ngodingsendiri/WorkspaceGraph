@@ -1,5 +1,13 @@
 // src/main/engine/GraphEngine.ts
 import path from "path";
+function tagNodeId(tag) {
+  const t = (tag || "").replace(/^#/, "").trim().toLowerCase();
+  return t ? `tag:${t}` : "";
+}
+function ghostNodeId(rawTarget) {
+  const key = normalizeLinkTarget(rawTarget);
+  return key ? `ghost:${key}` : "";
+}
 function nodeTypeFromPath(relativePath) {
   const lower = relativePath.toLowerCase().replace(/\\/g, "/");
   if (lower.startsWith("knowledge") || lower.includes("/knowledge/")) return "knowledge";
@@ -91,7 +99,8 @@ function recomputeDegrees(nodes, edges) {
   for (const n of nodes.values()) n.degree = 0;
   const neighbors = /* @__PURE__ */ new Map();
   for (const e of edges.values()) {
-    if (e.type !== "wiki_link") continue;
+    if (e.type !== "wiki_link" && e.type !== "tag") continue;
+    if (!nodes.has(e.source) || !nodes.has(e.target)) continue;
     if (!neighbors.has(e.source)) neighbors.set(e.source, /* @__PURE__ */ new Set());
     if (!neighbors.has(e.target)) neighbors.set(e.target, /* @__PURE__ */ new Set());
     neighbors.get(e.source).add(e.target);
@@ -102,18 +111,314 @@ function recomputeDegrees(nodes, edges) {
     if (n) n.degree = set.size;
   }
 }
+function pruneGhostEdges(nodes, edges) {
+  let removed = 0;
+  for (const [edgeId, edge] of edges.entries()) {
+    if (!nodes.has(edge.source) || !nodes.has(edge.target) || edge.source === edge.target) {
+      edges.delete(edgeId);
+      removed++;
+    }
+  }
+  return removed;
+}
 var GraphEngine = class {
   nodes = /* @__PURE__ */ new Map();
   edges = /* @__PURE__ */ new Map();
+  /** Last attachment list (for incremental rebuild after note update) */
+  attachments = [];
+  /** Whether co-tag star edges between notes are built (legacy toggle) */
+  includeCoTagEdges = false;
+  /** Drop all graph state (workspace close / switch). */
+  clear() {
+    this.nodes.clear();
+    this.edges.clear();
+    this.attachments = [];
+    this.includeCoTagEdges = false;
+  }
+  buildLookupFromNodes() {
+    return buildLookupMaps(
+      Array.from(this.nodes.values()).filter((n) => !n.isGhost && !n.isTag).map((n) => ({
+        id: n.id,
+        title: n.title,
+        path: n.path,
+        relativePath: n.relativePath,
+        aliases: n.aliases || []
+      }))
+    );
+  }
+  /** Remove all synthetic ghost nodes (and their edges will be rebuilt). */
+  clearGhostNodes() {
+    for (const [id, n] of this.nodes.entries()) {
+      if (n.isGhost) this.nodes.delete(id);
+    }
+  }
+  clearTagNodes() {
+    for (const [id, n] of this.nodes.entries()) {
+      if (n.isTag) this.nodes.delete(id);
+    }
+    for (const [edgeId] of this.edges.entries()) {
+      if (edgeId.startsWith("tagnode:")) this.edges.delete(edgeId);
+    }
+  }
+  clearAttachmentNodes() {
+    for (const [id, n] of this.nodes.entries()) {
+      if (n.isAttachment) this.nodes.delete(id);
+    }
+  }
+  /**
+   * Obsidian-like #tag nodes: one node per tag, edges from notes that use it.
+   * Always built; UI hides via showTags filter.
+   */
+  rebuildTagNodes() {
+    this.clearTagNodes();
+    const tagToNotes = /* @__PURE__ */ new Map();
+    for (const n of this.nodes.values()) {
+      if (n.isGhost || n.isTag || n.isAttachment) continue;
+      for (const raw of n.tags || []) {
+        const t = String(raw).replace(/^#/, "").trim().toLowerCase();
+        if (!t) continue;
+        const list = tagToNotes.get(t) || [];
+        list.push(n.id);
+        tagToNotes.set(t, list);
+      }
+    }
+    for (const [tag, noteIds] of tagToNotes) {
+      const id = tagNodeId(tag);
+      if (!id) continue;
+      this.nodes.set(id, {
+        id,
+        title: `#${tag}`,
+        type: "tag",
+        path: "",
+        relativePath: `#${tag}`,
+        tags: [tag],
+        isTag: true,
+        degree: 0
+      });
+      for (const noteId of noteIds) {
+        const edgeId = `tagnode:${noteId}->${id}`;
+        this.edges.set(edgeId, {
+          id: edgeId,
+          source: noteId,
+          target: id,
+          type: "tag",
+          weight: 1
+        });
+      }
+    }
+  }
+  /**
+   * Register non-md vault files as attachment nodes (Obsidian Attachments filter).
+   * Re-resolves wiki edges so [[image.png]] links to real attachment nodes.
+   */
+  setAttachments(list) {
+    this.attachments = Array.isArray(list) ? list.slice(0, 8e3) : [];
+    this.clearAttachmentNodes();
+    for (const a of this.attachments) {
+      if (!a?.id || !a.path) continue;
+      const existing = this.nodes.get(a.id);
+      if (existing && !existing.isAttachment) continue;
+      this.nodes.set(a.id, {
+        id: a.id,
+        title: a.title || path.basename(a.path),
+        type: "attachment",
+        path: a.path,
+        relativePath: a.relativePath || "",
+        tags: [],
+        isAttachment: true,
+        degree: 0
+      });
+    }
+    this.rebuildWikiEdgesFromOutLinks();
+    this.rebuildTagNodes();
+    if (this.includeCoTagEdges) this.rebuildTagEdges();
+    recomputeDegrees(this.nodes, this.edges);
+  }
+  /** Lightweight: upsert one attachment without wiping the rest. */
+  upsertAttachment(meta) {
+    if (!meta?.id || !meta.path) return;
+    const existing = this.nodes.get(meta.id);
+    if (existing && !existing.isAttachment) return;
+    const idx = this.attachments.findIndex((a) => a.id === meta.id || a.path === meta.path);
+    if (idx >= 0) this.attachments[idx] = meta;
+    else {
+      if (this.attachments.length >= 8e3) return;
+      this.attachments.push(meta);
+    }
+    this.nodes.set(meta.id, {
+      id: meta.id,
+      title: meta.title || path.basename(meta.path),
+      type: "attachment",
+      path: meta.path,
+      relativePath: meta.relativePath || "",
+      tags: [],
+      isAttachment: true,
+      degree: existing?.degree ?? 0
+    });
+    this.rebuildWikiEdgesFromOutLinks();
+    this.rebuildTagNodes();
+    if (this.includeCoTagEdges) this.rebuildTagEdges();
+    recomputeDegrees(this.nodes, this.edges);
+  }
+  /** Lightweight: remove one attachment by id or path. */
+  removeAttachment(idOrPath) {
+    if (!idOrPath) return;
+    const node = this.nodes.get(idOrPath) || Array.from(this.nodes.values()).find(
+      (n) => n.isAttachment && (n.path === idOrPath || n.id === idOrPath)
+    );
+    if (!node?.isAttachment) return;
+    this.attachments = this.attachments.filter((a) => a.id !== node.id && a.path !== node.path);
+    this.nodes.delete(node.id);
+    for (const [edgeId, edge] of this.edges.entries()) {
+      if (edge.source === node.id || edge.target === node.id) this.edges.delete(edgeId);
+    }
+    this.rebuildWikiEdgesFromOutLinks();
+    this.rebuildTagNodes();
+    if (this.includeCoTagEdges) this.rebuildTagEdges();
+    recomputeDegrees(this.nodes, this.edges);
+  }
+  ensureGhostNode(rawTarget) {
+    const key = normalizeLinkTarget(rawTarget);
+    if (!key) return null;
+    const id = ghostNodeId(rawTarget);
+    if (!id) return null;
+    const existing = this.nodes.get(id);
+    if (existing?.isGhost) {
+      return id;
+    }
+    const pretty = (rawTarget || "").trim().split("#")[0].split("^")[0].replace(/\\/g, "/").replace(/\.md$/i, "").split("/").filter(Boolean).pop();
+    const title = (pretty || key).slice(0, 80);
+    this.nodes.set(id, {
+      id,
+      title,
+      type: "ghost",
+      path: "",
+      relativePath: `?/${key}`,
+      tags: [],
+      isGhost: true,
+      degree: 0
+    });
+    return id;
+  }
+  /**
+   * Rebuild ALL wiki edges from cached outLinks on every node.
+   * Critical after add/rename/delete so notes that still say [[NewTitle]]
+   * re-link without waiting for each source file to be re-parsed.
+   *
+   * Unresolved targets become ghost nodes (Obsidian non-existing files).
+   */
+  rebuildWikiEdgesFromOutLinks() {
+    for (const [edgeId, edge] of this.edges.entries()) {
+      if (edge.type === "wiki_link") this.edges.delete(edgeId);
+    }
+    this.clearGhostNodes();
+    const maps = this.buildLookupFromNodes();
+    let linked = 0;
+    let unresolved = 0;
+    for (const node of this.nodes.values()) {
+      if (node.isGhost || node.isTag || node.isAttachment) continue;
+      const outs = node.outLinks || [];
+      for (const raw of outs) {
+        if (!raw?.trim()) continue;
+        const targetId = resolveLinkTarget(raw, maps);
+        const tgt = targetId ? this.nodes.get(targetId) : void 0;
+        if (targetId && targetId !== node.id && tgt && !tgt.isGhost && !tgt.isTag) {
+          const edgeId = `${node.id}->${targetId}`;
+          if (!this.edges.has(edgeId)) {
+            this.edges.set(edgeId, {
+              id: edgeId,
+              source: node.id,
+              target: targetId,
+              type: "wiki_link",
+              weight: 2
+            });
+            linked++;
+          }
+        } else if (raw.trim()) {
+          const gid = this.ensureGhostNode(raw);
+          if (gid && gid !== node.id) {
+            const edgeId = `${node.id}->${gid}`;
+            if (!this.edges.has(edgeId)) {
+              this.edges.set(edgeId, {
+                id: edgeId,
+                source: node.id,
+                target: gid,
+                type: "wiki_link",
+                weight: 1
+              });
+            }
+            unresolved++;
+          }
+        }
+      }
+    }
+    pruneGhostEdges(this.nodes, this.edges);
+    recomputeDegrees(this.nodes, this.edges);
+    return { linked, unresolved };
+  }
+  rebuildTagEdges() {
+    for (const [edgeId, edge] of this.edges.entries()) {
+      if (edge.type === "tag") this.edges.delete(edgeId);
+    }
+    const tagToNodeIds = /* @__PURE__ */ new Map();
+    for (const n of this.nodes.values()) {
+      if (n.isGhost) continue;
+      for (const tag of n.tags || []) {
+        const tagLower = tag.toLowerCase();
+        const existing = tagToNodeIds.get(tagLower) || [];
+        existing.push(n.id);
+        tagToNodeIds.set(tagLower, existing);
+      }
+    }
+    for (const [, nodeIds] of tagToNodeIds.entries()) {
+      if (nodeIds.length < 2 || nodeIds.length > 8) continue;
+      const hub = nodeIds[0];
+      for (let i = 1; i < nodeIds.length; i++) {
+        const tgtId = nodeIds[i];
+        const edgeId = `tag:${hub}<->${tgtId}`;
+        const wiki1 = `${hub}->${tgtId}`;
+        const wiki2 = `${tgtId}->${hub}`;
+        if (!this.edges.has(edgeId) && !this.edges.has(wiki1) && !this.edges.has(wiki2)) {
+          this.edges.set(edgeId, {
+            id: edgeId,
+            source: hub,
+            target: tgtId,
+            type: "tag",
+            weight: 1
+          });
+        }
+      }
+    }
+  }
+  displayTitleFromParsed(parsedFile) {
+    const fmTitle = parsedFile.title?.trim();
+    if (fmTitle && fmTitle.length > 0 && fmTitle.length <= 48 && !/^#+\s/.test(fmTitle)) {
+      return fmTitle;
+    }
+    return path.basename(parsedFile.filePath, path.extname(parsedFile.filePath));
+  }
+  outLinksFromParsed(parsedFile) {
+    const seen = /* @__PURE__ */ new Set();
+    const out = [];
+    for (const link of parsedFile.wikiLinks || []) {
+      const t = (link.target || "").trim();
+      if (!t || seen.has(t)) continue;
+      seen.add(t);
+      out.push(t);
+    }
+    return out;
+  }
   /**
    * Build graph.
-   * Default includeTagEdges=false → match Obsidian global graph (wikilinks only).
+   * Default includeTagEdges=false → co-tag star edges off; #tag nodes always built.
    */
   buildFromParsedFiles(parsedFiles, includeTagEdges = false) {
     this.nodes.clear();
     this.edges.clear();
-    const tagToNodeIds = /* @__PURE__ */ new Map();
+    this.includeCoTagEdges = includeTagEdges;
+    const savedAttachments = this.attachments;
     for (const file of parsedFiles) {
+      const nodeAliases = Array.isArray(file.frontmatter?.aliases) ? file.frontmatter.aliases.map(String) : [];
       const node = {
         id: file.id,
         // Prefer filename for graph label (Obsidian-like); keep full title in data via path
@@ -122,6 +427,8 @@ var GraphEngine = class {
         path: file.filePath,
         relativePath: file.relativePath,
         tags: file.tags,
+        aliases: nodeAliases,
+        outLinks: this.outLinksFromParsed(file),
         degree: 0
       };
       const fmTitle = file.title?.trim();
@@ -129,126 +436,64 @@ var GraphEngine = class {
         node.title = fmTitle;
       }
       this.nodes.set(file.id, node);
-      for (const tag of file.tags) {
-        const tagLower = tag.toLowerCase();
-        const existing = tagToNodeIds.get(tagLower) || [];
-        existing.push(file.id);
-        tagToNodeIds.set(tagLower, existing);
+    }
+    if (savedAttachments.length > 0) {
+      for (const a of savedAttachments) {
+        if (!a?.id || !a.path) continue;
+        if (this.nodes.has(a.id)) continue;
+        this.nodes.set(a.id, {
+          id: a.id,
+          title: a.title || path.basename(a.path),
+          type: "attachment",
+          path: a.path,
+          relativePath: a.relativePath || "",
+          tags: [],
+          isAttachment: true,
+          degree: 0
+        });
       }
     }
-    const maps = buildLookupMaps(
-      parsedFiles.map((f) => ({
-        id: f.id,
-        title: f.title,
-        path: f.filePath,
-        relativePath: f.relativePath,
-        aliases: Array.isArray(f.frontmatter?.aliases) ? f.frontmatter.aliases.map(String) : []
-      }))
-    );
-    let linked = 0;
-    let unresolved = 0;
-    const unresolvedSamples = [];
-    for (const file of parsedFiles) {
-      for (const link of file.wikiLinks) {
-        const targetId = resolveLinkTarget(link.target, maps);
-        if (targetId && targetId !== file.id) {
-          const edgeId = `${file.id}->${targetId}`;
-          if (!this.edges.has(edgeId)) {
-            this.edges.set(edgeId, {
-              id: edgeId,
-              source: file.id,
-              target: targetId,
-              type: "wiki_link",
-              weight: 2
-            });
-            linked++;
-          }
-        } else if (link.target?.trim()) {
-          unresolved++;
-          if (unresolvedSamples.length < 12) {
-            unresolvedSamples.push(`${file.relativePath} \u2192 [[${link.target}]]`);
-          }
-        }
-      }
-    }
+    const { linked, unresolved } = this.rebuildWikiEdgesFromOutLinks();
+    this.rebuildTagNodes();
+    if (includeTagEdges) this.rebuildTagEdges();
+    recomputeDegrees(this.nodes, this.edges);
     if (unresolved > 0) {
-      console.log(`[GraphEngine] wiki edges=${linked}, unresolved=${unresolved}`, unresolvedSamples);
+      console.log(`[GraphEngine] wiki edges=${linked}, unresolved=${unresolved}`);
     } else {
       console.log(`[GraphEngine] wiki edges=${linked} (all resolved)`);
     }
-    if (includeTagEdges) {
-      for (const [, nodeIds] of tagToNodeIds.entries()) {
-        if (nodeIds.length < 2 || nodeIds.length > 8) continue;
-        const hub = nodeIds[0];
-        for (let i = 1; i < nodeIds.length; i++) {
-          const tgtId = nodeIds[i];
-          const edgeId = `tag:${hub}<->${tgtId}`;
-          const wiki1 = `${hub}->${tgtId}`;
-          const wiki2 = `${tgtId}->${hub}`;
-          if (!this.edges.has(edgeId) && !this.edges.has(wiki1) && !this.edges.has(wiki2)) {
-            this.edges.set(edgeId, {
-              id: edgeId,
-              source: hub,
-              target: tgtId,
-              type: "tag",
-              weight: 1
-            });
-          }
-        }
-      }
-    }
-    recomputeDegrees(this.nodes, this.edges);
     return this.getGraphData();
   }
   updateNodeAndEdges(parsedFile) {
     const aliases = Array.isArray(parsedFile.frontmatter?.aliases) ? parsedFile.frontmatter.aliases.map(String) : [];
     const existing = this.nodes.get(parsedFile.id);
-    const displayTitle = parsedFile.title && parsedFile.title.length <= 48 ? parsedFile.title : path.basename(parsedFile.filePath, path.extname(parsedFile.filePath));
-    if (existing) {
+    const displayTitle = this.displayTitleFromParsed(parsedFile);
+    const outLinks = this.outLinksFromParsed(parsedFile);
+    const nodeType = nodeTypeFromPath(parsedFile.relativePath);
+    if (existing && !existing.isAttachment && !existing.isTag && !existing.isGhost) {
       existing.title = displayTitle;
       existing.tags = parsedFile.tags;
-    } else {
+      existing.aliases = aliases;
+      existing.path = parsedFile.filePath;
+      existing.relativePath = parsedFile.relativePath;
+      existing.type = nodeType;
+      existing.outLinks = outLinks;
+    } else if (!existing) {
       this.nodes.set(parsedFile.id, {
         id: parsedFile.id,
         title: displayTitle,
-        type: nodeTypeFromPath(parsedFile.relativePath),
+        type: nodeType,
         path: parsedFile.filePath,
         relativePath: parsedFile.relativePath,
         tags: parsedFile.tags,
+        aliases,
+        outLinks,
         degree: 0
       });
     }
-    for (const [edgeId, edge] of this.edges.entries()) {
-      if (edge.type === "wiki_link" && (edge.source === parsedFile.id || edge.target === parsedFile.id)) {
-        this.edges.delete(edgeId);
-      } else if (edge.type === "tag" && (edge.source === parsedFile.id || edge.target === parsedFile.id)) {
-        this.edges.delete(edgeId);
-      }
-    }
-    const maps = buildLookupMaps(
-      Array.from(this.nodes.values()).map((n) => ({
-        id: n.id,
-        title: n.title,
-        path: n.path,
-        relativePath: n.relativePath,
-        aliases: n.id === parsedFile.id ? aliases : []
-      }))
-    );
-    for (const link of parsedFile.wikiLinks) {
-      const targetId = resolveLinkTarget(link.target, maps);
-      if (targetId && targetId !== parsedFile.id) {
-        const edgeId = `${parsedFile.id}->${targetId}`;
-        if (!this.edges.has(edgeId)) {
-          this.edges.set(edgeId, {
-            id: edgeId,
-            source: parsedFile.id,
-            target: targetId,
-            type: "wiki_link",
-            weight: 2
-          });
-        }
-      }
-    }
+    this.rebuildWikiEdgesFromOutLinks();
+    this.rebuildTagNodes();
+    if (this.includeCoTagEdges) this.rebuildTagEdges();
     recomputeDegrees(this.nodes, this.edges);
   }
   removeNode(nodeId) {
@@ -256,47 +501,104 @@ var GraphEngine = class {
     for (const [edgeId, edge] of this.edges.entries()) {
       if (edge.source === nodeId || edge.target === nodeId) this.edges.delete(edgeId);
     }
+    this.rebuildWikiEdgesFromOutLinks();
+    this.rebuildTagNodes();
+    if (this.includeCoTagEdges) this.rebuildTagEdges();
     recomputeDegrees(this.nodes, this.edges);
   }
-  getGraphData() {
+  /**
+   * Export graph for UI / IPC.
+   * Ghosts/tags/attachments always included; client filters (Existing files / Tags / Attachments).
+   */
+  getGraphData(options) {
+    pruneGhostEdges(this.nodes, this.edges);
+    const includeGhosts = options?.includeGhosts !== false;
+    const all = Array.from(this.nodes.values());
+    const realNodeCount = all.filter((n) => !n.isGhost && !n.isTag && !n.isAttachment).length;
+    const ghostNodeCount = all.filter((n) => n.isGhost).length;
+    const tagNodeCount = all.filter((n) => n.isTag).length;
+    const attachmentNodeCount = all.filter((n) => n.isAttachment).length;
+    const nodes = all.filter((n) => includeGhosts || !n.isGhost).map((n) => {
+      const { outLinks: _ol, ...rest } = n;
+      return rest;
+    });
+    const idSet = new Set(nodes.map((n) => n.id));
+    const edges = Array.from(this.edges.values()).filter(
+      (e) => idSet.has(e.source) && idSet.has(e.target) && e.source !== e.target
+    );
     return {
-      nodes: Array.from(this.nodes.values()),
-      edges: Array.from(this.edges.values()),
-      nodeCount: this.nodes.size,
-      edgeCount: this.edges.size
+      nodes,
+      edges,
+      nodeCount: nodes.length,
+      edgeCount: edges.length,
+      realNodeCount,
+      ghostNodeCount,
+      unresolvedLinkCount: ghostNodeCount,
+      tagNodeCount,
+      attachmentNodeCount
     };
   }
-  getNeighbors(nodeId, depth = 1) {
+  getGhostNodeIds() {
+    return Array.from(this.nodes.values()).filter((n) => n.isGhost).map((n) => n.id);
+  }
+  getRealNodeCount() {
+    let c = 0;
+    for (const n of this.nodes.values()) if (!n.isGhost) c++;
+    return c;
+  }
+  getNeighbors(nodeId, depth = 1, options) {
+    const maxDepth = Math.min(5, Math.max(1, Math.floor(depth) || 1));
+    const includeTag = Boolean(options?.includeTagEdges);
+    const includeGhosts = Boolean(options?.includeGhosts);
     const visitedNodes = /* @__PURE__ */ new Set([nodeId]);
-    const resultEdges = [];
     let currentLayer = [nodeId];
-    for (let d = 0; d < depth; d++) {
+    const okNode = (id) => {
+      const n = this.nodes.get(id);
+      if (!n) return false;
+      if (!includeGhosts && n.isGhost) return false;
+      if (!includeTag && n.isTag) return false;
+      return true;
+    };
+    for (let d = 0; d < maxDepth; d++) {
       const nextLayer = [];
       for (const currId of currentLayer) {
         for (const edge of this.edges.values()) {
-          if (edge.source === currId && !visitedNodes.has(edge.target)) {
-            visitedNodes.add(edge.target);
-            nextLayer.push(edge.target);
-            resultEdges.push(edge);
-          } else if (edge.target === currId && !visitedNodes.has(edge.source)) {
-            visitedNodes.add(edge.source);
-            nextLayer.push(edge.source);
-            resultEdges.push(edge);
+          if (!includeTag && edge.type === "tag") continue;
+          if (edge.type !== "wiki_link" && edge.type !== "tag") continue;
+          let other = null;
+          if (edge.source === currId) other = edge.target;
+          else if (edge.target === currId) other = edge.source;
+          if (other && !visitedNodes.has(other) && okNode(other)) {
+            visitedNodes.add(other);
+            nextLayer.push(other);
           }
         }
       }
       currentLayer = nextLayer;
     }
-    const neighborNodes = Array.from(visitedNodes).filter((id) => id !== nodeId).map((id) => this.nodes.get(id)).filter((n) => n !== void 0);
+    const resultEdges = [];
+    for (const edge of this.edges.values()) {
+      if (!includeTag && edge.type === "tag") continue;
+      if (edge.type !== "wiki_link" && edge.type !== "tag") continue;
+      if (visitedNodes.has(edge.source) && visitedNodes.has(edge.target)) {
+        if (!includeGhosts) {
+          const a = this.nodes.get(edge.source);
+          const b = this.nodes.get(edge.target);
+          if (a?.isGhost || b?.isGhost) continue;
+        }
+        resultEdges.push(edge);
+      }
+    }
+    const neighborNodes = Array.from(visitedNodes).filter((id) => id !== nodeId).map((id) => this.nodes.get(id)).filter((n) => n !== void 0).map((n) => this.stripInternal(n));
     return { nodes: neighborNodes, edges: resultEdges };
   }
   getNodeById(id) {
     return this.nodes.get(id);
   }
   getNodeByPath(filePath) {
-    const normalizedSearch = filePath.replace(/\\/g, "/");
+    const normalizedSearch = filePath.replace(/\\/g, "/").toLowerCase();
     for (const node of this.nodes.values()) {
-      if (node.path.replace(/\\/g, "/") === normalizedSearch) return node;
+      if (node.path.replace(/\\/g, "/").toLowerCase() === normalizedSearch) return node;
     }
     return void 0;
   }
@@ -325,12 +627,12 @@ var GraphEngine = class {
     return { nodes, edges };
   }
   getOrphanNodeIds() {
-    return Array.from(this.nodes.values()).filter((n) => n.degree === 0).map((n) => n.id);
+    return Array.from(this.nodes.values()).filter((n) => !n.isGhost && !n.isTag && !n.isAttachment && n.degree === 0).map((n) => n.id);
   }
   /** High-degree hubs (wiki degree). Default threshold matches Obsidian-style “hairball” control. */
   getHubNodeIds(minDegree = 15) {
     const thr = Math.max(1, Math.floor(minDegree));
-    return Array.from(this.nodes.values()).filter((n) => n.degree >= thr).sort((a, b) => b.degree - a.degree).map((n) => n.id);
+    return Array.from(this.nodes.values()).filter((n) => !n.isGhost && !n.isTag && !n.isAttachment && n.degree >= thr).sort((a, b) => b.degree - a.degree).map((n) => n.id);
   }
   getHubNodes(minDegree = 15) {
     const ids = new Set(this.getHubNodeIds(minDegree));
@@ -353,13 +655,13 @@ var GraphEngine = class {
   }
   /**
    * Local graph subgraph (Obsidian local graph foundation).
-   * Includes center node + neighbors within depth (1–2).
+   * Includes center node + neighbors within depth (1–5, Obsidian-like).
    * Default: wiki_link edges only (tag edges optional).
    */
   getLocalGraph(nodeIdOrPath, depth = 1, options) {
     const centerId = this.resolveNodeId(nodeIdOrPath);
     if (!centerId || !this.nodes.has(centerId)) return null;
-    const maxDepth = Math.min(2, Math.max(1, Math.floor(depth) || 1));
+    const maxDepth = Math.min(5, Math.max(1, Math.floor(depth) || 1));
     const includeTag = Boolean(options?.includeTagEdges);
     const visited = /* @__PURE__ */ new Set([centerId]);
     let layer = [centerId];
@@ -380,7 +682,7 @@ var GraphEngine = class {
       }
       layer = next;
     }
-    const nodes = Array.from(visited).map((id) => this.nodes.get(id)).filter((n) => n !== void 0);
+    const nodes = Array.from(visited).map((id) => this.nodes.get(id)).filter((n) => n !== void 0).map((n) => this.stripInternal(n));
     const edges = [];
     for (const edge of this.edges.values()) {
       if (!includeTag && edge.type === "tag") continue;
@@ -400,29 +702,53 @@ var GraphEngine = class {
   }
   resolveTitleToPath(target) {
     const maps = buildLookupMaps(
-      Array.from(this.nodes.values()).map((n) => ({
+      Array.from(this.nodes.values()).filter((n) => !n.isGhost && !n.isTag && Boolean(n.path)).map((n) => ({
         id: n.id,
         title: n.title,
         path: n.path,
-        relativePath: n.relativePath
+        relativePath: n.relativePath,
+        // Must include aliases — Ctrl+click [[alias]] was broken after graph updates
+        aliases: n.aliases || []
       }))
     );
     const id = resolveLinkTarget(target, maps);
     if (!id) return null;
-    return this.nodes.get(id)?.path || null;
+    const node = this.nodes.get(id);
+    if (!node?.path || node.isGhost || node.isTag) return null;
+    return node.path;
   }
   /**
    * Build undirected adjacency for wiki_link edges (tag optional).
    * Phase 4 path-finding foundation.
    */
-  buildAdj(includeTagEdges = false) {
+  /**
+   * Undirected adjacency for path / neighborhood.
+   * Default: real notes + attachments only (no ghosts, no tag-hub hops).
+   */
+  buildAdj(includeTagEdges = false, options) {
+    const includeGhosts = Boolean(options?.includeGhosts);
     const adj = /* @__PURE__ */ new Map();
     const ensure = (id) => {
       if (!adj.has(id)) adj.set(id, /* @__PURE__ */ new Set());
     };
-    for (const n of this.nodes.keys()) ensure(n);
+    const allowed = (id) => {
+      const n = this.nodes.get(id);
+      if (!n) return false;
+      if (!includeGhosts && n.isGhost) return false;
+      if (n.isTag && !includeTagEdges) return false;
+      return true;
+    };
+    for (const id of this.nodes.keys()) {
+      if (allowed(id)) ensure(id);
+    }
     for (const e of this.edges.values()) {
-      if (e.type === "wiki_link" || includeTagEdges && e.type === "tag") {
+      if (!allowed(e.source) || !allowed(e.target)) continue;
+      if (e.type === "wiki_link") {
+        ensure(e.source);
+        ensure(e.target);
+        adj.get(e.source).add(e.target);
+        adj.get(e.target).add(e.source);
+      } else if (includeTagEdges && e.type === "tag") {
         ensure(e.source);
         ensure(e.target);
         adj.get(e.source).add(e.target);
@@ -430,6 +756,10 @@ var GraphEngine = class {
       }
     }
     return adj;
+  }
+  stripInternal(n) {
+    const { outLinks: _ol, ...rest } = n;
+    return rest;
   }
   /**
    * Shortest path (BFS) between two notes on wiki links (Obsidian-like path highlight).
@@ -452,7 +782,7 @@ var GraphEngine = class {
         edges: []
       };
     }
-    const maxDepth = Math.min(50, Math.max(1, options?.maxDepth ?? 32));
+    const maxDepth = Math.min(256, Math.max(1, options?.maxDepth ?? 64));
     const adj = this.buildAdj(Boolean(options?.includeTagEdges));
     const prev = /* @__PURE__ */ new Map();
     const q = [fromId];
@@ -521,12 +851,12 @@ var GraphEngine = class {
     };
   }
   /**
-   * Neighborhood ids including center (paint focus). depth 1–3.
+   * Neighborhood ids including center (paint focus). depth 1–5 (Obsidian local range).
    */
   getNeighborhoodIds(nodeIdOrPath, depth = 1, options) {
     const centerId = this.resolveNodeId(nodeIdOrPath);
     if (!centerId) return null;
-    const maxDepth = Math.min(3, Math.max(1, Math.floor(depth) || 1));
+    const maxDepth = Math.min(5, Math.max(1, Math.floor(depth) || 1));
     const adj = this.buildAdj(Boolean(options?.includeTagEdges));
     const visited = /* @__PURE__ */ new Set([centerId]);
     let layer = [centerId];
@@ -584,7 +914,9 @@ var GraphEngine = class {
 var graphEngine = new GraphEngine();
 export {
   GraphEngine,
+  ghostNodeId,
   graphEngine,
   normalizeLinkTarget,
-  resolveLinkTarget
+  resolveLinkTarget,
+  tagNodeId
 };

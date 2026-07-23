@@ -61,6 +61,13 @@ export class SearchEngine {
     this.useFts = enabled
   }
 
+  /** Drop in-memory search state (workspace close / switch). SQLite closed separately. */
+  clear(): void {
+    this.index.clear()
+    this.fuse = null
+    this.orphanIds = new Set()
+  }
+
   buildIndex(parsedFiles: ParsedMarkdown[]): void {
     this.index.clear()
     for (const file of parsedFiles) {

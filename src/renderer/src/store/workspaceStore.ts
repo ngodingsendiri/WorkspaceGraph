@@ -82,6 +82,33 @@ export const useWorkspaceStore = create<WorkspaceStore>((set) => ({
   },
 
   closeWorkspace: async () => {
+    // Flush dirty editor buffers before main tears down vault root
+    try {
+      const { useEditorStore } = await import('./editorStore')
+      await useEditorStore.getState().flushSave()
+      useEditorStore.setState({
+        tabs: [],
+        activeTabId: null,
+        backlinks: [],
+        outgoing: []
+      })
+    } catch {
+      /* editor store optional during early boot */
+    }
+    try {
+      const { useChatStore } = await import('./chatStore')
+      // Reset chat UI state for previous vault (conversations are per-vault on disk)
+      useChatStore.setState({
+        messages: [],
+        conversationId: null,
+        isGenerating: false,
+        activeStreamId: null,
+        pendingProposals: [],
+        lastToolStatus: ''
+      })
+    } catch {
+      /* ignore */
+    }
     await window.api.closeWorkspace()
     set({
       isOpen: false,

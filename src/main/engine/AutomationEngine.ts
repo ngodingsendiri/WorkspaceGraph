@@ -207,10 +207,12 @@ export class AutomationEngine {
         return
       }
       if (raw.startsWith('---')) {
-        const end = raw.indexOf('\n---', 3)
+        // Normalize CRLF to LF first so frontmatter slicing is clean on Windows
+        const norm = raw.replace(/\r\n/g, '\n')
+        const end = norm.indexOf('\n---', 3)
         if (end !== -1) {
-          const fm = raw.slice(0, end)
-          const body = raw.slice(end)
+          const fm = norm.slice(0, end)
+          const body = norm.slice(end)
           if (fm.includes('tags:')) {
             raw =
               fm.replace(/tags:\s*\[([^\]]*)\]/, (_full, inner: string) => {

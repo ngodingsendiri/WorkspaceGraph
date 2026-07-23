@@ -1,6 +1,6 @@
 /**
- * Local graph (Phase 1) — Obsidian-style mini canvas under the editor.
- * Data: graph:getLocal (center + neighbors, depth 1–2, wiki edges by default).
+ * Local graph — Obsidian-style mini canvas under the editor.
+ * Data: graph:getLocal (center + neighbors, depth 1–5, wiki edges by default).
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react'
 import * as d3 from 'd3'
@@ -9,6 +9,7 @@ import { useWorkspaceStore } from '../../store/workspaceStore'
 import { useGraphStore, GraphNodeData, type GraphForceSettings } from '../../store/graphStore'
 import { Icon } from '../ui/Icons'
 import { DEFAULT_FORCE_SETTINGS } from './GraphFiltersPanel'
+import { chargeFor, linkDistanceFor, nodeRadius } from './graphShared'
 
 interface SimNode extends d3.SimulationNodeDatum, GraphNodeData {
   pinned?: boolean
@@ -58,9 +59,16 @@ function readPalette(): Palette {
       template: css('--node-template', '#9a6bb8'),
       document: css('--node-document', '#5a8ab8'),
       sop: css('--node-sop', '#c45a7a'),
-      other: css('--node-default', '#7a8494')
+      other: css('--node-default', '#7a8494'),
+      tag: css('--node-tag', isLight ? '#b8860b' : '#e0b84a'),
+      ghost: css('--node-ghost', isLight ? 'rgba(90,100,120,0.55)' : 'rgba(160,170,190,0.45)'),
+      attachment: css('--node-attachment', isLight ? '#5a8a6a' : '#6ab88a')
     }
   }
+}
+
+function lerp(a: number, b: number, t: number): number {
+  return a + (b - a) * t
 }
 
 function nid(x: string | SimNode): string {
@@ -68,8 +76,8 @@ function nid(x: string | SimNode): string {
 }
 
 function radius(d: SimNode): number {
-  if (d.isCenter) return Math.max(7, Math.min(12, 6 + Math.sqrt(Math.max(0, d.degree)) * 1.4))
-  return Math.max(4, Math.min(9, 3.5 + Math.sqrt(Math.max(0, d.degree)) * 1.2))
+  if (d.isCenter) return Math.max(7, Math.min(12, nodeRadius(d.degree, 1.15)))
+  return Math.max(4, Math.min(9, nodeRadius(d.degree, 0.95)))
 }
 
 export const LocalGraphCanvas: React.FC = () => {
@@ -77,8 +85,14 @@ export const LocalGraphCanvas: React.FC = () => {
   const activeTabPath = useEditorStore((s) => s.tabs.find((t) => t.id === s.activeTabId)?.path)
   const activeTabTitle = useEditorStore((s) => s.tabs.find((t) => t.id === s.activeTabId)?.title)
   const setActiveView = useWorkspaceStore((s) => s.setActiveView)
-  const { fetchLocalGraph, setFocusedNode, graphSettings, loadGraphSettings, updateGraphSettings } =
-    useGraphStore()
+  const {
+    fetchLocalGraph,
+    setFocusedNode,
+    setOpenIntent,
+    graphSettings,
+    loadGraphSettings,
+    updateGraphSettings
+  } = useGraphStore()
   const forcesRef = useRef<GraphForceSettings>({ ...DEFAULT_FORCE_SETTINGS })
   if (graphSettings?.forces) {
     forcesRef.current = { ...DEFAULT_FORCE_SETTINGS, ...graphSettings.forces }
@@ -92,6 +106,8 @@ export const LocalGraphCanvas: React.FC = () => {
   const transformRef = useRef(d3.zoomIdentity)
   const paletteRef = useRef(readPalette())
   const hoverIdRef = useRef<string | null>(null)
+  const hoverStrengthRef = useRef(0)
+  const hoverAnimRafRef = useRef(0)
   const centerIdRef = useRef<string | null>(null)
   const rafRef = useRef(0)
   const dirtyRef = useRef(true)
@@ -99,14 +115,32 @@ export const LocalGraphCanvas: React.FC = () => {
     Map<string, { x: number; y: number; fx?: number | null; fy?: number | null }>
   >(new Map())
 
-  const defaultDepth = graphSettings?.filters.localDepth === 2 ? 2 : 1
-  const [depth, setDepth] = useState<1 | 2>(defaultDepth as 1 | 2)
+  const clampDepth = (d: number): number => Math.min(5, Math.max(1, Math.floor(d) || 1))
+  const defaultDepth = clampDepth(graphSettings?.filters.localDepth ?? 1)
+  const [depth, setDepth] = useState(defaultDepth)
   const [showLabels, setShowLabels] = useState(true)
+  const [includeTags, setIncludeTags] = useState(false)
   const [collapsed, setCollapsed] = useState(false)
   const [loading, setLoading] = useState(false)
   const [stats, setStats] = useState({ nodes: 0, edges: 0, centerTitle: '' })
   const [emptyReason, setEmptyReason] = useState<'no-file' | 'not-in-graph' | 'no-links' | null>(
     'no-file'
+  )
+  const [reloadToken, setReloadToken] = useState(0)
+
+  const persistDepth = useCallback(
+    (d: number) => {
+      void updateGraphSettings({
+        filters: {
+          localDepth: d,
+          hubDegreeThreshold: graphSettings?.filters.hubDegreeThreshold ?? 15,
+          orphanMode: graphSettings?.filters.orphanMode ?? 'all',
+          hubMode: graphSettings?.filters.hubMode ?? 'dim',
+          searchMode: graphSettings?.filters.searchMode ?? 'spotlight'
+        }
+      })
+    },
+    [updateGraphSettings, graphSettings?.filters]
   )
 
   useEffect(() => {
@@ -114,25 +148,33 @@ export const LocalGraphCanvas: React.FC = () => {
   }, [loadGraphSettings])
 
   useEffect(() => {
-    if (graphSettings?.filters.localDepth === 1 || graphSettings?.filters.localDepth === 2) {
-      setDepth(graphSettings.filters.localDepth as 1 | 2)
+    const d = graphSettings?.filters.localDepth
+    if (typeof d === 'number' && d >= 1 && d <= 5) {
+      setDepth(clampDepth(d))
     }
   }, [graphSettings?.filters.localDepth])
 
   const paint = useCallback(() => {
     const canvas = canvasRef.current
+    const wrap = wrapRef.current
     if (!canvas) return
     const ctx = canvas.getContext('2d')
     if (!ctx) return
 
-    const dpr = window.devicePixelRatio || 1
-    const w = canvas.clientWidth
-    const h = canvas.clientHeight
-    if (w < 2 || h < 2) return
+    const dpr = Math.min(window.devicePixelRatio || 1, 2)
+    // Prefer wrap size — canvas.clientWidth is often 0 until layout settles
+    let w = Math.floor(Math.max(canvas.clientWidth, wrap?.clientWidth || 0, 0))
+    let h = Math.floor(Math.max(canvas.clientHeight, wrap?.clientHeight || 0, 0))
+    if (w < 8 || h < 8) {
+      w = Math.max(280, Math.floor((wrap?.parentElement?.clientWidth || 400) * 0.95))
+      h = Math.max(140, 180)
+    }
     if (canvas.width !== Math.floor(w * dpr) || canvas.height !== Math.floor(h * dpr)) {
       canvas.width = Math.floor(w * dpr)
       canvas.height = Math.floor(h * dpr)
     }
+    canvas.style.width = `${w}px`
+    canvas.style.height = `${h}px`
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
 
     const pal = paletteRef.current
@@ -154,8 +196,9 @@ export const LocalGraphCanvas: React.FC = () => {
     ctx.translate(t.x, t.y)
     ctx.scale(t.k, t.k)
 
+    const hs = hoverStrengthRef.current
     let hot: Set<string> | null = null
-    if (hover) {
+    if (hover && hs > 0.02) {
       hot = new Set([hover])
       for (const e of simLinks) {
         const s = nid(e.source)
@@ -173,68 +216,112 @@ export const LocalGraphCanvas: React.FC = () => {
       const isHot = hot
         ? (s.id === hover || tg.id === hover) && hot.has(s.id) && hot.has(tg.id)
         : false
-      const dim = hot && !isHot
+      const dim = Boolean(hot && !isHot)
       ctx.beginPath()
       ctx.moveTo(s.x, s.y)
       ctx.lineTo(tg.x, tg.y)
-      ctx.strokeStyle = isHot ? pal.edgeHot : pal.edge
-      ctx.globalAlpha = dim ? 0.08 : 1
-      ctx.lineWidth = (isHot ? 1.8 : 1.15) / t.k
+      ctx.strokeStyle = isHot && hs > 0.35 ? pal.edgeHot : pal.edge
+      ctx.globalAlpha = dim ? lerp(1, 0.22, hs) : 1
+      ctx.lineWidth = (isHot ? lerp(1.15, 1.85, hs) : e.type === 'tag' ? 0.9 : 1.15) / t.k
+      if (e.type === 'tag') ctx.setLineDash([3 / t.k, 3 / t.k])
+      else ctx.setLineDash([])
       ctx.stroke()
     }
+    ctx.setLineDash([])
     ctx.globalAlpha = 1
 
     for (const n of simNodes) {
       if (n.x == null || n.y == null) continue
       const r = radius(n)
-      const col = pal.colors[n.type] || pal.colors.other
-      const dim = hot && !hot.has(n.id)
+      const isTag = n.isTag || n.type === 'tag'
+      const isGhost = n.isGhost || n.type === 'ghost'
+      const col = isTag
+        ? pal.colors.tag
+        : isGhost
+          ? pal.colors.ghost
+          : pal.colors[n.type] || pal.colors.other
+      const dim = Boolean(hot && !hot.has(n.id))
       const isC = n.id === centerId || n.isCenter
-      ctx.globalAlpha = dim ? (pal.isLight ? 0.18 : 0.12) : 1
+      ctx.globalAlpha = dim ? lerp(1, pal.isLight ? 0.28 : 0.2, hs) : 1
 
       if (isC && !dim) {
         ctx.beginPath()
         ctx.arc(n.x, n.y, r + 5, 0, Math.PI * 2)
         ctx.fillStyle = pal.centerStroke
-        ctx.globalAlpha = pal.isLight ? 0.2 : 0.25
+        ctx.globalAlpha = (pal.isLight ? 0.2 : 0.25) * (dim ? 0.3 : 1)
         ctx.fill()
-        ctx.globalAlpha = 1
+        ctx.globalAlpha = dim ? lerp(1, 0.25, hs) : 1
       }
 
       ctx.beginPath()
-      ctx.arc(n.x, n.y, r, 0, Math.PI * 2)
-      ctx.fillStyle = col
-      ctx.fill()
-      ctx.lineWidth = (isC ? 2.4 : n.id === hover ? 1.8 : 1) / t.k
-      ctx.strokeStyle = isC ? pal.centerStroke : n.id === hover ? pal.edgeHot : pal.nodeStroke
-      ctx.stroke()
+      if (isTag) {
+        const d = r * 1.1
+        ctx.moveTo(n.x, n.y - d)
+        ctx.lineTo(n.x + d, n.y)
+        ctx.lineTo(n.x, n.y + d)
+        ctx.lineTo(n.x - d, n.y)
+        ctx.closePath()
+        ctx.fillStyle = col
+        ctx.fill()
+      } else if (isGhost) {
+        ctx.arc(n.x, n.y, r, 0, Math.PI * 2)
+        ctx.fillStyle = pal.isLight ? 'rgba(255,255,255,0.4)' : 'rgba(20,22,28,0.4)'
+        ctx.fill()
+        ctx.setLineDash([2 / t.k, 2 / t.k])
+        ctx.strokeStyle = col
+        ctx.lineWidth = 1.4 / t.k
+        ctx.stroke()
+        ctx.setLineDash([])
+      } else {
+        ctx.arc(n.x, n.y, r, 0, Math.PI * 2)
+        ctx.fillStyle = col
+        ctx.fill()
+      }
+      if (!isGhost) {
+        ctx.lineWidth = (isC ? 2.4 : n.id === hover ? lerp(1, 1.8, hs) : 1) / t.k
+        ctx.strokeStyle =
+          isC ? pal.centerStroke : n.id === hover && hs > 0.4 ? pal.edgeHot : pal.nodeStroke
+        ctx.stroke()
+      }
     }
     ctx.globalAlpha = 1
 
     if (showLabels) {
-      ctx.font = `${Math.max(10, 11 / Math.sqrt(Math.max(0.5, t.k)))}px Inter,"Segoe UI Variable","Segoe UI",system-ui,sans-serif`
+      // Screen-space labels (readable at any zoom)
+      ctx.restore()
+      ctx.save()
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+      const fontPx = 11
+      ctx.font = `${fontPx}px Inter,"Segoe UI Variable","Segoe UI",system-ui,sans-serif`
       ctx.textBaseline = 'middle'
       for (const n of simNodes) {
         if (n.x == null || n.y == null) continue
         if (hot && !hot.has(n.id) && n.id !== hover) continue
-        const r = radius(n)
-        const text = n.title.length > 20 ? n.title.slice(0, 19) + '…' : n.title
-        const x = n.x + r + 5
-        const y = n.y
-        if (pal.isLight) {
+        const rWorld = radius(n)
+        const titleStr = String(n.title || n.id || '')
+        const text = titleStr.length > 22 ? titleStr.slice(0, 21) + '…' : titleStr
+        const sx = n.x * t.k + t.x + rWorld * t.k + 5
+        const sy = n.y * t.k + t.y
+        const labelA =
+          n.id === hover || n.id === centerId ? 1 : hot ? lerp(0.85, 0.9, hs) : 0.82
+        if (pal.isLight && labelA > 0.3) {
           const tw = ctx.measureText(text).width
           ctx.fillStyle = pal.labelBg
-          ctx.fillRect(x - 2, y - 7, tw + 4, 14)
+          ctx.globalAlpha = labelA * 0.9
+          ctx.fillRect(sx - 2, sy - 7, tw + 4, 14)
         }
         ctx.fillStyle = n.id === centerId ? pal.centerStroke : pal.label
-        ctx.globalAlpha = n.id === hover || n.id === centerId ? 1 : hot ? 0.85 : 0.78
+        ctx.globalAlpha = labelA
         ctx.font =
           n.id === centerId
-            ? `600 ${Math.max(10, 11 / Math.sqrt(Math.max(0.5, t.k)))}px Inter,"Segoe UI Variable","Segoe UI",system-ui,sans-serif`
-            : `${Math.max(10, 11 / Math.sqrt(Math.max(0.5, t.k)))}px Inter,"Segoe UI Variable","Segoe UI",system-ui,sans-serif`
-        ctx.fillText(text, x, y)
+            ? `600 ${fontPx}px Inter,"Segoe UI Variable","Segoe UI",system-ui,sans-serif`
+            : `${fontPx}px Inter,"Segoe UI Variable","Segoe UI",system-ui,sans-serif`
+        ctx.fillText(text, sx, sy)
       }
       ctx.globalAlpha = 1
+      ctx.restore()
+      dirtyRef.current = false
+      return
     }
 
     ctx.restore()
@@ -249,6 +336,38 @@ export const LocalGraphCanvas: React.FC = () => {
       if (dirtyRef.current) paint()
     })
   }, [paint])
+
+  const kickHoverAnim = useCallback(() => {
+    if (hoverAnimRafRef.current) return
+    const step = () => {
+      const target = hoverIdRef.current ? 1 : 0
+      const cur = hoverStrengthRef.current
+      const rate = target > cur ? 0.3 : 0.2
+      const next = cur + (target - cur) * rate
+      if (Math.abs(next - target) < 0.015) {
+        hoverStrengthRef.current = target
+        hoverAnimRafRef.current = 0
+        schedulePaint()
+        return
+      }
+      hoverStrengthRef.current = next
+      schedulePaint()
+      hoverAnimRafRef.current = requestAnimationFrame(step)
+    }
+    hoverAnimRafRef.current = requestAnimationFrame(step)
+  }, [schedulePaint])
+
+  const setHoverId = useCallback(
+    (id: string | null) => {
+      if (hoverIdRef.current === id) return
+      hoverIdRef.current = id
+      if (id && hoverStrengthRef.current < 0.5) {
+        hoverStrengthRef.current = Math.max(hoverStrengthRef.current, 0.5)
+      }
+      kickHoverAnim()
+    },
+    [kickHoverAnim]
+  )
 
   useEffect(() => {
     const apply = () => {
@@ -266,27 +385,55 @@ export const LocalGraphCanvas: React.FC = () => {
     schedulePaint()
   }, [showLabels, schedulePaint])
 
+  // Live reload when vault graph updates
+  useEffect(() => {
+    if (!window.api?.onGraphUpdated) return
+    const unsub = window.api.onGraphUpdated(() => {
+      setReloadToken((n) => n + 1)
+    })
+    return () => {
+      unsub()
+      if (hoverAnimRafRef.current) cancelAnimationFrame(hoverAnimRafRef.current)
+    }
+  }, [])
+
   const hitNode = useCallback((clientX: number, clientY: number): SimNode | null => {
     const canvas = canvasRef.current
     if (!canvas) return null
     const rect = canvas.getBoundingClientRect()
+    if (rect.width < 2) return null
     const t = transformRef.current
     const x = (clientX - rect.left - t.x) / t.k
     const y = (clientY - rect.top - t.y) / t.k
+    const stickyId = hoverIdRef.current
     let best: SimNode | null = null
     let bestD = Infinity
+    let sticky: SimNode | null = null
+    let stickyD = Infinity
     for (const n of nodesRef.current) {
       if (n.x == null || n.y == null) continue
       const dx = n.x - x
       const dy = n.y - y
       const d = dx * dx + dy * dy
-      const r = radius(n) + 5
-      if (d <= r * r && d < bestD) {
-        best = n
-        bestD = d
+      const pad = n.id === stickyId ? 12 : 5
+      const r = radius(n) + pad
+      if (d <= r * r) {
+        if (n.id === stickyId) {
+          sticky = n
+          stickyD = d
+        }
+        if (d < bestD) {
+          best = n
+          bestD = d
+        }
       }
     }
-    return best
+    if (sticky && best) {
+      if (sticky.id === best.id) return sticky
+      if (bestD < stickyD * 0.55) return best
+      return sticky
+    }
+    return sticky || best
   }, [])
 
   const fitView = useCallback(
@@ -330,7 +477,7 @@ export const LocalGraphCanvas: React.FC = () => {
     const t = window.setTimeout(() => {
       setLoading(true)
       void (async () => {
-        const data = await fetchLocalGraph(activeTabPath, depth, false)
+        const data = await fetchLocalGraph(activeTabPath, depth, includeTags)
         if (cancelled) return
         setLoading(false)
 
@@ -373,12 +520,17 @@ export const LocalGraphCanvas: React.FC = () => {
 
         const idSet = new Set(simNodes.map((n) => n.id))
         const simLinks: SimLink[] = data.edges
-          .filter((e) => idSet.has(e.source) && idSet.has(e.target))
-          .map((e) => ({
-            id: e.id,
-            type: e.type,
-            source: e.source,
-            target: e.target
+          .map((e) => {
+            const source = typeof e.source === 'string' ? e.source : String((e as { source?: string }).source || '')
+            const target = typeof e.target === 'string' ? e.target : String((e as { target?: string }).target || '')
+            return { e, source, target }
+          })
+          .filter(({ source, target }) => source && target && idSet.has(source) && idSet.has(target))
+          .map(({ e, source, target }) => ({
+            id: e.id || `${source}->${target}`,
+            type: e.type || 'wiki_link',
+            source,
+            target
           }))
 
         nodesRef.current = simNodes
@@ -389,13 +541,13 @@ export const LocalGraphCanvas: React.FC = () => {
           centerTitle: simNodes.find((n) => n.isCenter)?.title || activeTabTitle || ''
         })
 
-        // Phase 6: use global force prefs (scaled for mini local canvas)
+        // Global force prefs scaled for mini local canvas (Obsidian local feel)
         const f = forcesRef.current
-        const linkDist = Math.max(36, Math.min(100, f.linkDist * 0.82))
-        const charge = Math.max(-160, Math.min(-30, f.charge * 0.78))
+        const linkDist = Math.max(36, Math.min(110, f.linkDist * 0.82))
         const centerStr = Math.min(0.15, Math.max(0.04, f.center * 1.15))
         const linkStr = Math.min(0.9, Math.max(0.2, f.linkStr))
         const collideStr = Math.min(1, Math.max(0.2, f.collide))
+        const baseCharge = Math.max(-180, Math.min(-28, f.charge * 0.78))
 
         simRef.current?.stop()
         const sim = d3
@@ -405,32 +557,38 @@ export const LocalGraphCanvas: React.FC = () => {
             d3
               .forceLink<SimNode, SimLink>(simLinks)
               .id((d) => d.id)
-              .distance(linkDist)
+              .distance((l) => {
+                const s = l.source as SimNode
+                const t = l.target as SimNode
+                const sd = typeof s === 'object' ? s.degree || 0 : 0
+                const td = typeof t === 'object' ? t.degree || 0 : 0
+                return linkDistanceFor(sd, td, linkDist)
+              })
               .strength(linkStr)
           )
           .force(
             'charge',
             d3
-              .forceManyBody()
-              .strength(charge)
-              .distanceMax(Math.max(120, linkDist * 2.5))
+              .forceManyBody<SimNode>()
+              .strength((d) => chargeFor(d.degree || 0, baseCharge, simNodes.length > 40))
+              .distanceMax(Math.max(140, linkDist * 3))
               .theta(0.9)
           )
           .force('center', d3.forceCenter(width / 2, height / 2).strength(centerStr))
-          .force('x', d3.forceX(width / 2).strength(centerStr * 0.65))
-          .force('y', d3.forceY(height / 2).strength(centerStr * 0.65))
+          .force('x', d3.forceX(width / 2).strength(centerStr * 0.55))
+          .force('y', d3.forceY(height / 2).strength(centerStr * 0.55))
           .force(
             'collide',
             d3
               .forceCollide<SimNode>()
               .radius((d) => radius(d) + 6)
               .strength(collideStr)
-              .iterations(1)
+              .iterations(2)
           )
-          .velocityDecay(0.4)
-          .alphaDecay(0.06)
-          .alphaMin(0.03)
-          .alpha(0.6)
+          .velocityDecay(0.38)
+          .alphaDecay(0.05)
+          .alphaMin(0.025)
+          .alpha(0.55)
 
         simRef.current = sim
         let tick = 0
@@ -473,6 +631,8 @@ export const LocalGraphCanvas: React.FC = () => {
     activeTabPath,
     activeTabTitle,
     depth,
+    includeTags,
+    reloadToken,
     fetchLocalGraph,
     schedulePaint,
     fitView,
@@ -549,8 +709,7 @@ export const LocalGraphCanvas: React.FC = () => {
       const hit = hitNode(e.clientX, e.clientY)
       const next = hit?.id || null
       if (next !== hoverIdRef.current) {
-        hoverIdRef.current = next
-        schedulePaint()
+        setHoverId(next)
         canvas.style.cursor = hit ? 'pointer' : 'grab'
       }
     }
@@ -558,9 +717,25 @@ export const LocalGraphCanvas: React.FC = () => {
     const onUp = (e: PointerEvent) => {
       if (dragged) {
         const d = dragged
-        if (!moved && d.path && !d.isCenter) {
-          void openTab(d.path)
-          // openTab already switches to editor view
+        if (!moved) {
+          if ((d.isTag || d.type === 'tag') && !d.isCenter) {
+            // Open global graph filtered to this tag
+            setOpenIntent({
+              searchQuery: (d.title || '').replace(/^#/, ''),
+              searchMode: 'filter',
+              showTags: true,
+              focusNodeId: d.id
+            })
+            setActiveView('graph')
+          } else if (
+            (d.isAttachment || d.type === 'attachment') &&
+            d.path &&
+            window.api?.openFileExternal
+          ) {
+            void window.api.openFileExternal(d.path)
+          } else if (d.path && !d.isCenter && !d.isGhost) {
+            void openTab(d.path)
+          }
         } else if (moved && !d.isCenter) {
           d.pinned = true
           posCache.current.set(d.id, { x: d.x!, y: d.y!, fx: d.fx, fy: d.fy })
@@ -575,6 +750,8 @@ export const LocalGraphCanvas: React.FC = () => {
         /* ignore */
       }
     }
+
+    const onLeave = () => setHoverId(null)
 
     const onDbl = (e: MouseEvent) => {
       const hit = hitNode(e.clientX, e.clientY)
@@ -591,6 +768,7 @@ export const LocalGraphCanvas: React.FC = () => {
     canvas.addEventListener('pointermove', onMove)
     canvas.addEventListener('pointerup', onUp)
     canvas.addEventListener('pointercancel', onUp)
+    canvas.addEventListener('pointerleave', onLeave)
     canvas.addEventListener('dblclick', onDbl)
     return () => {
       canvas.removeEventListener('wheel', onWheel)
@@ -598,9 +776,10 @@ export const LocalGraphCanvas: React.FC = () => {
       canvas.removeEventListener('pointermove', onMove)
       canvas.removeEventListener('pointerup', onUp)
       canvas.removeEventListener('pointercancel', onUp)
+      canvas.removeEventListener('pointerleave', onLeave)
       canvas.removeEventListener('dblclick', onDbl)
     }
-  }, [collapsed, hitNode, openTab, schedulePaint])
+  }, [collapsed, hitNode, openTab, schedulePaint, setHoverId, setOpenIntent, setActiveView])
 
   // Resize
   useEffect(() => {
@@ -634,7 +813,10 @@ export const LocalGraphCanvas: React.FC = () => {
 
   const openInGlobal = () => {
     const cid = centerIdRef.current
-    if (cid) setFocusedNode(cid)
+    if (cid) {
+      setFocusedNode(cid)
+      setOpenIntent({ focusNodeId: cid })
+    }
     setActiveView('graph')
   }
 
@@ -642,6 +824,19 @@ export const LocalGraphCanvas: React.FC = () => {
     const el = wrapRef.current
     if (!el) return
     fitView(nodesRef.current, el.clientWidth, el.clientHeight)
+  }
+
+  const zoomBy = (factor: number) => {
+    const el = wrapRef.current
+    if (!el) return
+    const cx = el.clientWidth / 2
+    const cy = el.clientHeight / 2
+    const t = transformRef.current
+    const nextK = Math.max(0.35, Math.min(3.5, t.k * factor))
+    const x = cx - ((cx - t.x) * nextK) / t.k
+    const y = cy - ((cy - t.y) * nextK) / t.k
+    transformRef.current = d3.zoomIdentity.translate(x, y).scale(nextK)
+    schedulePaint()
   }
 
   if (!activeTabPath) return null
@@ -669,41 +864,20 @@ export const LocalGraphCanvas: React.FC = () => {
         {!collapsed && (
           <div className="local-graph-actions">
             <div className="local-graph-depth" role="group" aria-label="Depth">
-              <button
-                type="button"
-                className={`local-graph-chip ${depth === 1 ? 'active' : ''}`}
-                onClick={() => {
-                  setDepth(1)
-                  // Phase 6 debt: persist preferred local depth
-                  void updateGraphSettings({
-                    filters: {
-                      localDepth: 1,
-                      hubDegreeThreshold: graphSettings?.filters.hubDegreeThreshold ?? 15,
-                      orphanMode: graphSettings?.filters.orphanMode ?? 'all',
-                      hubMode: graphSettings?.filters.hubMode ?? 'dim'
-                    }
-                  })
-                }}
-              >
-                Depth 1
-              </button>
-              <button
-                type="button"
-                className={`local-graph-chip ${depth === 2 ? 'active' : ''}`}
-                onClick={() => {
-                  setDepth(2)
-                  void updateGraphSettings({
-                    filters: {
-                      localDepth: 2,
-                      hubDegreeThreshold: graphSettings?.filters.hubDegreeThreshold ?? 15,
-                      orphanMode: graphSettings?.filters.orphanMode ?? 'all',
-                      hubMode: graphSettings?.filters.hubMode ?? 'dim'
-                    }
-                  })
-                }}
-              >
-                Depth 2
-              </button>
+              {([1, 2, 3, 4, 5] as const).map((d) => (
+                <button
+                  key={d}
+                  type="button"
+                  className={`local-graph-chip ${depth === d ? 'active' : ''}`}
+                  title={`Local graph depth ${d}`}
+                  onClick={() => {
+                    setDepth(d)
+                    persistDepth(d)
+                  }}
+                >
+                  {d === 1 ? 'D1' : `D${d}`}
+                </button>
+              ))}
             </div>
             <label className="local-graph-check">
               <input
@@ -713,6 +887,30 @@ export const LocalGraphCanvas: React.FC = () => {
               />
               Labels
             </label>
+            <label className="local-graph-check" title="Sertakan edge/tag nodes">
+              <input
+                type="checkbox"
+                checked={includeTags}
+                onChange={(e) => setIncludeTags(e.target.checked)}
+              />
+              Tags
+            </label>
+            <button
+              type="button"
+              className="local-graph-chip"
+              onClick={() => zoomBy(1.15)}
+              title="Zoom in"
+            >
+              +
+            </button>
+            <button
+              type="button"
+              className="local-graph-chip"
+              onClick={() => zoomBy(1 / 1.15)}
+              title="Zoom out"
+            >
+              −
+            </button>
             <button type="button" className="local-graph-chip" onClick={handleFit} title="Fit">
               Fit
             </button>

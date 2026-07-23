@@ -225,17 +225,6 @@ function parseGfmAligns(sep: string): Array<'left' | 'center' | 'right' | null> 
 function renderInline(text: string): string {
   // Cap pathological lines — prevents rare ReDoS-style lag in main process
   let s = text.length > 20_000 ? text.slice(0, 20_000) : text
-  // images / links (URL already limited)
-  s = s.replace(
-    /!\[([^\]]*?)\]\((https?:[^)\s]+|mailto:[^)\s]+)\)/gi,
-    (_m, alt: string, url: string) =>
-      `<img src="${escapeHtml(url)}" alt="${escapeHtml(alt)}" />`
-  )
-  s = s.replace(
-    /\[([^\]]+?)\]\((https?:[^)\s]+|mailto:[^)\s]+)\)/gi,
-    (_m, label: string, url: string) =>
-      `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${label}</a>`
-  )
   s = s.replace(/`([^`\n]+?)`/g, '<code>$1</code>')
   s = s.replace(/\*\*\*([^*]+?)\*\*\*/g, '<strong><em>$1</em></strong>')
   s = s.replace(/\*\*([^*]+?)\*\*/g, '<strong>$1</strong>')
@@ -286,6 +275,27 @@ function renderMarkdownToHtml(content: string): string {
     wikiSlots.push({ target, label })
     return `§§WIKI${idx}§§`
   })
+
+  // 3) Protect external images & links so URLs with _ or * don't get corrupted by inline formatting
+  const extSlots: string[] = []
+  src = src.replace(
+    /!\[([^\]]*?)\]\((https?:[^)\s]+|mailto:[^)\s]+)\)/gi,
+    (_m, alt: string, url: string) => {
+      const idx = extSlots.length
+      extSlots.push(`<img src="${escapeHtml(url)}" alt="${escapeHtml(alt)}" />`)
+      return `§§EXT${idx}§§`
+    }
+  )
+  src = src.replace(
+    /\[([^\]]+?)\]\((https?:[^)\s]+|mailto:[^)\s]+)\)/gi,
+    (_m, label: string, url: string) => {
+      const idx = extSlots.length
+      extSlots.push(
+        `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(label)}</a>`
+      )
+      return `§§EXT${idx}§§`
+    }
+  )
 
   const lines = src.split('\n')
   const out: string[] = []
@@ -457,6 +467,11 @@ function renderMarkdownToHtml(content: string): string {
     const slot = wikiSlots[Number(n)]
     if (!slot) return '[[?]]'
     return `<span class="wiki-link" data-target="${escapeHtml(slot.target)}">${escapeHtml(slot.label)}</span>`
+  })
+
+  // Restore external links & images
+  html = html.replace(/§§EXT(\d+)§§/g, (_m, n: string) => {
+    return extSlots[Number(n)] || ''
   })
 
   return html

@@ -28,6 +28,10 @@ export interface EditorStore {
 
   openTab: (filePath: string) => Promise<void>
   closeTab: (tabId: string) => void
+  /** Close tab without writing (file already deleted / moved away). */
+  discardTab: (tabId: string) => void
+  /** Discard all tabs whose path is under prefix (delete folder / rename out). */
+  discardTabsUnder: (pathPrefix: string) => void
   setActiveTab: (tabId: string) => void
   updateContent: (tabId: string, content: string) => void
   saveTab: (tabId: string) => Promise<void>
@@ -289,6 +293,38 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
         }
       })
       pendingCloseWrites.set(key, writePromise)
+    }
+  },
+
+  discardTab: (tabId: string) => {
+    clearSaveTimer(tabId)
+    saveInflight.delete(tabId)
+    const { tabs, activeTabId } = get()
+    if (!tabs.some((t) => t.id === tabId)) return
+    const newTabs = tabs.filter((t) => t.id !== tabId)
+    let nextActiveId = activeTabId
+    if (activeTabId === tabId) {
+      nextActiveId = newTabs.length > 0 ? newTabs[newTabs.length - 1].id : null
+    }
+    set({
+      tabs: newTabs,
+      activeTabId: nextActiveId,
+      ...(nextActiveId ? {} : { backlinks: [], outgoing: [] })
+    })
+    if (nextActiveId) {
+      const next = newTabs.find((t) => t.id === nextActiveId)
+      if (next) void get().refreshLinks(next.path)
+    }
+  },
+
+  discardTabsUnder: (pathPrefix: string) => {
+    const prefix = normPath(pathPrefix)
+    const doomed = get().tabs.filter((t) => {
+      const p = normPath(t.path)
+      return p === prefix || p.startsWith(prefix + '/')
+    })
+    for (const t of doomed) {
+      get().discardTab(t.id)
     }
   },
 

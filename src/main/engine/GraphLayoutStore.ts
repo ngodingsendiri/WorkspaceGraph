@@ -39,6 +39,20 @@ export interface GraphDisplaySettings {
   nodeSize: number
   /** Obsidian-like: edge thickness multiplier (0.25–3) */
   lineThickness: number
+  /**
+   * Obsidian "Existing files only": when true, hide unresolved (ghost) nodes.
+   * When false, show hollow ghost nodes for broken wikilinks.
+   */
+  existingFilesOnly: boolean
+  /** Obsidian Tags filter — show #tag as nodes */
+  showTags: boolean
+  /** Obsidian Attachments filter — show non-md files */
+  showAttachments: boolean
+  /**
+   * Keep force simulation gently alive (Obsidian "animate" feel).
+   * When false, settles fully after layout.
+   */
+  animateForces: boolean
 }
 
 /** Obsidian-like color group: query match → node color override */
@@ -52,15 +66,23 @@ export interface GraphColorGroup {
 export type GraphOrphanMode = 'all' | 'hide' | 'only'
 export type GraphHubMode = 'all' | 'dim' | 'hide'
 
+/** How graph search/query affects visibility (Obsidian: search filters the graph). */
+export type GraphSearchMode = 'spotlight' | 'filter'
+
 export interface GraphFilterSettings {
   /** Degree ≥ this counts as hub */
   hubDegreeThreshold: number
-  /** Default local graph depth (1–2) */
+  /** Default local graph depth (1–5, Obsidian-like) */
   localDepth: number
   /** Orphan visibility in global graph */
   orphanMode: GraphOrphanMode
   /** Hub sizing / visibility in global graph */
   hubMode: GraphHubMode
+  /**
+   * spotlight = dim non-matches (default, less jarring)
+   * filter = hide non-matches (Obsidian subtraction filter)
+   */
+  searchMode: GraphSearchMode
 }
 
 export interface GraphSettings {
@@ -77,12 +99,32 @@ export interface GraphLayoutNodePos {
   pinned?: boolean
 }
 
+/** Canvas pan/zoom (d3 zoom identity: translate + scale) */
+export interface GraphCamera {
+  x: number
+  y: number
+  k: number
+}
+
 export interface GraphLayoutFile {
   version: typeof GRAPH_LAYOUT_VERSION
   /** Absolute vault root when saved (diagnostics) */
   vaultPath?: string
   updatedAt: string
   nodes: Record<string, GraphLayoutNodePos>
+  /** Last global graph camera (Obsidian-like remember view) */
+  camera?: GraphCamera | null
+}
+
+export function normalizeCamera(v: unknown): GraphCamera | null {
+  if (!v || typeof v !== 'object') return null
+  const o = v as Record<string, unknown>
+  const x = Number(o.x)
+  const y = Number(o.y)
+  const k = Number(o.k)
+  if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(k)) return null
+  if (k < 0.05 || k > 8) return null
+  return { x, y, k: Math.min(6, Math.max(0.08, k)) }
 }
 
 export const DEFAULT_GRAPH_SETTINGS: GraphSettings = {
@@ -102,13 +144,18 @@ export const DEFAULT_GRAPH_SETTINGS: GraphSettings = {
     arrows: false,
     textFade: 1,
     nodeSize: 1,
-    lineThickness: 1
+    lineThickness: 1,
+    existingFilesOnly: true,
+    showTags: false,
+    showAttachments: false,
+    animateForces: false
   },
   filters: {
     hubDegreeThreshold: 15,
     localDepth: 1,
     orphanMode: 'all',
-    hubMode: 'dim'
+    hubMode: 'dim',
+    searchMode: 'spotlight'
   },
   groups: []
 }
@@ -120,6 +167,7 @@ function clamp(n: number, min: number, max: number): number {
 
 const ORPHAN_MODES: GraphOrphanMode[] = ['all', 'hide', 'only']
 const HUB_MODES: GraphHubMode[] = ['all', 'dim', 'hide']
+const SEARCH_MODES: GraphSearchMode[] = ['spotlight', 'filter']
 
 export function normalizeOrphanMode(
   v: unknown,
@@ -130,6 +178,13 @@ export function normalizeOrphanMode(
 
 export function normalizeHubMode(v: unknown, fallback: GraphHubMode = 'dim'): GraphHubMode {
   return HUB_MODES.includes(v as GraphHubMode) ? (v as GraphHubMode) : fallback
+}
+
+export function normalizeSearchMode(
+  v: unknown,
+  fallback: GraphSearchMode = 'spotlight'
+): GraphSearchMode {
+  return SEARCH_MODES.includes(v as GraphSearchMode) ? (v as GraphSearchMode) : fallback
 }
 
 const MAX_COLOR_GROUPS = 20
@@ -206,6 +261,11 @@ export function mergeGraphSettings(partial?: Partial<GraphSettings> | null): Gra
         0.25,
         3
       ),
+      existingFilesOnly:
+        d.existingFilesOnly ?? DEFAULT_GRAPH_SETTINGS.display.existingFilesOnly,
+      showTags: d.showTags ?? DEFAULT_GRAPH_SETTINGS.display.showTags,
+      showAttachments: d.showAttachments ?? DEFAULT_GRAPH_SETTINGS.display.showAttachments,
+      animateForces: d.animateForces ?? DEFAULT_GRAPH_SETTINGS.display.animateForces,
       // Keep booleans in sync with modes (legacy consumers / dashboard)
       dimHubs: hubMode === 'dim',
       hideOrphans: orphanMode === 'hide'
@@ -216,9 +276,13 @@ export function mergeGraphSettings(partial?: Partial<GraphSettings> | null): Gra
         2,
         200
       ),
-      localDepth: clamp(fil.localDepth ?? DEFAULT_GRAPH_SETTINGS.filters.localDepth, 1, 2),
+      localDepth: clamp(fil.localDepth ?? DEFAULT_GRAPH_SETTINGS.filters.localDepth, 1, 5),
       orphanMode,
-      hubMode
+      hubMode,
+      searchMode: normalizeSearchMode(
+        fil.searchMode,
+        DEFAULT_GRAPH_SETTINGS.filters.searchMode
+      )
     },
     groups: normalizeColorGroups(p.groups)
   }
@@ -232,7 +296,8 @@ export function loadGraphLayout(vaultRoot: string | null | undefined): GraphLayo
   const empty: GraphLayoutFile = {
     version: GRAPH_LAYOUT_VERSION,
     updatedAt: new Date().toISOString(),
-    nodes: {}
+    nodes: {},
+    camera: null
   }
   if (!vaultRoot) return empty
   const filePath = getLayoutFilePath(vaultRoot)
@@ -257,7 +322,8 @@ export function loadGraphLayout(vaultRoot: string | null | undefined): GraphLayo
       version: GRAPH_LAYOUT_VERSION,
       vaultPath: vaultRoot,
       updatedAt: typeof raw.updatedAt === 'string' ? raw.updatedAt : empty.updatedAt,
-      nodes
+      nodes,
+      camera: normalizeCamera(raw.camera)
     }
   } catch (err) {
     console.error('[GraphLayoutStore] load failed:', err)
@@ -271,8 +337,8 @@ export function loadGraphLayout(vaultRoot: string | null | undefined): GraphLayo
  */
 export function saveGraphLayout(
   vaultRoot: string | null | undefined,
-  patch: { nodes: Record<string, GraphLayoutNodePos> },
-  options?: { replaceAll?: boolean }
+  patch: { nodes?: Record<string, GraphLayoutNodePos>; camera?: GraphCamera | null },
+  options?: { replaceAll?: boolean; cameraOnly?: boolean }
 ): { ok: boolean; path?: string; count?: number; error?: string } {
   if (!vaultRoot) return { ok: false, error: 'No vault open' }
   try {
@@ -280,22 +346,32 @@ export function saveGraphLayout(
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
 
     const existing = options?.replaceAll
-      ? { nodes: {} as Record<string, GraphLayoutNodePos> }
+      ? { nodes: {} as Record<string, GraphLayoutNodePos>, camera: null as GraphCamera | null }
       : loadGraphLayout(vaultRoot)
-    const nextNodes = { ...existing.nodes }
-    for (const [id, pos] of Object.entries(patch.nodes || {})) {
-      if (!id || !pos) continue
-      const x = Number(pos.x)
-      const y = Number(pos.y)
-      if (!Number.isFinite(x) || !Number.isFinite(y)) continue
-      nextNodes[id] = { x, y, pinned: Boolean(pos.pinned) }
+    const nextNodes = options?.cameraOnly
+      ? { ...existing.nodes }
+      : { ...existing.nodes }
+    if (!options?.cameraOnly) {
+      for (const [id, pos] of Object.entries(patch.nodes || {})) {
+        if (!id || !pos) continue
+        const x = Number(pos.x)
+        const y = Number(pos.y)
+        if (!Number.isFinite(x) || !Number.isFinite(y)) continue
+        nextNodes[id] = { x, y, pinned: Boolean(pos.pinned) }
+      }
+    }
+
+    let camera = existing.camera ?? null
+    if (patch.camera !== undefined) {
+      camera = patch.camera === null ? null : normalizeCamera(patch.camera)
     }
 
     const payload: GraphLayoutFile = {
       version: GRAPH_LAYOUT_VERSION,
       vaultPath: vaultRoot,
       updatedAt: new Date().toISOString(),
-      nodes: nextNodes
+      nodes: nextNodes,
+      camera
     }
 
     const filePath = getLayoutFilePath(vaultRoot)
@@ -324,7 +400,7 @@ export function readGraphSettingsFromAppSettings(
 export const GRAPH_VIEWS_VERSION = 1 as const
 export const GRAPH_VIEWS_FILENAME = 'graph-views.json'
 
-/** Snapshot of filter/display/force chrome (not node positions — those are layout file). */
+/** Snapshot of filter/display/force chrome (+ optional camera). Node positions = layout file. */
 export interface GraphViewSnapshot {
   orphanMode: GraphOrphanMode
   hubMode: GraphHubMode
@@ -343,6 +419,13 @@ export interface GraphViewSnapshot {
   textFade: number
   nodeSize: number
   lineThickness: number
+  existingFilesOnly: boolean
+  searchMode: GraphSearchMode
+  showTags?: boolean
+  showAttachments?: boolean
+  animateForces?: boolean
+  /** Saved pan/zoom for this named view */
+  camera?: GraphCamera | null
   groups: GraphColorGroup[]
 }
 
@@ -376,6 +459,12 @@ export const DEFAULT_VIEW_SNAPSHOT: GraphViewSnapshot = {
   textFade: DEFAULT_GRAPH_SETTINGS.display.textFade,
   nodeSize: DEFAULT_GRAPH_SETTINGS.display.nodeSize,
   lineThickness: DEFAULT_GRAPH_SETTINGS.display.lineThickness,
+  existingFilesOnly: DEFAULT_GRAPH_SETTINGS.display.existingFilesOnly,
+  searchMode: DEFAULT_GRAPH_SETTINGS.filters.searchMode,
+  showTags: DEFAULT_GRAPH_SETTINGS.display.showTags,
+  showAttachments: DEFAULT_GRAPH_SETTINGS.display.showAttachments,
+  animateForces: DEFAULT_GRAPH_SETTINGS.display.animateForces,
+  camera: null,
   groups: []
 }
 
@@ -393,7 +482,11 @@ function sanitizeSnapshot(raw: Partial<GraphViewSnapshot> | null | undefined): G
       Number(s.lineThickness ?? DEFAULT_VIEW_SNAPSHOT.lineThickness),
       0.25,
       3
-    )
+    ),
+    existingFilesOnly: s.existingFilesOnly ?? DEFAULT_VIEW_SNAPSHOT.existingFilesOnly,
+    showTags: s.showTags ?? DEFAULT_VIEW_SNAPSHOT.showTags,
+    showAttachments: s.showAttachments ?? DEFAULT_VIEW_SNAPSHOT.showAttachments,
+    animateForces: s.animateForces ?? DEFAULT_VIEW_SNAPSHOT.animateForces
   }
   const forces = mergeGraphSettings({ forces: s.forces }).forces
   return {
@@ -416,6 +509,12 @@ function sanitizeSnapshot(raw: Partial<GraphViewSnapshot> | null | undefined): G
     textFade: disp.textFade,
     nodeSize: disp.nodeSize,
     lineThickness: disp.lineThickness,
+    existingFilesOnly: disp.existingFilesOnly,
+    searchMode: normalizeSearchMode(s.searchMode, DEFAULT_VIEW_SNAPSHOT.searchMode),
+    showTags: disp.showTags,
+    showAttachments: disp.showAttachments,
+    animateForces: disp.animateForces,
+    camera: normalizeCamera(s.camera),
     groups: normalizeColorGroups(s.groups)
   }
 }
@@ -553,8 +652,8 @@ export function resolveGraphLod(
     if (nodeCount > 15) return 'medium'
     return 'full'
   }
-  // auto
-  if (nodeCount > 200) return 'low'
-  if (nodeCount > 80) return 'medium'
+  // auto — aligned with renderer graphShared (canvas 2d + d3-force)
+  if (nodeCount > 400) return 'low'
+  if (nodeCount > 150) return 'medium'
   return 'full'
 }

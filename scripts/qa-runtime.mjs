@@ -166,6 +166,23 @@ Isolated note.
   assert(graph.getOutgoingLinks(g.id).nodes.some(n => n.id === o.id), 'updateNodeAndEdges adds Gamma→Lonely')
   assert(!graph.getOrphanNodeIds().includes(o.id), 'Lonely no longer orphan after link')
 
+  // Regression: saving Beta must NOT wipe Alpha→Beta backlink
+  const b2 = md.parseFile(betaPath, betaRaw + '\n\nEdited body.\n', root)
+  graph.updateNodeAndEdges(b2)
+  assert(
+    graph.getBacklinks(b.id).nodes.some(n => n.id === a.id),
+    'updateNodeAndEdges preserves incoming backlinks'
+  )
+  assert(
+    graph.getOutgoingLinks(b.id).nodes.some(n => n.id === a.id),
+    'updateNodeAndEdges keeps Beta→Alpha outgoing'
+  )
+
+  // ID stability: same path case/separators → same note id (Windows-safe)
+  const idLower = md.parseFile(alphaPath, alphaRaw, root).id
+  const idMixed = md.parseFile(alphaPath.replace(/\\/g, '/'), alphaRaw, root).id
+  assert(idLower === idMixed && idLower.length === 24, 'path id normalize stable')
+
   graph.removeNode(o.id)
   assert(!graph.getNodeById(o.id), 'removeNode deletes node')
   assert(!graph.getGraphData().edges.some(e => e.source === o.id || e.target === o.id), 'removeNode clears edges')
@@ -210,6 +227,10 @@ Isolated note.
   assert(ipc.includes('attachFileWatcher'), 'IPC shared watcher attach')
   assert(ipc.includes('loadSettingsIntoProviders'), 'AI keys load from settings on startup')
   assert(ipc.includes('workspaceEngine.saveSettings'), 'AI configure persists settings')
+  assert(
+    ipc.includes('graphEngine.clear') && ipc.includes('searchEngine.clear'),
+    'workspace lifecycle clears graph+search'
+  )
 
   const wel = fs.readFileSync(path.join(rootSrc, 'renderer/src/components/welcome/WelcomeScreen.tsx'), 'utf8')
   assert(!wel.includes('Proyek\\\\Workspacegraph') && !wel.includes('Proyek\\Workspacegraph'), 'no bad demo path')

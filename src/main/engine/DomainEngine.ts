@@ -103,6 +103,10 @@ export class DomainEngine {
     this.cache = files
   }
 
+  clear(): void {
+    this.cache = []
+  }
+
   getOverview(): DomainOverview {
     const projects: DomainItem[] = []
     const tasks: DomainItem[] = []

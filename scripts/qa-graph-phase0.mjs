@@ -55,7 +55,7 @@ ok('defaults-merge-charge', merged.forces.charge === -50)
 ok('defaults-merge-tag', merged.display.showTagEdges === true)
 ok('defaults-center-kept', merged.forces.center === layout.DEFAULT_GRAPH_SETTINGS.forces.center)
 ok('clamp-charge', layout.mergeGraphSettings({ forces: { charge: -999 } }).forces.charge === -400)
-ok('clamp-depth', layout.mergeGraphSettings({ filters: { localDepth: 9 } }).filters.localDepth === 2)
+ok('clamp-depth', layout.mergeGraphSettings({ filters: { localDepth: 9 } }).filters.localDepth === 5)
 
 const tmpVault = fs.mkdtempSync(path.join(os.tmpdir(), 'wg-graph-p0-'))
 fs.mkdirSync(path.join(tmpVault, '.workspacegraph'), { recursive: true })
@@ -227,16 +227,16 @@ const globals = fs.readFileSync(path.join(root, 'src/renderer/src/styles/globals
 
 ok('ui-canvas-getContext', localUi.includes('getContext') && localUi.includes('forceSimulation'))
 ok('ui-fetchLocalGraph', localUi.includes('fetchLocalGraph'))
-ok('ui-depth-toggle', localUi.includes('setDepth(1)') && localUi.includes('setDepth(2)'))
+ok('ui-depth-toggle', localUi.includes('setDepth') && (localUi.includes('1, 2, 3, 4, 5') || localUi.includes('setDepth(d)')))
 ok('ui-labels-toggle', localUi.includes('showLabels'))
 ok('ui-open-global', localUi.includes("setActiveView('graph')") && localUi.includes('setFocusedNode'))
 ok('ui-center-highlight', localUi.includes('isCenter') && localUi.includes('centerStroke'))
 ok('ui-collapse', localUi.includes('collapsed'))
 ok('export-local-view', localExport.includes('LocalGraphCanvas'))
-// Local graph panel removed from editor UI (backend/API may still exist)
-ok('editor-no-local-graph', !editor.includes('LocalGraphView'))
+// Local graph dock under editor (Obsidian-like)
+ok('editor-local-graph', editor.includes('LocalGraphView') || editor.includes('LocalGraphCanvas'))
 ok('css-local-graph', globals.includes('.local-graph') && globals.includes('.local-graph-canvas'))
-ok('css-local-height', globals.includes('height: 220px') || globals.includes('220px'))
+ok('css-local-height', globals.includes('height: 220px') || globals.includes('220px') || globals.includes('200px'))
 
 // ─── 5. Phase 2 Global filters (orphan / hub / spotlight) ───────────
 console.log('\n═══ 5. Phase 2 Global filters ═══')
@@ -422,8 +422,8 @@ console.log('\n═══ 8. Phase 5 Views / export / LOD ═══')
 
 ok('p5-resolveLod-fn', typeof layout.resolveGraphLod === 'function')
 ok('p5-lod-auto-small', layout.resolveGraphLod(10, 'auto') === 'full')
-ok('p5-lod-auto-mid', layout.resolveGraphLod(100, 'auto') === 'medium')
-ok('p5-lod-auto-big', layout.resolveGraphLod(250, 'auto') === 'low')
+ok('p5-lod-auto-mid', layout.resolveGraphLod(180, 'auto') === 'medium')
+ok('p5-lod-auto-big', layout.resolveGraphLod(450, 'auto') === 'low')
 ok('p5-lod-quality', layout.resolveGraphLod(500, 'quality') === 'full')
 ok('p5-lod-speed', layout.resolveGraphLod(50, 'speed') === 'low')
 
@@ -511,7 +511,7 @@ ok('p6-keys-hint-ui', globalUi.includes('graph-toolbar-hint') || filtersUi.inclu
 // Local graph force parity + depth persist
 ok('p6-local-forces', localUi.includes('forcesRef') || localUi.includes('DEFAULT_FORCE_SETTINGS'))
 ok('p6-local-scaled-charge', localUi.includes('charge') && localUi.includes('0.78'))
-ok('p6-local-depth-persist', localUi.includes('localDepth: 1') && localUi.includes('localDepth: 2'))
+ok('p6-local-depth-persist', localUi.includes('localDepth:') && localUi.includes('updateGraphSettings'))
 ok('p6-local-updateSettings', localUi.includes('updateGraphSettings'))
 
 // Light titlebar debt (cross-check tokens + main)

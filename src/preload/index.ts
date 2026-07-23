@@ -32,6 +32,8 @@ const api = {
   createFolder: (folderPath: string) => ipcRenderer.invoke('file:createFolder', folderPath),
   renameFile: (oldPath: string, newPath: string) =>
     ipcRenderer.invoke('file:rename', { oldPath, newPath }),
+  /** Open attachment / non-md with OS default app (vault-sandboxed) */
+  openFileExternal: (filePath: string) => ipcRenderer.invoke('file:openExternal', filePath),
 
   // Graph
   getGraphData: () => ipcRenderer.invoke('graph:getData'),
@@ -54,8 +56,10 @@ const api = {
   getGraphHubs: (minDegree?: number) => ipcRenderer.invoke('graph:getHubs', minDegree),
   getGraphLayout: () => ipcRenderer.invoke('graph:getLayout'),
   saveGraphLayout: (payload: {
-    nodes: Record<string, { x: number; y: number; pinned?: boolean }>
+    nodes?: Record<string, { x: number; y: number; pinned?: boolean }>
+    camera?: { x: number; y: number; k: number } | null
     replaceAll?: boolean
+    cameraOnly?: boolean
   }) => ipcRenderer.invoke('graph:saveLayout', payload),
   getGraphSettings: () => ipcRenderer.invoke('graph:getSettings'),
   saveGraphSettings: (partial: Record<string, unknown>) =>

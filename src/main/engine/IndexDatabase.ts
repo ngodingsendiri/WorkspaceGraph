@@ -254,13 +254,14 @@ export class IndexDatabase {
     const terms = query
       .trim()
       .split(/\s+/)
-      .map((t) => t.replace(/["']/g, ''))
+      // Strip FTS5 special chars that break MATCH (^ * ( ) " ' ~ { } [ ] \)
+      .map((t) => t.replace(/["'*()^~{}[\]\\]/g, '').trim())
       .filter((t) => t.length > 0 && !t.includes(':'))
       .slice(0, 12)
 
     if (terms.length === 0) return []
 
-    // Prefix match each term for partial words
+    // Prefix match each term for partial words (quoted → safe from operators)
     const ftsQuery = terms.map((t) => `"${t.replace(/"/g, '')}"*`).join(' ')
 
     try {

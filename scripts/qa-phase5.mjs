@@ -68,6 +68,13 @@ async function main() {
   assert(ipc.includes('security:status') && ipc.includes('api:health'), 'IPC security/health')
   assert(ipc.includes('assertPathInVault') || ipc.includes('isPathInVault'), 'IPC path sandbox')
   assert(ipc.includes('perms.aiAccess') || ipc.includes('aiAccess'), 'AI permission gate')
+  assert(
+    ipc.includes('graphEngine.clear') &&
+      ipc.includes('searchEngine.clear') &&
+      ipc.includes('domainEngine.clear'),
+    'workspace close clears graph/search/domain'
+  )
+  assert(ipc.includes("name === '.'") || ipc.includes('Invalid workspace name'), 'create vault name guard')
 
   const pre = fs.readFileSync(path.join(root, 'src/preload/index.ts'), 'utf8')
   assert(pre.includes('getAutomation') && pre.includes('listPlugins') && pre.includes('getSecurityStatus'), 'preload phase5')
