@@ -1,0 +1,22 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="UTF-8" />
+    <title>WorkspaceGraph</title>
+    <!--
+      Material Symbols font is bundled via material-symbols/outlined.css (main.tsx).
+      Optional online fallback kept for design-token Inter; main CSP allows Google Fonts.
+    -->
+    <!-- https://developer.mozilla.org/en-US/docs/Web/HTTP/CSP
+         Note: Electron main also sets CSP headers — keep in sync with src/main/index.ts -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self' 'unsafe-eval' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob:; connect-src 'self' https: http://localhost:* http://127.0.0.1:* ws://localhost:* ws://127.0.0.1:* wss://localhost:* wss://127.0.0.1:*; worker-src 'self' blob:"
+    />
+  </head>
+
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

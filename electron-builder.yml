@@ -1,0 +1,53 @@
+appId: com.workspacegraph.app
+productName: WorkspaceGraph
+copyright: Copyright © WorkspaceGraph
+directories:
+  buildResources: build
+  output: dist
+files:
+  - '!**/.vscode/*'
+  - '!src/*'
+  - '!scripts/*'
+  - '!docs/*'
+  - '![0-9][0-9]_*.md'
+  - '!electron.vite.config.{js,ts,mjs,cjs}'
+  - '!{.eslintcache,eslint.config.mjs,.prettierignore,.prettierrc.yaml,dev-app-update.yml,CHANGELOG.md}'
+  - '!{.env,.env.*,.npmrc,pnpm-lock.yaml}'
+  - '!{tsconfig.json,tsconfig.node.json,tsconfig.web.json}'
+  - '!scripts/.tmp-engines/**'
+asarUnpack:
+  - resources/**
+  - '**/*.node'
+  - node_modules/better-sqlite3/**
+win:
+  executableName: WorkspaceGraph
+  target:
+    - target: nsis
+      arch:
+        - x64
+nsis:
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  artifactName: WorkspaceGraph-${version}-setup.${ext}
+  shortcutName: WorkspaceGraph
+  uninstallDisplayName: WorkspaceGraph
+  createDesktopShortcut: always
+  createStartMenuShortcut: true
+  installerIcon: build/icon.ico
+  uninstallerIcon: build/icon.ico
+mac:
+  entitlementsInherit: build/entitlements.mac.plist
+  category: public.app-category.productivity
+  notarize: false
+dmg:
+  artifactName: WorkspaceGraph-${version}.${ext}
+linux:
+  target:
+    - AppImage
+  category: Office
+  maintainer: workspacegraph.local
+appImage:
+  artifactName: WorkspaceGraph-${version}.${ext}
+npmRebuild: true
+electronDownload:
+  mirror: null

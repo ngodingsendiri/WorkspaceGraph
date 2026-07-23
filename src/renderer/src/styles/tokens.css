@@ -1,0 +1,262 @@
+/* ================================================
+   WorkspaceGraph Design Tokens
+   Dark = default Obsidian-flat; Light = clean paper UI
+   ================================================ */
+
+:root {
+  /* ---- Colors: Dark Theme ---- */
+  --bg-app: hsl(240, 4%, 12%);
+  --bg-surface: hsl(240, 4%, 16%);
+  --bg-panel: hsl(240, 4%, 18%);
+  --bg-hover: hsla(240, 4%, 40%, 0.15);
+  --bg-active: hsla(240, 4%, 40%, 0.25);
+  --bg-input: hsl(240, 4%, 10%);
+
+  --border-subtle: hsl(240, 4%, 22%);
+  --border-default: hsl(240, 4%, 30%);
+  --border-strong: hsl(240, 4%, 45%);
+
+  --color-primary: hsl(252, 60%, 65%);
+  --color-primary-hover: hsl(252, 60%, 75%);
+  --color-primary-active: hsl(252, 60%, 55%);
+  --color-primary-subtle: hsla(252, 60%, 65%, 0.15);
+  --color-primary-glow: transparent;
+
+  --color-accent: hsl(195, 90%, 55%);
+  --color-accent-subtle: hsl(195, 70%, 15%);
+
+  --color-success: hsl(142, 70%, 50%);
+  --color-success-subtle: hsl(142, 60%, 12%);
+  --color-warning: hsl(40, 90%, 55%);
+  --color-warning-subtle: hsl(40, 70%, 12%);
+  --color-error: hsl(0, 80%, 60%);
+  --color-error-subtle: hsl(0, 60%, 12%);
+  --color-info: hsl(210, 80%, 60%);
+
+  --text-primary: hsl(240, 6%, 86%);
+  --text-secondary: hsl(240, 5%, 65%);
+  --text-muted: hsl(240, 4%, 45%);
+  --text-placeholder: hsl(240, 4%, 35%);
+  --text-disabled: hsl(240, 4%, 25%);
+  --text-inverse: hsl(240, 4%, 12%);
+
+  /*
+   * Note / editor typography — aligned with Obsidian default theme
+   * (Inter text, real monospace for code, purple accent links)
+   */
+  /* Penulisan catatan: selalu Inter (ikon tetap Material Symbols di Icons.tsx) */
+  --font-text: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI Variable', 'Segoe UI',
+    Roboto, Helvetica, Arial, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji';
+  --font-editor: var(--font-text);
+  /* Mono hanya fallback UI lain; body note tidak pakai mono */
+  --font-monospace: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  /* Satu level lebih kecil dari default Obsidian 16px — body + heading */
+  --note-font-size: 15px;
+  --note-line-height: 1.55;
+  --note-max-width: 700px;
+  --note-text: hsl(0, 0%, 87%); /* ~Obsidian --text-normal dark */
+  --note-text-muted: hsl(0, 0%, 58%);
+  --note-heading: var(--note-text);
+  --note-h1-size: 1.45em;
+  --note-h2-size: 1.28em;
+  --note-h3-size: 1.15em;
+  --note-h4-size: 1.08em;
+  --note-h5-size: 1.02em;
+  --note-h6-size: 0.95em;
+  /* Softer accent — Obsidian uses purple but not neon; no heavy underline in CSS */
+  --note-link: hsl(254, 45%, 72%);
+  --note-link-hover: hsl(254, 50%, 80%);
+  --note-code: hsl(0, 0%, 78%);
+  --note-code-bg: hsla(0, 0%, 100%, 0.06);
+  --note-code-border: hsla(0, 0%, 100%, 0.08);
+  --note-blockquote-border: hsl(254, 50%, 55%);
+  --note-blockquote-bg: hsla(254, 40%, 50%, 0.08);
+  --note-blockquote-color: hsl(0, 0%, 72%);
+  --note-selection: hsla(254, 70%, 60%, 0.28);
+  --note-active-line: hsla(0, 0%, 100%, 0.03);
+  --note-highlight: hsla(45, 90%, 50%, 0.28);
+  --note-tag-bg: hsla(254, 50%, 55%, 0.15);
+  --note-tag-color: var(--note-link);
+  --note-table-border: hsl(240, 4%, 28%);
+  --note-table-header-bg: hsl(240, 4%, 16%);
+  --note-caret: var(--note-link);
+
+  /* Graph tokens (consumed by GraphCanvas) */
+  --graph-bg-glow: hsla(240, 8%, 16%, 0.9);
+  --graph-edge-wiki: hsla(220, 12%, 70%, 0.38);
+  --graph-edge-tag: hsla(220, 10%, 55%, 0.22);
+  --graph-edge-hover: hsla(255, 45%, 70%, 0.8);
+  --graph-node-stroke: hsla(220, 15%, 8%, 0.55);
+  --graph-label-fill: hsla(220, 15%, 90%, 0.92);
+  --graph-label-stroke: hsla(220, 15%, 8%, 0.8);
+
+  --node-knowledge: hsl(258, 55%, 62%);
+  --node-project: hsl(195, 55%, 52%);
+  --node-task: hsl(38, 60%, 52%);
+  --node-daily: hsl(142, 45%, 48%);
+  --node-person: hsl(20, 55%, 55%);
+  --node-template: hsl(280, 40%, 58%);
+  --node-document: hsl(210, 45%, 55%);
+  --node-sop: hsl(345, 45%, 55%);
+  --node-default: hsl(220, 12%, 50%);
+
+  /* UI: Inter; code: real mono (was incorrectly falling back to Inter) */
+  --font-sans: var(--font-text);
+  --font-mono: var(--font-monospace);
+  --font-ui: var(--font-text);
+
+  --text-xs: 0.7rem;
+  --text-sm: 0.8125rem;
+  --text-base: 0.9rem;
+  --text-md: 1rem;
+  --text-lg: 1.125rem;
+  --text-xl: 1.25rem;
+  --text-2xl: 1.5rem;
+  --text-3xl: 1.875rem;
+
+  --leading-tight: 1.25;
+  --leading-normal: 1.5;
+  --leading-relaxed: 1.625;
+
+  --weight-normal: 400;
+  --weight-medium: 500;
+  --weight-semibold: 600;
+  --weight-bold: 700;
+
+  --space-1: 0.25rem;
+  --space-2: 0.5rem;
+  --space-3: 0.75rem;
+  --space-4: 1rem;
+  --space-5: 1.25rem;
+  --space-6: 1.5rem;
+  --space-8: 2rem;
+  --space-10: 2.5rem;
+  --space-12: 3rem;
+  --space-16: 4rem;
+
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 10px;
+  --radius-xl: 14px;
+  --radius-full: 9999px;
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.2);
+  --shadow-md: 0 4px 8px rgba(0, 0, 0, 0.3);
+  --shadow-lg: 0 8px 16px rgba(0, 0, 0, 0.4);
+  --shadow-xl: 0 12px 32px rgba(0, 0, 0, 0.5);
+  --shadow-glow: none;
+
+  --sidebar-width: 260px;
+  --sidebar-collapsed-width: 48px;
+  /* Chat dock — CSS clamp also used; this is a soft target */
+  --panel-right-width: clamp(300px, 30vw, 400px);
+  --statusbar-height: 28px;
+  /* Match Electron titleBarOverlay height (main/index.ts TITLEBAR.height) */
+  --titlebar-height: 40px;
+  --tab-height: 36px;
+  /* Win caption strip reserved via env(titlebar-area-*); fallback ~3×46px */
+  --titlebar-caption-fallback: 138px;
+
+  --duration-fast: 100ms;
+  --duration-normal: 200ms;
+  --duration-slow: 350ms;
+  --ease-default: cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-bounce: cubic-bezier(0.34, 1.56, 0.64, 1);
+
+  --z-base: 1;
+  --z-sidebar: 10;
+  --z-panel: 20;
+  --z-modal: 100;
+  --z-overlay: 90;
+  --z-tooltip: 200;
+  --z-toast: 300;
+
+  /* Titlebar window controls — same as --bg-surface for seamless OS buttons */
+  --titlebar-overlay-bg: #28282b;
+  --titlebar-overlay-symbol: #a1a1aa;
+}
+
+/* ---- Light Theme — clean paper / Obsidian-light ---- */
+[data-theme='light'] {
+  --bg-app: hsl(220, 18%, 96%);
+  --bg-surface: hsl(0, 0%, 100%);
+  --bg-panel: hsl(220, 16%, 93%);
+  --bg-hover: hsl(220, 16%, 91%);
+  --bg-active: hsl(252, 50%, 93%);
+  --bg-input: hsl(0, 0%, 100%);
+
+  --border-subtle: hsl(220, 14%, 88%);
+  --border-default: hsl(220, 12%, 78%);
+  --border-strong: hsl(220, 10%, 58%);
+
+  /* Darker primary for contrast on white */
+  --color-primary: hsl(252, 55%, 48%);
+  --color-primary-hover: hsl(252, 55%, 42%);
+  --color-primary-active: hsl(252, 55%, 38%);
+  --color-primary-subtle: hsla(252, 55%, 48%, 0.12);
+
+  --color-accent: hsl(195, 70%, 38%);
+  --color-accent-subtle: hsla(195, 70%, 38%, 0.12);
+
+  --color-success: hsl(142, 55%, 32%);
+  --color-success-subtle: hsla(142, 55%, 32%, 0.12);
+  --color-warning: hsl(32, 85%, 40%);
+  --color-warning-subtle: hsla(32, 85%, 40%, 0.12);
+  --color-error: hsl(0, 70%, 45%);
+  --color-error-subtle: hsla(0, 70%, 45%, 0.12);
+  --color-info: hsl(210, 70%, 42%);
+
+  --text-primary: hsl(220, 22%, 14%);
+  --text-secondary: hsl(220, 12%, 36%);
+  --text-muted: hsl(220, 10%, 48%);
+  --text-placeholder: hsl(220, 8%, 58%);
+  --text-disabled: hsl(220, 8%, 70%);
+  --text-inverse: hsl(0, 0%, 100%);
+
+  /* Note / editor — Obsidian light defaults */
+  --note-text: #2e3338;
+  --note-text-muted: hsl(220, 10%, 46%);
+  --note-heading: #2e3338;
+  --note-link: #7b6cbf;
+  --note-link-hover: #6a5aad;
+  --note-code: hsl(220, 15%, 28%);
+  --note-code-bg: hsla(220, 20%, 50%, 0.1);
+  --note-code-border: hsla(220, 15%, 50%, 0.15);
+  --note-blockquote-border: #705dcf;
+  --note-blockquote-bg: hsla(254, 55%, 48%, 0.08);
+  --note-blockquote-color: hsl(220, 12%, 32%);
+  --note-selection: hsla(254, 55%, 48%, 0.22);
+  --note-active-line: hsla(220, 20%, 50%, 0.06);
+  --note-highlight: hsla(48, 95%, 50%, 0.35);
+  --note-tag-bg: hsla(254, 55%, 48%, 0.12);
+  --note-tag-color: #705dcf;
+  --note-table-border: hsl(220, 14%, 86%);
+  --note-table-header-bg: hsl(220, 16%, 94%);
+  --note-caret: #705dcf;
+
+  --graph-bg-glow: hsla(220, 30%, 94%, 1);
+  --graph-edge-wiki: hsla(220, 20%, 45%, 0.5);
+  --graph-edge-tag: hsla(220, 14%, 55%, 0.32);
+  --graph-edge-hover: hsla(252, 55%, 48%, 0.9);
+  --graph-node-stroke: hsl(0, 0%, 100%);
+  --graph-label-fill: hsl(220, 22%, 16%);
+  --graph-label-stroke: hsla(0, 0%, 100%, 0.95);
+
+  --node-knowledge: hsl(252, 50%, 48%);
+  --node-project: hsl(200, 55%, 40%);
+  --node-task: hsl(32, 70%, 42%);
+  --node-daily: hsl(150, 45%, 34%);
+  --node-person: hsl(16, 60%, 44%);
+  --node-template: hsl(280, 40%, 46%);
+  --node-document: hsl(215, 50%, 42%);
+  --node-sop: hsl(345, 50%, 44%);
+  --node-default: hsl(220, 12%, 42%);
+
+  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.06);
+  --shadow-md: 0 4px 12px rgba(15, 23, 42, 0.08);
+  --shadow-lg: 0 10px 28px rgba(15, 23, 42, 0.1);
+  --shadow-xl: 0 16px 40px rgba(15, 23, 42, 0.12);
+
+  --titlebar-overlay-bg: #ffffff;
+  --titlebar-overlay-symbol: #64748b;
+}
