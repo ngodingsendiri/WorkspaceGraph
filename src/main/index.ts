@@ -5,6 +5,8 @@ import icon from '../../resources/icon.png?asset'
 import { registerIPCHandlers } from './ipc'
 import { workspaceEngine } from './engine/WorkspaceEngine'
 
+/* Global graph now uses SVG for display; GPU flag left optional only. */
+
 /**
  * Must match --bg-surface in tokens.css so Windows caption buttons
  * (min/max/close) sit on the same strip as the app titlebar — not a floating island.

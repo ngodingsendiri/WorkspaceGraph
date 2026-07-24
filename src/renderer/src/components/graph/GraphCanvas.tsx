@@ -147,36 +147,78 @@ function css(name: string, fb: string): string {
   return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fb
 }
 
+/**
+ * Canvas 2D is picky: some CSS color functions / unresolved vars silently fail
+ * → fillStyle stays previous (often = bg) → "kamar gelap" (hit works, nodes invisible).
+ * Always prefer plain hex / rgba for stroke & fill.
+ */
+function canvasSafeColor(raw: string, fallback: string): string {
+  const s = (raw || '').trim()
+  if (!s) return fallback
+  // Accept hex, rgb(a), hsl(a) — reject empty/var()/color-mix leftovers
+  if (s.startsWith('var(') || s.startsWith('color-mix') || s.startsWith('oklch') || s.startsWith('oklab')) {
+    return fallback
+  }
+  return s
+}
+
+/** Hardcoded high-contrast palette for graph canvas (never depends on broken CSS). */
 function readPalette(): Palette {
   const isLight = document.documentElement.getAttribute('data-theme') === 'light'
+  if (isLight) {
+    return {
+      isLight: true,
+      bg: canvasSafeColor(css('--bg-app', '#f2f4f7'), '#f2f4f7'),
+      edge: 'rgba(50, 60, 80, 0.55)',
+      edgeTag: 'rgba(50, 60, 80, 0.28)',
+      edgeHot: 'rgba(90, 70, 200, 0.95)',
+      label: '#1a1f2a',
+      labelBg: 'rgba(255,255,255,0.88)',
+      nodeStroke: '#ffffff',
+      colors: {
+        knowledge: '#6b5bb5',
+        project: '#2a8aab',
+        task: '#c48420',
+        daily: '#2f8f58',
+        people: '#c45a35',
+        template: '#8a5aa8',
+        document: '#3a7aa8',
+        sop: '#c0456a',
+        other: '#5a6575',
+        ghost: 'rgba(90,100,120,0.65)',
+        tag: '#b8860b',
+        attachment: '#3a8a5a'
+      }
+    }
+  }
+  // Dark — brighter nodes so they pop on near-black bg
   return {
-    isLight,
-    bg: css('--bg-app', isLight ? '#f4f6f9' : '#1e1e22'),
-    edge: css('--graph-edge-wiki', isLight ? 'rgba(60,70,90,0.35)' : 'rgba(180,190,210,0.28)'),
-    edgeTag: css('--graph-edge-tag', isLight ? 'rgba(60,70,90,0.18)' : 'rgba(140,150,170,0.16)'),
-    edgeHot: css(
-      '--graph-edge-hover',
-      isLight ? 'rgba(100,80,200,0.85)' : 'rgba(170,150,255,0.75)'
-    ),
-    label: css('--graph-label-fill', isLight ? '#1a1f2a' : 'rgba(230,235,245,0.9)'),
-    labelBg: isLight ? 'rgba(255,255,255,0.75)' : 'rgba(20,22,28,0.55)',
-    nodeStroke: css('--graph-node-stroke', isLight ? '#fff' : 'rgba(0,0,0,0.45)'),
+    isLight: false,
+    bg: canvasSafeColor(css('--bg-app', '#1e1e22'), '#1e1e22'),
+    edge: 'rgba(200, 210, 230, 0.55)',
+    edgeTag: 'rgba(160, 170, 190, 0.32)',
+    edgeHot: 'rgba(190, 170, 255, 0.95)',
+    label: 'rgba(240, 244, 255, 0.95)',
+    labelBg: 'rgba(12, 14, 20, 0.72)',
+    nodeStroke: 'rgba(255, 255, 255, 0.55)',
     colors: {
-      knowledge: css('--node-knowledge', '#7c6bc4'),
-      project: css('--node-project', '#3d9bb8'),
-      task: css('--node-task', '#c4923a'),
-      daily: css('--node-daily', '#4a9e6e'),
-      people: css('--node-person', '#c46a4a'),
-      template: css('--node-template', '#9a6bb8'),
-      document: css('--node-document', '#5a8ab8'),
-      sop: css('--node-sop', '#c45a7a'),
-      other: css('--node-default', '#7a8494'),
-      ghost: css('--node-ghost', isLight ? 'rgba(90,100,120,0.55)' : 'rgba(160,170,190,0.45)'),
-      tag: css('--node-tag', isLight ? '#b8860b' : '#e0b84a'),
-      attachment: css('--node-attachment', isLight ? '#5a8a6a' : '#6ab88a')
+      knowledge: '#a694f0',
+      project: '#5ec8e8',
+      task: '#e8b04a',
+      daily: '#5ed090',
+      people: '#f09070',
+      template: '#c090e0',
+      document: '#7ab0e0',
+      sop: '#e878a0',
+      other: '#a0aab8',
+      ghost: 'rgba(180,190,210,0.55)',
+      tag: '#f0c85a',
+      attachment: '#7ad0a0'
     }
   }
 }
+
+
 
 function radius(d: SimNode, scale = 1): number {
   return nodeRadius(d.degree, scale, false)
@@ -268,6 +310,38 @@ export const GraphCanvas: React.FC = () => {
 
   const wrapRef = useRef<HTMLDivElement | null>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
+  /**
+   * Primary display = React-owned SVG frame (state).
+   * Imperative innerHTML was wiped by React re-renders AND failed for some user boot paths.
+   * Throttled setState keeps ~20fps during sim; fine for ~100 nodes.
+   */
+  type SvgEdge = { key: string; x1: number; y1: number; x2: number; y2: number; stroke: string; sw: number; op: number }
+  type SvgNode =
+    | { key: string; kind: 'circle'; cx: number; cy: number; r: number; fill: string; stroke: string; sw: number; fillOp: number }
+    | { key: string; kind: 'poly'; points: string; fill: string; stroke: string; sw: number; fillOp: number }
+  type SvgLabel = { key: string; x: number; y: number; text: string; fill: string; bold: boolean }
+  type SvgFrame = {
+    w: number
+    h: number
+    edges: SvgEdge[]
+    nodes: SvgNode[]
+    labels: SvgLabel[]
+    hud: string
+  }
+  const [svgFrame, setSvgFrame] = useState<SvgFrame | null>(null)
+  const lastSvgPushRef = useRef(0)
+  const svgRef = useRef<SVGSVGElement | null>(null) // for PNG export clone
+  const emptySvgFramesRef = useRef(0)
+  const lastAutoFitOffscreenAtRef = useRef(0)
+  /** Only paint hidden canvas when exporting PNG */
+  const exportCanvasPaintRef = useRef(false)
+  const pathPulseFrameRef = useRef(0)
+  const pushSvgFrame = useCallback((frame: SvgFrame, _force = false) => {
+    // Always apply — throttling caused "Memuat graph…" forever when paint
+    // coalesced and the only successful frame was dropped. 94 nodes is cheap.
+    lastSvgPushRef.current = performance.now()
+    setSvgFrame(frame)
+  }, [])
   const simRef = useRef<d3.Simulation<SimNode, SimLink> | null>(null)
   const nodesRef = useRef<SimNode[]>([])
   const linksRef = useRef<SimLink[]>([])
@@ -398,40 +472,43 @@ export const GraphCanvas: React.FC = () => {
   const ensureGraphVisibleRef = useRef<(reason?: string) => boolean>(() => false)
 
   /**
-   * ALWAYS produce a drawable size. Blank graph was caused by refusing to paint
-   * when wrap.clientWidth/Height were 0 during flex layout settle (Windows Electron).
-   * Fallback chain: wrap → main-content → window interior.
+   * Size canvas like LocalGraphCanvas (proven visible on same machine).
+   * Prefer wrap client box; fallback main-content / window. Never paint 0×0.
    */
   const syncCanvasSize = useCallback((): { w: number; h: number; ready: boolean } => {
     const canvas = canvasRef.current
     const wrap = wrapRef.current
     if (!canvas || !wrap) return { w: 0, h: 0, ready: false }
 
-    const rect = wrap.getBoundingClientRect()
-    let w = Math.floor(Math.max(wrap.clientWidth, rect.width, 0))
-    let h = Math.floor(Math.max(wrap.clientHeight, rect.height, 0))
-
+    // Same formula as LocalGraphCanvas — clientWidth first (not only getBoundingClientRect)
+    let w = Math.floor(Math.max(wrap.clientWidth, canvas.clientWidth, 0))
+    let h = Math.floor(Math.max(wrap.clientHeight, canvas.clientHeight, 0))
+    if (w < 32 || h < 32) {
+      const rect = wrap.getBoundingClientRect()
+      w = Math.floor(Math.max(w, rect.width, 0))
+      h = Math.floor(Math.max(h, rect.height, 0))
+    }
     if (w < 32 || h < 32) {
       const main = wrap.closest('.main-content') as HTMLElement | null
       if (main) {
-        const mr = main.getBoundingClientRect()
-        w = Math.floor(Math.max(main.clientWidth, mr.width, w))
-        h = Math.floor(Math.max(main.clientHeight, mr.height, h))
+        w = Math.floor(Math.max(main.clientWidth, w))
+        h = Math.floor(Math.max(main.clientHeight - 48, h)) // leave toolbar room
       }
     }
     if (w < 32 || h < 32) {
-      // Last resort — never leave a 0×0 buffer (that made PNG "magically" reveal the graph)
       w = Math.max(320, Math.floor(window.innerWidth * 0.55))
-      h = Math.max(240, Math.floor(window.innerHeight * 0.7))
+      h = Math.max(240, Math.floor(window.innerHeight * 0.65))
     }
 
     const dpr = Math.min(window.devicePixelRatio || 1, 2)
     const bw = Math.max(1, Math.floor(w * dpr))
     const bh = Math.max(1, Math.floor(h * dpr))
+    // Match LocalGraph: only resize buffer when needed (resize clears pixels)
     if (canvas.width !== bw || canvas.height !== bh) {
       canvas.width = bw
       canvas.height = bh
     }
+    // CSS size via stylesheet (100%) — still set inline as LocalGraph does for reliability
     canvas.style.width = `${w}px`
     canvas.style.height = `${h}px`
     return { w, h, ready: true }
@@ -996,13 +1073,15 @@ export const GraphCanvas: React.FC = () => {
 
   const paint = useCallback(() => {
     try {
+    // ── Size from STAGE (wrap) first — display must not depend on hidden canvas ──
+    const wrap = wrapRef.current
     const canvas = canvasRef.current
-    if (!canvas) return
-    const ctx = canvas.getContext('2d')
-    if (!ctx) return
-
     const sized = syncCanvasSize()
-    if (!sized.ready || sized.w < 8 || sized.h < 8) {
+    let w = sized.ready ? sized.w : Math.floor(wrap?.clientWidth || 0)
+    let h = sized.ready ? sized.h : Math.floor(wrap?.clientHeight || 0)
+    if (w < 8 || h < 8) {
+      w = Math.max(320, Math.floor(window.innerWidth * 0.55))
+      h = Math.max(240, Math.floor(window.innerHeight * 0.65))
       dirtyRef.current = true
       if (!rafRef.current) {
         rafRef.current = requestAnimationFrame(() => {
@@ -1010,11 +1089,8 @@ export const GraphCanvas: React.FC = () => {
           paintFnRef.current()
         })
       }
-      return
+      // Still try to draw with fallback size — don't leave SVG blank forever
     }
-    const { w, h } = sized
-    const dpr = Math.min(window.devicePixelRatio || 1, 2)
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
 
     const pal = paletteRef.current
     const t = transformRef.current
@@ -1032,9 +1108,305 @@ export const GraphCanvas: React.FC = () => {
       const sy = y * t.k + t.y
       return sx >= -margin && sx <= w + margin && sy >= -margin && sy <= h + margin
     }
+    // Min node radius on screen (px) so zoom-out never makes graph "invisible furniture"
+    const minScreenR = 5.5
+    const kSafe = Math.max(t.k, 0.05)
+    const minWorldR = minScreenR / kSafe
 
-    // Clear
-    ctx.fillStyle = pal.bg
+    const pathN = flags.pathNodeIds
+    const pathE = flags.pathEdgeKeys
+    const focN = flags.focusNodeIds
+    const focE = flags.focusEdgeKeys
+    const focusId = flags.focusedId
+    const colorMode = flags.colorBy
+    const matchIds = flags.searchMatchIds
+    const thr = flags.hubThreshold
+    const dimHubsOn = flags.dimHubs
+
+    // ── 1) React SVG frame (what user sees) ──
+    let drawn = 0
+    try {
+      if (simNodes.length === 0) {
+        emptySvgFramesRef.current++
+        // Keep last React frame during short rebuilds; only clear after many empty frames
+        if (emptySvgFramesRef.current >= 12) {
+          pushSvgFrame(
+            {
+              w: Math.max(1, w),
+              h: Math.max(1, h),
+              edges: [],
+              nodes: [],
+              labels: [],
+              hud: 'sim:0 · kosong — cek filter / data vault'
+            },
+            true
+          )
+        }
+      } else {
+        emptySvgFramesRef.current = 0
+        for (const n of simNodes) {
+          if (n.x == null || n.y == null || !Number.isFinite(n.x) || !Number.isFinite(n.y)) continue
+          const sx = n.x * t.k + t.x
+          const sy = n.y * t.k + t.y
+          if (sx >= -40 && sx <= w + 40 && sy >= -40 && sy <= h + 40) drawn++
+        }
+
+        const byId = new Map(simNodes.map((n) => [n.id, n]))
+        const end = (x: string | SimNode): SimNode | null => {
+          if (x && typeof x === 'object' && 'id' in x) return x as SimNode
+          if (typeof x === 'string') return byId.get(x) || null
+          return null
+        }
+
+        const maxE = Math.min(simLinks.length, lod === 'low' ? 400 : lod === 'medium' ? 1200 : 4000)
+        const edgesOut: SvgEdge[] = []
+        let edgeList = simLinks
+        if (simLinks.length > maxE) {
+          edgeList = [...simLinks]
+            .sort((a, b) => {
+              const score = (e: SimLink) => {
+                const s = end(e.source as string | SimNode)
+                const tg = end(e.target as string | SimNode)
+                if (!s?.id || !tg?.id) return 0
+                const ek = edgeKey(s.id, tg.id)
+                if (pathE != null && pathE.has(ek)) return 3
+                if (focE != null && focE.has(ek)) return 2
+                return 0
+              }
+              return score(b) - score(a)
+            })
+            .slice(0, maxE)
+        }
+        for (const e of edgeList) {
+          const s = end(e.source as string | SimNode)
+          const tg = end(e.target as string | SimNode)
+          if (!s?.id || !tg?.id || s.x == null || s.y == null || tg.x == null || tg.y == null) continue
+          if (!Number.isFinite(s.x) || !Number.isFinite(s.y) || !Number.isFinite(tg.x) || !Number.isFinite(tg.y))
+            continue
+          const ek = edgeKey(s.id, tg.id)
+          const onPath = pathE != null && pathE.has(ek)
+          const onFoc = focE != null && focE.has(ek)
+          edgesOut.push({
+            key: ek,
+            x1: s.x * t.k + t.x,
+            y1: s.y * t.k + t.y,
+            x2: tg.x * t.k + t.x,
+            y2: tg.y * t.k + t.y,
+            stroke: onPath ? pal.edgeHot : e.type === 'tag' ? pal.edgeTag : pal.edge,
+            sw: onPath ? 2.6 : onFoc ? 2 : e.type === 'tag' ? 1.1 : 1.5,
+            op: onPath ? 0.95 : onFoc ? 0.85 : 0.72
+          })
+        }
+
+        const nodesOut: SvgNode[] = []
+        const labelsOut: SvgLabel[] = []
+        const labelsOn = showLabelsRef.current
+        const maxLabels = labelsOn ? (lod === 'low' ? 40 : lod === 'medium' ? 90 : 180) : 0
+        let labCount = 0
+        const sel = flags.selectedIds
+        for (const n of simNodes) {
+          if (n.x == null || n.y == null || !Number.isFinite(n.x) || !Number.isFinite(n.y)) continue
+          const sx = n.x * t.k + t.x
+          const sy = n.y * t.k + t.y
+          if (sx < -30 || sy < -30 || sx > w + 30 || sy > h + 30) continue
+          const isTag = Boolean(n.isTag || n.type === 'tag')
+          const isGhost = Boolean(n.isGhost || n.type === 'ghost')
+          const isAtt = Boolean(n.isAttachment || n.type === 'attachment')
+          const col = canvasSafeColor(
+            isGhost
+              ? pal.colors.ghost
+              : isTag
+                ? pal.colors.tag
+                : isAtt
+                  ? pal.colors.attachment
+                  : flags.groupColors?.get(n.id) ||
+                    (colorMode === 'folder'
+                      ? folderColor(n.relativePath, pal.isLight)
+                      : pal.colors[n.type] || pal.colors.other),
+            '#a0aab8'
+          )
+          const deg = typeof n.degree === 'number' ? n.degree : 0
+          const rPx =
+            Math.max(6, Math.min(14, 5 + Math.sqrt(Math.max(0, deg)) * 1.35)) *
+            (flags.nodeSize || 1)
+          const isHover = n.id === hover
+          const isSel = sel != null && sel.has(n.id)
+          const onPath = pathN != null && pathN.has(n.id)
+          const onFoc = focN != null && focN.has(n.id)
+          let fillOp = isGhost ? 0.45 : 1
+          if (pathN != null && !onPath && !isSel && !isHover) fillOp *= 0.28
+          else if (pathN == null && focN != null && !onFoc && !isSel && !isHover) fillOp *= 0.32
+          else if (
+            pathN == null &&
+            focN == null &&
+            matchIds != null &&
+            !matchIds.has(n.id) &&
+            !isSel &&
+            !isHover
+          ) {
+            fillOp *= 0.38
+          }
+          const isMatch = matchIds != null && matchIds.has(n.id)
+          const stroke = isHover || isSel || onPath || isMatch ? pal.edgeHot : pal.nodeStroke
+          const sw = isSel || onPath ? 2.8 : isHover ? 2.5 : 1.4
+          if (isTag) {
+            const d = rPx * 1.1
+            nodesOut.push({
+              key: n.id,
+              kind: 'poly',
+              points: `${sx},${sy - d} ${sx + d},${sy} ${sx},${sy + d} ${sx - d},${sy}`,
+              fill: col,
+              stroke,
+              sw,
+              fillOp
+            })
+          } else {
+            nodesOut.push({
+              key: n.id,
+              kind: 'circle',
+              cx: sx,
+              cy: sy,
+              r: rPx,
+              fill: col,
+              stroke,
+              sw,
+              fillOp
+            })
+          }
+          if (isSel) {
+            nodesOut.push({
+              key: n.id + ':sel',
+              kind: 'circle',
+              cx: sx,
+              cy: sy,
+              r: rPx + 4,
+              fill: 'none',
+              stroke: pal.edgeHot,
+              sw: 1.6,
+              fillOp: 0.85
+            })
+          }
+          const forceLab = isHover || isSel || onPath || onFoc || n.id === focusId
+          if (labelsOn && labCount < maxLabels && (forceLab || deg >= 1 || simNodes.length <= 80)) {
+            const titleStr = String(n.title || n.relativePath || n.id || '')
+            const text = titleStr.length > 26 ? titleStr.slice(0, 25) + '…' : titleStr
+            labelsOut.push({
+              key: n.id,
+              x: sx + rPx + 5,
+              y: sy + 4,
+              text,
+              fill: forceLab ? pal.edgeHot : pal.label,
+              bold: Boolean(forceLab)
+            })
+            labCount++
+          }
+        }
+
+        if (nodesOut.length === 0 && simNodes.length > 0) {
+          nodesOut.push({
+            key: '__offscreen',
+            kind: 'circle',
+            cx: w / 2,
+            cy: h / 2,
+            r: 10,
+            fill: '#a694f0',
+            stroke: '#fff',
+            sw: 2,
+            fillOp: 1
+          })
+          labelsOut.push({
+            key: '__offscreen-lab',
+            x: w / 2 + 14,
+            y: h / 2 + 4,
+            text: `${simNodes.length} node di luar layar — tekan F`,
+            fill: '#f0c060',
+            bold: true
+          })
+        }
+
+        const hud = `sim:${simNodes.length} · layar:${drawn} · ${w}×${h} · k:${t.k.toFixed(2)} · SVG`
+        pushSvgFrame(
+          {
+            w: Math.max(1, w),
+            h: Math.max(1, h),
+            edges: edgesOut,
+            nodes: nodesOut,
+            labels: labelsOut,
+            hud
+          },
+          drawn === 0 || nodesOut.length > 0
+        )
+      }
+    } catch (svgErr) {
+      console.error('[GraphCanvas] SVG frame failed:', svgErr)
+      pushSvgFrame(
+        {
+          w: Math.max(1, w),
+          h: Math.max(1, h),
+          edges: [],
+          nodes: [],
+          labels: [],
+          hud: `SVG error · sim:${simNodes.length}`
+        },
+        true
+      )
+    }
+
+    // Off-screen auto-fit (throttled — was thrashing and blanking the view)
+    if (simNodes.length > 0 && drawn === 0) {
+      const now = Date.now()
+      if (now - lastAutoFitOffscreenAtRef.current > 600) {
+        lastAutoFitOffscreenAtRef.current = now
+        requestAnimationFrame(() => {
+          try {
+            transformRef.current = d3.zoomIdentity
+            fitViewRef.current?.(false)
+            hasAutoFitRef.current = true
+            ensureGraphVisibleRef.current('paint-offscreen')
+          } catch {
+            /* ignore */
+          }
+        })
+      }
+    }
+
+    // First-fit once nodes exist (does not depend on canvas buffer)
+    if (
+      simNodes.length > 0 &&
+      !hasAutoFitRef.current &&
+      !cameraHydratedRef.current &&
+      simNodes.some((n) => n.x != null && n.y != null)
+    ) {
+      requestAnimationFrame(() => {
+        try {
+          if (hasAutoFitRef.current || cameraHydratedRef.current) return
+          fitViewRef.current?.(false)
+          hasAutoFitRef.current = true
+        } catch {
+          /* ignore */
+        }
+      })
+    }
+
+    // ── 2) Hidden canvas = PNG fallback only — skip every frame (display is SVG)
+    if (!exportCanvasPaintRef.current) {
+      dirtyRef.current = false
+      return
+    }
+    exportCanvasPaintRef.current = false
+
+    const ctx = canvas?.getContext('2d') || null
+    if (!ctx || !canvas || simNodes.length === 0) {
+      dirtyRef.current = false
+      return
+    }
+    let dpr = Math.min(window.devicePixelRatio || 1, 2)
+    try {
+    ctx.setTransform(1, 0, 0, 1, 0, 0)
+    ctx.globalAlpha = 1
+    ctx.globalCompositeOperation = 'source-over'
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+    ctx.fillStyle = pal.bg || '#1e1e22'
     ctx.fillRect(0, 0, w, h)
 
     ctx.save()
@@ -1053,15 +1425,6 @@ export const GraphCanvas: React.FC = () => {
       }
     }
 
-    const matchIds = flags.searchMatchIds
-    const thr = flags.hubThreshold
-    const dimHubsOn = flags.dimHubs
-    const focusId = flags.focusedId
-    const pathN = flags.pathNodeIds
-    const pathE = flags.pathEdgeKeys
-    const focN = flags.focusNodeIds
-    const focE = flags.focusEdgeKeys
-    const colorMode = flags.colorBy
     const sel = flags.selectedIds
     const pulse = pathPulseRef.current
 
@@ -1122,20 +1485,21 @@ export const GraphCanvas: React.FC = () => {
       // Hot edges: slight thickness only (color stays mostly neutral to avoid flash)
       const edgeW =
         (onPath
-          ? 1.85 + pulse * 0.3
+          ? 2.2 + pulse * 0.3
           : isHot
-            ? lerp(1.1, 1.45, hs)
+            ? lerp(1.4, 1.85, hs)
             : e.type === 'wiki_link'
-              ? 1.1
-              : 0.8) * lineMul
+              ? 1.55
+              : 1.1) * lineMul
       const baseEdge = e.type === 'tag' ? pal.edgeTag : pal.edge
       const edgeColor = onPath ? pal.edgeHot : isHot && hs > 0.4 ? pal.edgeHot : baseEdge
       ctx.beginPath()
       ctx.moveTo(s.x, s.y)
       ctx.lineTo(tg.x, tg.y)
-      ctx.strokeStyle = edgeColor
-      ctx.globalAlpha = edgeAlpha
-      ctx.lineWidth = edgeW / t.k
+      ctx.strokeStyle = canvasSafeColor(edgeColor, 'rgba(200,210,230,0.55)')
+      // Keep edges more visible on dark bg (was too faint → only "felt" via hit-test)
+      ctx.globalAlpha = Math.max(0.35, edgeAlpha)
+      ctx.lineWidth = Math.max(edgeW / t.k, 1.1 / t.k)
       if (e.type === 'tag' && !onPath) ctx.setLineDash([3 / t.k, 4 / t.k])
       else ctx.setLineDash([])
       ctx.stroke()
@@ -1190,7 +1554,7 @@ export const GraphCanvas: React.FC = () => {
       const isAttachment = Boolean(n.isAttachment || n.type === 'attachment')
       const isHub = !isGhost && !isTag && n.degree >= thr
       const hubScale = dimHubsOn && isHub ? 0.62 : 1
-      const r =
+      const rBase =
         (isGhost
           ? Math.max(3, radius(n, 0.85))
           : isTag
@@ -1198,7 +1562,9 @@ export const GraphCanvas: React.FC = () => {
             : isAttachment
               ? Math.max(3.5, radius(n, 0.88))
               : radius(n, hubScale)) * sizeMul
-      const col = isGhost
+      // Never smaller than ~5.5px on screen — fixes "nabrak di gelap" when zoomed out
+      const r = Math.max(rBase, minWorldR)
+      const colRaw = isGhost
         ? pal.colors.ghost
         : isTag
           ? pal.colors.tag
@@ -1208,6 +1574,7 @@ export const GraphCanvas: React.FC = () => {
               (colorMode === 'folder'
                 ? folderColor(n.relativePath, pal.isLight)
                 : pal.colors[n.type] || pal.colors.other)
+      const col = canvasSafeColor(colRaw, pal.colors.other)
       const dimHover =
         Boolean(hot && !hot.has(n.id) && pathN == null && focN == null && !isSelected)
       const dimPath = pathN != null && !onPath && !isSelected
@@ -1220,13 +1587,14 @@ export const GraphCanvas: React.FC = () => {
         onPath && (n.id === flags.pathFromId || n.id === flags.pathToId || n.id === flags.focusedId)
       const isHoverNode = n.id === hover && hs > 0.05
 
-      let alpha = isGhost ? 0.85 : 1
-      if (dimHover) alpha = lerp(1, pal.isLight ? 0.42 : 0.36, hs)
-      else if (dimPath) alpha = pal.isLight ? 0.3 : 0.26
-      else if (dimFocus) alpha = pal.isLight ? 0.34 : 0.28
-      else if (dimSearch) alpha = pal.isLight ? 0.38 : 0.32
+      // Dim less aggressively — dark theme made dimmed nodes vanish into bg
+      let alpha = isGhost ? 0.9 : 1
+      if (dimHover) alpha = lerp(1, pal.isLight ? 0.5 : 0.55, hs)
+      else if (dimPath) alpha = pal.isLight ? 0.4 : 0.42
+      else if (dimFocus) alpha = pal.isLight ? 0.42 : 0.45
+      else if (dimSearch) alpha = pal.isLight ? 0.45 : 0.48
       else if (dimHubsOn && isHub && !isMatch && !isFocus && !onPath && !onFoc && !isSelected)
-        alpha = 0.55
+        alpha = 0.72
       if (onPath) alpha = Math.min(1, alpha + pulse * 0.05)
       ctx.globalAlpha = alpha
 
@@ -1417,80 +1785,9 @@ export const GraphCanvas: React.FC = () => {
       ctx.globalAlpha = 1
       ctx.restore()
     }
-
-    // Live HUD always painted on canvas (never silent blank — user sees numbers)
-    let drawn = 0
-    for (const n of simNodes) {
-      if (n.x == null || n.y == null || !Number.isFinite(n.x) || !Number.isFinite(n.y)) continue
-      const sx = n.x * t.k + t.x
-      const sy = n.y * t.k + t.y
-      if (sx >= -40 && sx <= w + 40 && sy >= -40 && sy <= h + 40) drawn++
-    }
-    ctx.save()
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
-    ctx.font = '11px ui-monospace, Consolas, monospace'
-    ctx.textAlign = 'left'
-    ctx.textBaseline = 'top'
-    const hud = `sim:${simNodes.length} · layar:${drawn} · canvas:${w}×${h} · k:${t.k.toFixed(2)} · cam:(${t.x.toFixed(0)},${t.y.toFixed(0)})`
-    ctx.fillStyle = pal.isLight ? 'rgba(255,255,255,0.82)' : 'rgba(12,14,18,0.78)'
-    const hudW = Math.min(w - 16, Math.ceil(ctx.measureText(hud).width) + 16)
-    ctx.fillRect(8, h - 28, hudW, 20)
-    ctx.fillStyle = pal.isLight ? '#334' : '#c8cdd8'
-    ctx.fillText(hud, 14, h - 24)
-
-    // Big center message if we have nodes but none on screen
-    if (simNodes.length > 0 && drawn === 0) {
-      const msg1 = `${simNodes.length} node di luar layar`
-      const msg2 = 'Tekan F (Fit) atau R (Layout) — auto-fit dijalankan'
-      ctx.font = '600 15px system-ui, sans-serif'
-      ctx.textAlign = 'center'
-      ctx.textBaseline = 'middle'
-      const tw = Math.max(ctx.measureText(msg1).width, ctx.measureText(msg2).width) + 40
-      const bx = w / 2
-      const by = h / 2
-      ctx.fillStyle = pal.isLight ? 'rgba(255,255,255,0.92)' : 'rgba(18,20,28,0.9)'
-      ctx.strokeStyle = pal.isLight ? 'rgba(180,120,40,0.7)' : 'rgba(220,170,80,0.55)'
-      ctx.lineWidth = 1.5
-      canvasRoundRect(ctx, bx - tw / 2, by - 36, tw, 72, 10)
-      ctx.fill()
-      ctx.stroke()
-      ctx.fillStyle = pal.isLight ? '#8a5a10' : '#f0c060'
-      ctx.fillText(msg1, bx, by - 10)
-      ctx.font = '12px system-ui, sans-serif'
-      ctx.fillStyle = pal.isLight ? '#555' : '#aab'
-      ctx.fillText(msg2, bx, by + 14)
-      // Auto-fit from paint path when off-screen (throttled via hasAutoFit + ensure)
-      requestAnimationFrame(() => {
-        try {
-          transformRef.current = d3.zoomIdentity
-          fitViewRef.current?.(false)
-          hasAutoFitRef.current = true
-          ensureGraphVisibleRef.current('paint-offscreen')
-        } catch {
-          /* ignore */
-        }
-      })
-    }
-    ctx.restore()
-
-    // After first successful paint with nodes, fit once if never fitted
-    // (skip if camera already restored from vault / named view)
-    if (
-      simNodes.length > 0 &&
-      !hasAutoFitRef.current &&
-      !cameraHydratedRef.current &&
-      simNodes.some((n) => n.x != null && n.y != null)
-    ) {
-      // Defer fit so we don't recurse into paint mid-frame
-      requestAnimationFrame(() => {
-        try {
-          if (hasAutoFitRef.current || cameraHydratedRef.current) return
-          fitViewRef.current?.(false)
-          hasAutoFitRef.current = true
-        } catch {
-          /* ignore */
-        }
-      })
+    } catch (canvasErr) {
+      // Export buffer only — never blank the SVG display path
+      console.error('[GraphCanvas] export-canvas paint failed:', canvasErr)
     }
 
     dirtyRef.current = false
@@ -1498,7 +1795,7 @@ export const GraphCanvas: React.FC = () => {
       console.error('[GraphCanvas] paint failed:', err)
       dirtyRef.current = true
     }
-  }, [])
+  }, [pushSvgFrame])
 
   paintFnRef.current = paint
 
@@ -1506,10 +1803,139 @@ export const GraphCanvas: React.FC = () => {
     requestPaint()
   }, [requestPaint])
 
-  // Phase 7: gentle path pulse (slow + low amp — less “blink”)
+  /**
+   * User-open path (npm run dev): force seed + fit when Graph View opens.
+   * Automations often wait longer; humans click immediately while layout is 0×0.
+   */
+  useEffect(() => {
+    if (activeView !== 'graph') return
+
+    hasAutoFitRef.current = false
+    cameraHydratedRef.current = true // skip re-applying stale vault camera this session enter
+    emptySvgFramesRef.current = 0
+    transformRef.current = d3.zoomIdentity
+
+    void fetchGraph().finally(() => {
+      setGraphLoaded(true)
+      schedulePaint()
+    })
+
+    const kick = (why: string) => {
+      syncCanvasSize()
+      if (nodesRef.current.length === 0 && filteredNodes.length > 0) {
+        const wrap = wrapRef.current
+        const w = Math.max(wrap?.clientWidth || 0, 400)
+        const h = Math.max(wrap?.clientHeight || 0, 300)
+        nodesRef.current = filteredNodes.map((n, i) => {
+          const layout = layoutNodes[n.id]
+          const c = posCache.current.get(n.id)
+          const col = i % 12
+          const row = Math.floor(i / 12)
+          return {
+            ...n,
+            title: n.title || n.relativePath || n.id,
+            tags: safeTags(n),
+            degree: typeof n.degree === 'number' ? n.degree : 0,
+            x: c?.x ?? layout?.x ?? w * 0.2 + col * 48,
+            y: c?.y ?? layout?.y ?? h * 0.2 + row * 40,
+            fx: layout?.pinned ? layout.x : null,
+            fy: layout?.pinned ? layout.y : null,
+            pinned: Boolean(layout?.pinned)
+          }
+        })
+        const idSet = new Set(nodesRef.current.map((n) => n.id))
+        linksRef.current = filteredEdges
+          .filter((e) => idSet.has(e.source) && idSet.has(e.target))
+          .map((e) => ({
+            id: e.id,
+            type: e.type || 'wiki_link',
+            weight: e.weight || 1,
+            source: e.source,
+            target: e.target
+          }))
+        setStats({
+          nodes: nodesRef.current.length,
+          edges: linksRef.current.length
+        })
+      }
+      // Sync paint now (don't only rely on rAF — user open races were dropping frames)
+      try {
+        paintFnRef.current()
+      } catch (e) {
+        console.error('[GraphCanvas] kick paint', why, e)
+      }
+      schedulePaint()
+      if (nodesRef.current.length > 0) {
+        requestAnimationFrame(() => {
+          try {
+            transformRef.current = d3.zoomIdentity
+            fitViewRef.current?.(false)
+            hasAutoFitRef.current = true
+            ensureGraphVisibleRef.current(why)
+            paintFnRef.current()
+            schedulePaint()
+          } catch {
+            /* ignore */
+          }
+        })
+      }
+    }
+
+    kick('graph-enter')
+    const delays = [100, 300, 600, 1200, 2200]
+    const timers = delays.map((ms) => setTimeout(() => kick(`graph-enter-${ms}`), ms))
+
+    let ro: ResizeObserver | null = null
+    const wrap = wrapRef.current
+    if (wrap && typeof ResizeObserver !== 'undefined') {
+      ro = new ResizeObserver(() => kick('resize'))
+      ro.observe(wrap)
+    }
+
+    const watchdog = window.setInterval(() => {
+      const hasStore = filteredNodes.length > 0
+      // Read latest frame via DOM (React SVG)
+      const hasSvgNodes = Boolean(
+        document.querySelector('.graph-svg g.g-nodes circle, .graph-svg g.g-nodes polygon')
+      )
+      if (hasStore && !hasSvgNodes) kick('watchdog')
+    }, 500)
+
+    return () => {
+      for (const t of timers) clearTimeout(t)
+      ro?.disconnect()
+      clearInterval(watchdog)
+    }
+  }, [
+    activeView,
+    fetchGraph,
+    schedulePaint,
+    syncCanvasSize,
+    filteredNodes.length,
+    filteredEdges.length
+    // layoutNodes read live from closure in kick — avoid re-bind storms
+  ])
+
+  // If toolbar already shows node count but SVG frame empty → force paint (user blank case)
+  useEffect(() => {
+    if (activeView !== 'graph') return
+    if (stats.nodes <= 0) return
+    if (svgFrame && svgFrame.nodes.length > 0) return
+    const t = window.setTimeout(() => {
+      try {
+        paintFnRef.current()
+      } catch (e) {
+        console.error('[GraphCanvas] stats-watch paint', e)
+      }
+    }, 100)
+    return () => clearTimeout(t)
+  }, [activeView, stats.nodes, stats.edges, svgFrame])
+
+  // Phase 7: gentle path pulse — throttle SVG rebuilds (was 60fps full innerHTML)
   useEffect(() => {
     if (!pathNodeIds || pathNodeIds.size === 0) {
       pathPulseRef.current = 0
+      pathPulseFrameRef.current = 0
       return
     }
     let raf = 0
@@ -1517,7 +1943,9 @@ export const GraphCanvas: React.FC = () => {
     const loop = (t: number) => {
       if (!alive) return
       pathPulseRef.current = (Math.sin(t / 520) + 1) / 2
-      schedulePaint()
+      pathPulseFrameRef.current++
+      // ~20fps is enough for soft pulse; full SVG rewrite every frame caused lag/flicker
+      if (pathPulseFrameRef.current % 3 === 0) schedulePaint()
       raf = requestAnimationFrame(loop)
     }
     raf = requestAnimationFrame(loop)
@@ -1525,6 +1953,7 @@ export const GraphCanvas: React.FC = () => {
       alive = false
       cancelAnimationFrame(raf)
       pathPulseRef.current = 0
+      pathPulseFrameRef.current = 0
     }
   }, [pathNodeIds, schedulePaint])
 
@@ -1540,7 +1969,8 @@ export const GraphCanvas: React.FC = () => {
    * Large graphs use SpatialHash2D so hover stays O(k) not O(n).
    */
   const hitNode = useCallback((clientX: number, clientY: number): SimNode | null => {
-    const el = canvasRef.current || wrapRef.current
+    // Always stage box — matches SVG screen coords + camera transform
+    const el = wrapRef.current
     if (!el) return null
     const rect = el.getBoundingClientRect()
     if (rect.width < 2 || rect.height < 2) return null
@@ -1625,7 +2055,11 @@ export const GraphCanvas: React.FC = () => {
   useEffect(() => {
     const canvas = canvasRef.current
     const wrap = wrapRef.current
-    if (!canvas || !wrap) return
+    // Don't permanently skip sim if layout not ready — retry (user open path hits this often)
+    if (!canvas || !wrap) {
+      const t = setTimeout(() => schedulePaint(), 100)
+      return () => clearTimeout(t)
+    }
 
     const sized = syncCanvasSize()
     const width = sized.ready ? sized.w : Math.max(wrap.clientWidth, 800)
@@ -2159,12 +2593,11 @@ export const GraphCanvas: React.FC = () => {
     [schedulePaint, syncCanvasSize, scheduleSaveCamera]
   )
 
-  // Pointer interactions (pan / zoom / drag / click) — bind to wrap so hit area always works
-  // even if canvas CSS size lags behind.
+  // Pointer on STAGE (wrap), not canvas — canvas may be hidden (GPU black);
+  // hit-test is pure math on nodesRef, same as local graph interaction model.
   useEffect(() => {
-    const canvas = canvasRef.current
     const wrap = wrapRef.current
-    const target = canvas || wrap
+    const target = wrap
     if (!target) return
 
     let panning = false
@@ -2172,10 +2605,7 @@ export const GraphCanvas: React.FC = () => {
     let dragged: SimNode | null = null
     let moved = false
 
-    const viewRect = () => {
-      const el = canvas || wrap!
-      return el.getBoundingClientRect()
-    }
+    const viewRect = () => wrap!.getBoundingClientRect()
 
     const onWheel = (e: WheelEvent) => {
       e.preventDefault()
@@ -2424,8 +2854,7 @@ export const GraphCanvas: React.FC = () => {
       schedulePaint()
     }
 
-    // Cast: HTMLElement.addEventListener typing is EventListener; our handlers need DOM event types
-    const el = target as HTMLCanvasElement
+    const el = target as HTMLElement
     el.addEventListener('wheel', onWheel, { passive: false })
     el.addEventListener('pointerdown', onDown)
     el.addEventListener('pointermove', onMove)
@@ -2920,15 +3349,9 @@ export const GraphCanvas: React.FC = () => {
   )
 
   const handleExportPng = useCallback(() => {
-    const canvas = canvasRef.current
-    if (!canvas) {
-      setViewsStatus('Canvas belum siap')
-      return
-    }
-    // Force size + paint (same path that used to "magically" show the graph)
     const sized = syncCanvasSize()
     if (!sized.ready) {
-      setViewsStatus('Canvas belum berukuran — coba Fit dulu')
+      setViewsStatus('Area graph belum berukuran — coba Fit dulu')
       schedulePaint()
       return
     }
@@ -2936,15 +3359,87 @@ export const GraphCanvas: React.FC = () => {
       hasAutoFitRef.current = true
       fitView(false)
     }
+    // SVG display + optional canvas fallback buffer
+    exportCanvasPaintRef.current = true
     paint()
-    try {
-      const url = canvas.toDataURL('image/png')
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')
+    const download = (url: string, note: string) => {
       const a = document.createElement('a')
-      const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')
       a.href = url
       a.download = `workspacegraph-${stamp}.png`
       a.click()
-      setViewsStatus(`PNG diexport · ${stats.nodes} nodes`)
+      setViewsStatus(`PNG diexport · ${stats.nodes} nodes${note}`)
+    }
+
+    // Prefer SVG → canvas (what user actually sees). Hidden canvas toDataURL can be blank
+    // on the same Windows GPU path that made Graph View black.
+    const svg = svgRef.current
+    const { w, h } = sized
+    if (svg && w > 8 && h > 8) {
+      try {
+        const clone = svg.cloneNode(true) as SVGSVGElement
+        clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg')
+        clone.setAttribute('width', String(w))
+        clone.setAttribute('height', String(h))
+        // Opaque background (SVG is transparent)
+        const bg = document.createElementNS('http://www.w3.org/2000/svg', 'rect')
+        bg.setAttribute('width', '100%')
+        bg.setAttribute('height', '100%')
+        bg.setAttribute('fill', paletteRef.current.bg || '#1e1e22')
+        clone.insertBefore(bg, clone.firstChild)
+        const xml = new XMLSerializer().serializeToString(clone)
+        const blob = new Blob([xml], { type: 'image/svg+xml;charset=utf-8' })
+        const url = URL.createObjectURL(blob)
+        const img = new Image()
+        img.onload = () => {
+          try {
+            const out = document.createElement('canvas')
+            const dpr = Math.min(window.devicePixelRatio || 1, 2)
+            out.width = Math.floor(w * dpr)
+            out.height = Math.floor(h * dpr)
+            const c = out.getContext('2d')
+            if (!c) throw new Error('no 2d')
+            c.scale(dpr, dpr)
+            c.fillStyle = paletteRef.current.bg || '#1e1e22'
+            c.fillRect(0, 0, w, h)
+            c.drawImage(img, 0, 0, w, h)
+            download(out.toDataURL('image/png'), ' · SVG')
+          } catch (err) {
+            console.error(err)
+            setViewsStatus('Export PNG gagal (SVG raster)')
+          } finally {
+            URL.revokeObjectURL(url)
+          }
+        }
+        img.onerror = () => {
+          URL.revokeObjectURL(url)
+          // Fallback: hidden canvas buffer
+          const canvas = canvasRef.current
+          if (!canvas) {
+            setViewsStatus('Export PNG gagal')
+            return
+          }
+          try {
+            download(canvas.toDataURL('image/png'), ' · canvas')
+          } catch (e) {
+            console.error(e)
+            setViewsStatus('Export PNG gagal')
+          }
+        }
+        img.src = url
+        return
+      } catch (err) {
+        console.error(err)
+      }
+    }
+
+    const canvas = canvasRef.current
+    if (!canvas) {
+      setViewsStatus('Export belum siap')
+      return
+    }
+    try {
+      download(canvas.toDataURL('image/png'), ' · canvas')
     } catch (err) {
       console.error(err)
       setViewsStatus('Export PNG gagal')
@@ -3160,7 +3655,7 @@ export const GraphCanvas: React.FC = () => {
   ])
 
   return (
-    <div className="graph-container" ref={wrapRef}>
+    <div className="graph-container">
       <div className="graph-toolbar">
         <span className="graph-toolbar-stats">
           {stats.nodes}/{nodes.filter((n) => !n.isGhost).length} notes · {stats.edges} links
@@ -3353,13 +3848,90 @@ export const GraphCanvas: React.FC = () => {
         />
       )}
 
-      {/* Canvas always mounted — unmounting on empty broke pointer/sim rebind after fetch */}
+      {/* Stage mirrors local-graph-body: relative flex child; canvas fills it (LocalGraph path) */}
+      <div className="graph-stage" ref={wrapRef}>
+      {/* Off-screen buffer for PNG export fallback */}
       <canvas
         ref={canvasRef}
-        className="graph-canvas"
-        style={{ width: '100%', height: '100%' }}
-        aria-label="Knowledge graph"
+        className="graph-canvas graph-canvas--export"
+        aria-hidden="true"
       />
+      {/* React-owned SVG — survives re-renders (unlike innerHTML on bare <svg>) */}
+      <div className="graph-svg-host" role="img" aria-label="Knowledge graph">
+        {svgFrame ? (
+          <svg
+            ref={svgRef}
+            className="graph-svg"
+            viewBox={`0 0 ${svgFrame.w} ${svgFrame.h}`}
+            width={svgFrame.w}
+            height={svgFrame.h}
+            preserveAspectRatio="none"
+          >
+            <g className="g-edges">
+              {svgFrame.edges.map((e) => (
+                <line
+                  key={e.key}
+                  x1={e.x1}
+                  y1={e.y1}
+                  x2={e.x2}
+                  y2={e.y2}
+                  stroke={e.stroke}
+                  strokeWidth={e.sw}
+                  strokeOpacity={e.op}
+                />
+              ))}
+            </g>
+            <g className="g-nodes">
+              {svgFrame.nodes.map((n) =>
+                n.kind === 'poly' ? (
+                  <polygon
+                    key={n.key}
+                    points={n.points}
+                    fill={n.fill}
+                    stroke={n.stroke}
+                    strokeWidth={n.sw}
+                    fillOpacity={n.fillOp}
+                  />
+                ) : (
+                  <circle
+                    key={n.key}
+                    cx={n.cx}
+                    cy={n.cy}
+                    r={n.r}
+                    fill={n.fill}
+                    stroke={n.stroke}
+                    strokeWidth={n.sw}
+                    fillOpacity={n.fill === 'none' ? 0 : n.fillOp}
+                    strokeOpacity={n.fill === 'none' ? n.fillOp : 1}
+                  />
+                )
+              )}
+            </g>
+            <g className="g-labels">
+              {svgFrame.labels.map((lab) => (
+                <text
+                  key={lab.key}
+                  x={lab.x}
+                  y={lab.y}
+                  fill={lab.fill}
+                  fontSize={11}
+                  fontFamily="system-ui, Segoe UI, sans-serif"
+                  fontWeight={lab.bold ? 600 : 400}
+                >
+                  {lab.text}
+                </text>
+              ))}
+            </g>
+          </svg>
+        ) : (
+          <div className="graph-live-hud" style={{ position: 'absolute', left: 12, top: 12 }}>
+            Memuat graph…
+          </div>
+        )}
+      </div>
+      <div className="graph-live-hud" aria-live="polite">
+        {svgFrame?.hud || (graphLoaded ? 'sim:…' : 'memuat…')}
+      </div>
       {nodes.length === 0 || filteredNodes.length === 0
         ? (() => {
             const emptyDiag = diagnoseEmptyFilter({
@@ -3568,6 +4140,7 @@ export const GraphCanvas: React.FC = () => {
           pointerEvents: 'none'
         }}
       />
+      </div>{/* .graph-stage */}
     </div>
   )
 }
@@ -3580,21 +4153,6 @@ function escapeHtml(s: string): string {
     .replace(/"/g, '&quot;')
 }
 
-/** Canvas rounded-rect path (fill/stroke separately). */
-function canvasRoundRect(
-  ctx: CanvasRenderingContext2D,
-  x: number,
-  y: number,
-  w: number,
-  h: number,
-  r: number
-): void {
-  const rr = Math.min(r, w / 2, h / 2)
-  ctx.beginPath()
-  ctx.moveTo(x + rr, y)
-  ctx.arcTo(x + w, y, x + w, y + h, rr)
-  ctx.arcTo(x + w, y + h, x, y + h, rr)
-  ctx.arcTo(x, y + h, x, y, rr)
-  ctx.arcTo(x, y, x + w, y, rr)
-  ctx.closePath()
-}
+
+
+

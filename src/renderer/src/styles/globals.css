@@ -1217,49 +1217,118 @@ html:not([data-theme]) {
 }
 
 /* ================================================
-   Graph Canvas — quiet Obsidian-like
+   Graph Canvas — same layout pattern as Local Graph
+   (local works on user machine; absolute-only global did not)
    ================================================ */
 .graph-container {
-  /* Absolute fill of .main-content — most reliable on Windows Electron flex layouts */
   position: absolute;
   inset: 0;
-  width: auto;
-  height: auto;
+  display: flex;
+  flex-direction: column;
   min-width: 0;
   min-height: 0;
-  background:
-    radial-gradient(ellipse 80% 60% at 50% 45%, var(--graph-bg-glow) 0%, transparent 70%),
-    var(--bg-app);
+  width: auto;
+  height: auto;
+  background: var(--bg-app);
   overflow: hidden;
   z-index: 0;
 }
 
-.graph-canvas {
-  position: absolute;
-  left: 0;
-  top: 0;
-  /* width/height set in JS from measured box — do not rely on % alone */
-  display: block;
+/* Stage = local-graph-body: relative box the SVG fills */
+.graph-stage {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+  width: 100%;
+  overflow: hidden;
   cursor: grab;
   touch-action: none;
-  pointer-events: auto;
-  z-index: 1;
-  background: transparent;
+  background:
+    radial-gradient(ellipse 80% 60% at 50% 45%, var(--graph-bg-glow) 0%, transparent 70%),
+    var(--bg-app);
 }
-.graph-canvas:active {
+.graph-stage:active {
   cursor: grabbing;
 }
 
-.graph-toolbar {
+/* Export-only canvas — hidden from compositor (large canvas = black on some Windows GPUs) */
+.graph-canvas,
+.graph-canvas--export {
   position: absolute;
-  top: 10px;
-  left: 12px;
-  right: 12px;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0;
+  visibility: hidden;
+  border: 0;
+}
+
+/* Host is React-owned; <svg.graph-svg> is created imperatively (survives re-renders) */
+.graph-svg-host {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none; /* hits handled on .graph-stage */
+  overflow: hidden;
+}
+.graph-svg-host > .graph-svg,
+.graph-svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  overflow: hidden;
+  pointer-events: none;
+}
+.graph-svg .g-labels text {
+  paint-order: stroke;
+  stroke: rgba(12, 14, 18, 0.75);
+  stroke-width: 3px;
+  stroke-linejoin: round;
+}
+[data-theme='light'] .graph-svg .g-labels text {
+  stroke: rgba(255, 255, 255, 0.9);
+}
+
+.graph-live-hud {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  z-index: 4;
+  pointer-events: none;
+  font: 11px ui-monospace, Consolas, monospace;
+  color: var(--text-secondary, #c8cdd8);
+  background: rgba(12, 14, 18, 0.78);
+  padding: 4px 8px;
+  border-radius: 6px;
+  max-width: min(92%, 480px);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+[data-theme='light'] .graph-live-hud {
+  color: #334;
+  background: rgba(255, 255, 255, 0.88);
+}
+
+.graph-toolbar {
+  position: relative;
+  flex: 0 0 auto;
+  top: auto;
+  left: auto;
+  right: auto;
   display: flex;
   align-items: center;
   justify-content: space-between;
   z-index: var(--z-panel);
   pointer-events: none;
+  padding: 10px 12px 6px;
+  background: transparent;
 }
 .graph-toolbar-stats {
   font-size: 11px;
@@ -1307,10 +1376,13 @@ html:not([data-theme]) {
   background: var(--color-primary-subtle);
 }
 
-.graph-settings-panel {
+.graph-settings-panel,
+.graph-filters-panel {
   position: absolute;
-  top: 42px;
+  top: 8px;
   right: 12px;
+  /* Above SVG (z=1) and stage chrome */
+  z-index: calc(var(--z-panel, 20) + 5);
   background: var(--bg-surface);
   backdrop-filter: blur(14px);
   border: 1px solid var(--border-subtle);
@@ -1319,9 +1391,9 @@ html:not([data-theme]) {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  z-index: var(--z-panel);
   box-shadow: var(--shadow-lg);
   width: 220px;
+  pointer-events: auto;
 }
 
 /* Phase 2 — wider filter panel with sections */
@@ -1659,7 +1731,8 @@ html:not([data-theme]) {
   right: 12px;
   display: flex;
   flex-direction: column;
-  z-index: var(--z-panel);
+  z-index: calc(var(--z-panel, 20) + 2);
+  pointer-events: auto;
   background: var(--bg-surface);
   border: 1px solid var(--border-subtle);
   border-radius: 8px;
@@ -1702,8 +1775,10 @@ html:not([data-theme]) {
 
 .graph-legend {
   position: absolute;
-  bottom: 14px;
+  bottom: 40px; /* above live HUD */
   left: 12px;
+  z-index: calc(var(--z-panel, 20) + 2);
+  pointer-events: none;
   display: flex;
   flex-wrap: wrap;
   gap: 8px 12px;
