@@ -1,8 +1,69 @@
-import React, { useMemo } from 'react'
+import React, { useMemo, useState, useEffect } from 'react'
 import { useWorkspaceStore } from '../../store/workspaceStore'
 import { useGraphStore } from '../../store/graphStore'
 import { useEditorStore } from '../../store/editorStore'
 import { Icon } from '../ui/Icons'
+
+type EmbedState = 'idle' | 'loading_model' | 'indexing' | 'ready'
+
+interface EmbedStatus {
+  state: EmbedState
+  totalChunks: number
+  indexedFiles: number
+  modelReady: boolean
+}
+
+function EmbeddingBadge() {
+  const [status, setStatus] = useState<EmbedStatus | null>(null)
+  const isOpen = useWorkspaceStore((s) => s.isOpen)
+
+  useEffect(() => {
+    if (!isOpen || !window.api?.getEmbeddingStatus) return
+    let mounted = true
+    const poll = async () => {
+      try {
+        const s = await window.api.getEmbeddingStatus()
+        if (mounted) setStatus(s)
+      } catch { /* ignore */ }
+    }
+    poll()
+    const id = setInterval(poll, 3000)
+    return () => { mounted = false; clearInterval(id) }
+  }, [isOpen])
+
+  if (!status || status.state === 'idle') return null
+
+  const labels: Record<EmbedState, string> = {
+    idle: '',
+    loading_model: 'Loading AI model…',
+    indexing: `Indexing ${status.indexedFiles} files`,
+    ready: `Semantic: ${status.totalChunks} chunks`
+  }
+  const colors: Record<EmbedState, string> = {
+    idle: 'transparent',
+    loading_model: 'var(--color-warning, #f59e0b)',
+    indexing: 'var(--accent, #6366f1)',
+    ready: 'var(--color-success, #22c55e)'
+  }
+  const spinning = status.state === 'loading_model' || status.state === 'indexing'
+
+  return (
+    <span
+      title={`Semantic RAG — ${labels[status.state]}`}
+      style={{
+        display: 'inline-flex', alignItems: 'center', gap: 4,
+        color: colors[status.state], fontSize: 'var(--text-xs)',
+        cursor: 'default'
+      }}
+    >
+      {spinning
+        ? <span style={{ display: 'inline-block', animation: 'spin 1s linear infinite' }}>⟳</span>
+        : <Icon name="psychology" size={12} />
+      }
+      {labels[status.state]}
+    </span>
+  )
+}
 
 export const StatusBar: React.FC = () => {
   const { totalFiles, totalFolders, totalNotes, rootPath } = useWorkspaceStore()
@@ -60,16 +121,26 @@ export const StatusBar: React.FC = () => {
       <span
         style={{
           marginLeft: 'auto',
-          color: 'var(--color-success)',
-          fontSize: 'var(--text-xs)',
           display: 'inline-flex',
           alignItems: 'center',
-          gap: 4
+          gap: 8
         }}
       >
-        <Icon name="checkCircle" size={12} />
-        Active
+        <EmbeddingBadge />
+        <span
+          style={{
+            color: 'var(--color-success)',
+            fontSize: 'var(--text-xs)',
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: 4
+          }}
+        >
+          <Icon name="checkCircle" size={12} />
+          Active
+        </span>
       </span>
+      <style>{`@keyframes spin { from{transform:rotate(0deg)} to{transform:rotate(360deg)} }`}</style>
     </div>
   )
 }

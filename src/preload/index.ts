@@ -5,10 +5,6 @@ const api = {
   // Dialog
   openFolder: () => ipcRenderer.invoke('dialog:openFolder'),
 
-  // Kerja / Obsidian vault Diskominfo
-  resolveKerjaVault: () => ipcRenderer.invoke('kerja:resolveVault'),
-  openKerjaVault: () => ipcRenderer.invoke('kerja:openVault'),
-
   // Workspace
   openWorkspace: (folderPath: string) => ipcRenderer.invoke('workspace:open', folderPath),
   createWorkspace: (parentPath: string, name: string) =>
@@ -24,8 +20,8 @@ const api = {
 
   // Files
   readFile: (filePath: string) => ipcRenderer.invoke('file:read', filePath),
-  writeFile: (filePath: string, content: string) =>
-    ipcRenderer.invoke('file:write', { filePath, content }),
+  writeFile: (filePath: string, content: string, expectedMtime?: number) =>
+    ipcRenderer.invoke('file:write', { filePath, content, expectedMtime }),
   deleteFile: (filePath: string) => ipcRenderer.invoke('file:delete', filePath),
   createFile: (filePath: string, content?: string) =>
     ipcRenderer.invoke('file:create', { filePath, content }),
@@ -37,6 +33,7 @@ const api = {
 
   // Graph
   getGraphData: () => ipcRenderer.invoke('graph:getData'),
+  getGraphSkeleton: () => ipcRenderer.invoke('graph:getSkeleton'),
   getGraphNeighbors: (nodeId: string, depth?: number) =>
     ipcRenderer.invoke('graph:getNeighbors', nodeId, depth),
   getGraphPath: (opts: {
@@ -94,6 +91,7 @@ const api = {
   getAIProviders: () => ipcRenderer.invoke('ai:getProviders'),
   testAIProvider: (providerId?: string) => ipcRenderer.invoke('ai:testProvider', providerId),
   importGrokCli: () => ipcRenderer.invoke('ai:importGrokCli'),
+  getEmbeddingStatus: () => ipcRenderer.invoke('ai:embeddingStatus'),
   configureAIProvider: (
     providerId: string,
     apiKey?: string,
@@ -169,6 +167,8 @@ const api = {
   rejectWriteProposal: (proposalId: string) => ipcRenderer.invoke('ai:rejectProposal', proposalId),
   listWriteProposals: () => ipcRenderer.invoke('ai:listProposals'),
   getWriteProposal: (proposalId: string) => ipcRenderer.invoke('ai:getProposal', proposalId),
+  ensureAiMemory: () => ipcRenderer.invoke('ai:ensureMemory'),
+  listAiMemory: () => ipcRenderer.invoke('ai:listMemory'),
 
   saveChat: (conv: unknown) => ipcRenderer.invoke('chat:save', conv),
   listChats: () => ipcRenderer.invoke('chat:list'),

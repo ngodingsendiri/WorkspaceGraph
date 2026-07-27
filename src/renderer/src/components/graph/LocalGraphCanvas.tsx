@@ -9,7 +9,14 @@ import { useWorkspaceStore } from '../../store/workspaceStore'
 import { useGraphStore, GraphNodeData, type GraphForceSettings } from '../../store/graphStore'
 import { Icon } from '../ui/Icons'
 import { DEFAULT_FORCE_SETTINGS } from './GraphFiltersPanel'
-import { chargeFor, linkDistanceFor, nodeRadius } from './graphShared'
+import {
+  chargeFor,
+  linkDistanceFor,
+  nodeRadius,
+  OBSIDIAN_SIM,
+  OBSIDIAN_VISUAL,
+  resolveObsidianNodeFill
+} from './graphShared'
 
 interface SimNode extends d3.SimulationNodeDatum, GraphNodeData {
   pinned?: boolean
@@ -41,28 +48,30 @@ function css(name: string, fb: string): string {
 
 function readPalette(): Palette {
   const isLight = document.documentElement.getAttribute('data-theme') === 'light'
+  const v = isLight ? OBSIDIAN_VISUAL.light : OBSIDIAN_VISUAL.dark
   return {
     isLight,
-    bg: css('--bg-surface', isLight ? '#fff' : '#28282b'),
-    edge: css('--graph-edge-wiki', isLight ? 'rgba(60,70,90,0.4)' : 'rgba(180,190,210,0.35)'),
-    edgeHot: css('--graph-edge-hover', isLight ? 'rgba(100,80,200,0.9)' : 'rgba(170,150,255,0.8)'),
-    label: css('--graph-label-fill', isLight ? '#1a1f2a' : 'rgba(230,235,245,0.92)'),
-    labelBg: isLight ? 'rgba(255,255,255,0.88)' : 'rgba(20,22,28,0.7)',
-    nodeStroke: css('--graph-node-stroke', isLight ? '#fff' : 'rgba(0,0,0,0.4)'),
-    centerStroke: css('--color-primary', isLight ? '#6d5bd0' : '#9b8cff'),
+    bg: css('--bg-surface', v.bg),
+    edge: v.edge,
+    edgeHot: v.edgeHot,
+    label: v.label,
+    labelBg: v.labelBg,
+    nodeStroke: v.nodeStroke,
+    centerStroke: v.nodeCenter,
     colors: {
-      knowledge: css('--node-knowledge', '#7c6bc4'),
-      project: css('--node-project', '#3d9bb8'),
-      task: css('--node-task', '#c4923a'),
-      daily: css('--node-daily', '#4a9e6e'),
-      people: css('--node-person', '#c46a4a'),
-      template: css('--node-template', '#9a6bb8'),
-      document: css('--node-document', '#5a8ab8'),
-      sop: css('--node-sop', '#c45a7a'),
-      other: css('--node-default', '#7a8494'),
-      tag: css('--node-tag', isLight ? '#b8860b' : '#e0b84a'),
-      ghost: css('--node-ghost', isLight ? 'rgba(90,100,120,0.55)' : 'rgba(160,170,190,0.45)'),
-      attachment: css('--node-attachment', isLight ? '#5a8a6a' : '#6ab88a')
+      knowledge: v.nodeDefault,
+      project: v.nodeDefault,
+      task: v.nodeDefault,
+      daily: v.nodeDefault,
+      people: v.nodeDefault,
+      template: v.nodeDefault,
+      document: v.nodeDefault,
+      sop: v.nodeDefault,
+      other: v.nodeDefault,
+      tag: v.nodeTag,
+      ghost: v.nodeGhost,
+      attachment: v.nodeAttachment,
+      default: v.nodeDefault
     }
   }
 }
@@ -221,8 +230,8 @@ export const LocalGraphCanvas: React.FC = () => {
       ctx.moveTo(s.x, s.y)
       ctx.lineTo(tg.x, tg.y)
       ctx.strokeStyle = isHot && hs > 0.35 ? pal.edgeHot : pal.edge
-      ctx.globalAlpha = dim ? lerp(1, 0.22, hs) : 1
-      ctx.lineWidth = (isHot ? lerp(1.15, 1.85, hs) : e.type === 'tag' ? 0.9 : 1.15) / t.k
+      ctx.globalAlpha = dim ? lerp(0.55, 0.12, hs) : 0.55
+      ctx.lineWidth = (isHot ? lerp(0.85, 1.25, hs) : e.type === 'tag' ? 0.55 : 0.75) / t.k
       if (e.type === 'tag') ctx.setLineDash([3 / t.k, 3 / t.k])
       else ctx.setLineDash([])
       ctx.stroke()
@@ -233,52 +242,46 @@ export const LocalGraphCanvas: React.FC = () => {
     for (const n of simNodes) {
       if (n.x == null || n.y == null) continue
       const r = radius(n)
-      const isTag = n.isTag || n.type === 'tag'
-      const isGhost = n.isGhost || n.type === 'ghost'
-      const col = isTag
-        ? pal.colors.tag
-        : isGhost
-          ? pal.colors.ghost
-          : pal.colors[n.type] || pal.colors.other
+      const isTag = Boolean(n.isTag || n.type === 'tag')
+      const isGhost = Boolean(n.isGhost || n.type === 'ghost')
+      const isAtt = Boolean(n.isAttachment || n.type === 'attachment')
+      const col = resolveObsidianNodeFill({
+        isLight: pal.isLight,
+        isGhost,
+        isTag,
+        isAttachment: isAtt,
+        type: n.type,
+        relativePath: n.relativePath,
+        colorBy: 'default'
+      })
       const dim = Boolean(hot && !hot.has(n.id))
       const isC = n.id === centerId || n.isCenter
       ctx.globalAlpha = dim ? lerp(1, pal.isLight ? 0.28 : 0.2, hs) : 1
 
       if (isC && !dim) {
         ctx.beginPath()
-        ctx.arc(n.x, n.y, r + 5, 0, Math.PI * 2)
+        ctx.arc(n.x, n.y, r + 4, 0, Math.PI * 2)
         ctx.fillStyle = pal.centerStroke
-        ctx.globalAlpha = (pal.isLight ? 0.2 : 0.25) * (dim ? 0.3 : 1)
+        ctx.globalAlpha = (pal.isLight ? 0.18 : 0.22) * (dim ? 0.3 : 1)
         ctx.fill()
         ctx.globalAlpha = dim ? lerp(1, 0.25, hs) : 1
       }
 
+      // Obsidian local: circles only
       ctx.beginPath()
-      if (isTag) {
-        const d = r * 1.1
-        ctx.moveTo(n.x, n.y - d)
-        ctx.lineTo(n.x + d, n.y)
-        ctx.lineTo(n.x, n.y + d)
-        ctx.lineTo(n.x - d, n.y)
-        ctx.closePath()
-        ctx.fillStyle = col
-        ctx.fill()
-      } else if (isGhost) {
-        ctx.arc(n.x, n.y, r, 0, Math.PI * 2)
+      ctx.arc(n.x, n.y, r, 0, Math.PI * 2)
+      if (isGhost) {
         ctx.fillStyle = pal.isLight ? 'rgba(255,255,255,0.4)' : 'rgba(20,22,28,0.4)'
         ctx.fill()
         ctx.setLineDash([2 / t.k, 2 / t.k])
         ctx.strokeStyle = col
-        ctx.lineWidth = 1.4 / t.k
+        ctx.lineWidth = 1.2 / t.k
         ctx.stroke()
         ctx.setLineDash([])
       } else {
-        ctx.arc(n.x, n.y, r, 0, Math.PI * 2)
         ctx.fillStyle = col
         ctx.fill()
-      }
-      if (!isGhost) {
-        ctx.lineWidth = (isC ? 2.4 : n.id === hover ? lerp(1, 1.8, hs) : 1) / t.k
+        ctx.lineWidth = (isC ? 1.8 : n.id === hover ? lerp(0.6, 1.2, hs) : 0.55) / t.k
         ctx.strokeStyle =
           isC ? pal.centerStroke : n.id === hover && hs > 0.4 ? pal.edgeHot : pal.nodeStroke
         ctx.stroke()
@@ -585,10 +588,11 @@ export const LocalGraphCanvas: React.FC = () => {
               .strength(collideStr)
               .iterations(2)
           )
-          .velocityDecay(0.38)
-          .alphaDecay(0.05)
-          .alphaMin(0.025)
-          .alpha(0.55)
+          // Mini-canvas: slightly snappier than global (local focus, fewer nodes)
+          .velocityDecay(OBSIDIAN_SIM.velocityDecay)
+          .alphaDecay(Math.min(0.05, OBSIDIAN_SIM.alphaDecay + 0.012))
+          .alphaMin(0.012)
+          .alpha(0.65)
 
         simRef.current = sim
         let tick = 0

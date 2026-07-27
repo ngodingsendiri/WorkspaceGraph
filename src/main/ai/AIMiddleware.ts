@@ -27,6 +27,7 @@ import {
   type WriteProposal,
   type ToolResult
 } from './AgentTools'
+import { KERNEL_SYSTEM_PROMPT } from './WorkspaceMemory'
 
 export type StreamEvent = AIStreamChunk & {
   citations?: { title: string; path: string }[]
@@ -224,6 +225,53 @@ export class AIMiddleware {
     }
   }
 
+  private async buildSystemPromptAsync(
+    request: AIRequest,
+    activeFilePath: string | undefined,
+    useContext: boolean,
+    agentRole: AgentRole,
+    enableTools: boolean
+  ): Promise<{ systemPrompt: string; citations: { title: string; path: string }[] }> {
+    // Kernel layer always present
+    let systemPrompt = KERNEL_SYSTEM_PROMPT
+    if (request.systemPrompt) {
+      systemPrompt += '\n\n' + request.systemPrompt
+    }
+    let citations: { title: string; path: string }[] = []
+
+    if (useContext && request.messages.length > 0) {
+      const lastUserMsg = request.messages[request.messages.length - 1]
+      if (lastUserMsg.role === 'user') {
+        try {
+          // buildContextPackageAsync runs semantic vector search (EmbeddingEngine) before FTS
+          const ctxPackage = await this.contextEngine.buildContextPackageAsync(
+            lastUserMsg.content,
+            activeFilePath,
+            agentRole
+          )
+          systemPrompt += '\n\n' + ctxPackage.formattedContext
+          citations = ctxPackage.citations
+          if (process.env.WG_DEBUG_CONTEXT === '1') {
+            console.log(
+              `[AI context] tokens~${ctxPackage.tokenEstimate} files=${ctxPackage.relevantFiles.length} citations=${citations.length} semantic=${ctxPackage.relevantFiles.filter((f) => f.tier === 'semantic').length}`
+            )
+          }
+        } catch (err) {
+          console.error('[AI context] build failed:', err)
+          systemPrompt +=
+            '\n\n=== WORKSPACE CONTEXT ===\n(Context build failed — answer carefully; ask user to open a vault.)\n=== END ===\n'
+        }
+      }
+    }
+
+    if (enableTools) {
+      systemPrompt += '\n\n' + TOOLS_SYSTEM_PROMPT
+    }
+
+    return { systemPrompt, citations }
+  }
+
+  /** @deprecated Use buildSystemPromptAsync in streaming path */
   private buildSystemPrompt(
     request: AIRequest,
     activeFilePath: string | undefined,
@@ -231,24 +279,39 @@ export class AIMiddleware {
     agentRole: AgentRole,
     enableTools: boolean
   ): { systemPrompt: string; citations: { title: string; path: string }[] } {
-    let systemPrompt = request.systemPrompt || ''
+    // Kernel layer always present
+    let systemPrompt = KERNEL_SYSTEM_PROMPT
+    if (request.systemPrompt) {
+      systemPrompt += '\n\n' + request.systemPrompt
+    }
     let citations: { title: string; path: string }[] = []
 
     if (useContext && request.messages.length > 0) {
       const lastUserMsg = request.messages[request.messages.length - 1]
       if (lastUserMsg.role === 'user') {
-        const ctxPackage = this.contextEngine.buildContextPackage(
-          lastUserMsg.content,
-          activeFilePath,
-          agentRole
-        )
-        systemPrompt = (systemPrompt ? systemPrompt + '\n\n' : '') + ctxPackage.formattedContext
-        citations = ctxPackage.citations
+        try {
+          const ctxPackage = this.contextEngine.buildContextPackage(
+            lastUserMsg.content,
+            activeFilePath,
+            agentRole
+          )
+          systemPrompt += '\n\n' + ctxPackage.formattedContext
+          citations = ctxPackage.citations
+          if (process.env.WG_DEBUG_CONTEXT === '1') {
+            console.log(
+              `[AI context] tokens~${ctxPackage.tokenEstimate} files=${ctxPackage.relevantFiles.length} citations=${citations.length}`
+            )
+          }
+        } catch (err) {
+          console.error('[AI context] build failed:', err)
+          systemPrompt +=
+            '\n\n=== WORKSPACE CONTEXT ===\n(Context build failed — answer carefully; ask user to open a vault.)\n=== END ===\n'
+        }
       }
     }
 
     if (enableTools) {
-      systemPrompt = (systemPrompt ? systemPrompt + '\n\n' : '') + TOOLS_SYSTEM_PROMPT
+      systemPrompt += '\n\n' + TOOLS_SYSTEM_PROMPT
     }
 
     return { systemPrompt, citations }
@@ -321,7 +384,7 @@ export class AIMiddleware {
       // Don't force-switch (user may have paid tier) — just note in first chunk if fails
     }
 
-    const { systemPrompt, citations } = this.buildSystemPrompt(
+    const { systemPrompt, citations } = await this.buildSystemPromptAsync(
       request,
       activeFilePath,
       useContext,
@@ -428,45 +491,43 @@ export class AIMiddleware {
         return
       }
 
-      const readActions = actions.filter((a) => isReadTool(a.tool))
-      const writeActions = actions.filter((a) => isWriteTool(a.tool))
-      const results: ToolResult[] = []
-
-      // Execute write tools → proposals (no disk until confirm)
-      for (const action of writeActions) {
+      const known = actions.filter((a) => isReadTool(a.tool) || isWriteTool(a.tool))
+      const unknown = actions.filter((a) => !isReadTool(a.tool) && !isWriteTool(a.tool))
+      if (unknown.length) {
         onChunk({
-          content: '',
+          content: `\n\n*(unknown tools skipped: ${unknown.map((u) => u.tool).join(', ')})*\n`,
           done: false,
-          toolStatus: `Proposing ${action.tool}…`,
+          toolStatus: `Skipped ${unknown.length} unknown tool(s)`,
           round
         })
-        const r = await executeTool(action)
-        results.push(r)
-        if (r.proposalId) {
-          const prop = getProposal(r.proposalId)
-          if (prop) {
-            allProposals.push(prop)
-            onChunk({
-              content: `\n\n📝 **Write proposal** \`${prop.relativePath}\` (${prop.mode}) — confirm to apply.\n`,
-              done: false,
-              proposals: [prop],
-              toolStatus: `Proposal ${prop.id}`,
-              round
-            })
-          }
-        }
+      }
+      if (known.length === 0) {
+        onChunk({ content: '', done: true, citations: lastCitations, proposals: allProposals })
+        return
       }
 
-      // Execute read tools immediately
+      const readActions = known.filter((a) => isReadTool(a.tool))
+      const writeActions = known.filter((a) => isWriteTool(a.tool))
+      const results: ToolResult[] = []
+
+      // Reads first (gather facts), then write proposals
       for (const action of readActions) {
         onChunk({
           content: '',
           done: false,
-          toolStatus: `Running ${action.tool}…`,
+          toolStatus: `▸ ${action.tool}`,
           round
         })
         const r = await executeTool(action)
         results.push(r)
+        if (!r.ok) {
+          onChunk({
+            content: `\n\n*(tool ${action.tool} failed: ${r.error})*\n`,
+            done: false,
+            toolStatus: `✗ ${action.tool}`,
+            round
+          })
+        }
         if (r.ok && action.tool === 'read_note' && r.result && typeof r.result === 'object') {
           const res = r.result as { title?: string; absolutePath?: string }
           if (res.absolutePath && res.title) {
@@ -484,7 +545,38 @@ export class AIMiddleware {
         }
       }
 
-      // If only writes, stop (user must confirm); model already proposed
+      for (const action of writeActions) {
+        onChunk({
+          content: '',
+          done: false,
+          toolStatus: `▸ propose ${action.tool}`,
+          round
+        })
+        const r = await executeTool(action)
+        results.push(r)
+        if (r.proposalId) {
+          const prop = getProposal(r.proposalId)
+          if (prop) {
+            allProposals.push(prop)
+            onChunk({
+              content: `\n\n📝 **Write proposal** \`${prop.relativePath}\` (${prop.mode}) — Apply di panel.\n`,
+              done: false,
+              proposals: [prop],
+              toolStatus: `proposal ${prop.relativePath}`,
+              round
+            })
+          }
+        } else if (!r.ok) {
+          onChunk({
+            content: `\n\n*(write tool failed: ${r.error})*\n`,
+            done: false,
+            toolStatus: `✗ ${action.tool}`,
+            round
+          })
+        }
+      }
+
+      // Only writes → stop so user can Apply (still OK if reads failed)
       if (readActions.length === 0) {
         onChunk({ content: '', done: true, citations: lastCitations, proposals: allProposals })
         return

@@ -1,9 +1,9 @@
 import type { SearchEngine } from '../engine/SearchEngine'
 import type { WorkspaceEngine } from '../engine/WorkspaceEngine'
 import { graphEngine } from '../engine/GraphEngine'
-import { isKerjaVault, KERJA_CONTEXT_PRIORITY, KERJA_REL } from '../config/KerjaPaths'
+import { embeddingEngine } from './EmbeddingEngine'
+import { listAiMemoryPaths, AI_MEMORY_DIR } from './WorkspaceMemory'
 import path from 'path'
-import fs from 'fs'
 
 export type AgentRole = 'general' | 'writer' | 'researcher' | 'curator' | 'planner'
 
@@ -69,8 +69,8 @@ function estimateTokens(text: string): number {
   return Math.ceil((text || '').length / 4)
 }
 
-/** Keep modest for free-tier Gemini quotas (context burns input tokens fast) */
-const DEFAULT_TOKEN_BUDGET = 2800
+/** Slightly higher to leave room for AI Memory L1 + active note */
+const DEFAULT_TOKEN_BUDGET = 3600
 
 export class ContextEngine {
   constructor(
@@ -111,7 +111,7 @@ export class ContextEngine {
       if (remaining < 80) return false
 
       try {
-        const content = this.workspaceEngine.readFile(filePath)
+        const content = this.workspaceEngine.readFile(filePath).content
         const cap = Math.min(maxChars, remaining * 4)
         const snippet = content.slice(0, cap).trim()
         const cost = estimateTokens(snippet) + 20
@@ -130,7 +130,7 @@ export class ContextEngine {
     // ——— 1. Active document (highest priority) ———
     if (activeFilePath) {
       try {
-        const content = this.workspaceEngine.readFile(activeFilePath)
+        const content = this.workspaceEngine.readFile(activeFilePath).content
         const title = activeFilePath.split(/[/\\]/).pop()?.replace(/\.md$/i, '') || 'Untitled'
         const activeCap = Math.min(1800, Math.floor(tokenBudget * 0.35) * 4)
         activeFile = {
@@ -166,39 +166,32 @@ export class ContextEngine {
       }
     }
 
-    // ——— 4. Kerja vault essentials + Rules/SOP (Law 005) ———
+    // ——— 4. AI Memory L1 (always — workspace learning / RAG hub) ———
+    const rootEarly = this.workspaceEngine.getState().rootPath
+    if (rootEarly) {
+      const memPaths = listAiMemoryPaths(rootEarly)
+      // Cap: index first, then up to 4 more memory notes
+      let memAdded = 0
+      for (const abs of memPaths) {
+        const base = path.basename(abs)
+        const maxChars = base.startsWith('00') ? 900 : 700
+        if (tryAddSnippet(path.basename(abs, '.md'), abs, 'ai-memory', maxChars, 0)) {
+          memAdded++
+        }
+        if (memAdded >= 5 || usedTokens >= tokenBudget * 0.45) break
+      }
+    }
+
+    // ——— 5. Rules/SOP (Law 005) ———
     const qLower = (query || '').toLowerCase()
     const roleWantsRules =
       agentRole === 'writer' ||
       agentRole === 'researcher' ||
       agentRole === 'curator' ||
       agentRole === 'planner' ||
-      /sop|aturan|rules|template|prosedur|format|surat|cuti|kgb|pegawai/i.test(qLower)
-
-    const rootEarly = this.workspaceEngine.getState().rootPath
-    if (rootEarly && isKerjaVault(rootEarly)) {
-      const must = [
-        KERJA_REL.home,
-        KERJA_REL.sidebrainIndex,
-        path.join(KERJA_REL.dailyDir, new Date().toISOString().split('T')[0] + '.md')
-      ]
-      // Query-specific sidebrain / index boost
-      if (/cuti/i.test(qLower)) {
-        must.push(path.join('03 Kerjaan', 'Cuti', '00 Index Cuti.md'))
-      }
-      if (/kgb/i.test(qLower)) {
-        must.push(path.join('03 Kerjaan', 'KGB', '00 Index KGB.md'))
-      }
-      if (/pegawai|asn|nip/i.test(qLower)) {
-        must.push(KERJA_REL.pegawaiDb)
-      }
-      for (const rel of must) {
-        const abs = path.join(rootEarly, rel)
-        if (fs.existsSync(abs)) {
-          tryAddSnippet(path.basename(rel, '.md'), abs, 'kerja', 650, 0)
-        }
-      }
-    }
+      /sop|aturan|rules|template|prosedur|format|surat|cara kerja/i.test(
+        qLower
+      )
 
     {
       const systemNotes = this.searchEngine.getSystemFolderNotes()
@@ -211,37 +204,33 @@ export class ContextEngine {
       }
     }
 
-    // ——— 5. Search hits (FTS/hybrid) ———
+    // ——— 6. Semantic Search (vector embeddings — runs if EmbeddingEngine is ready) ———
+    // This is async but we must keep buildContextPackage synchronous for the existing call sites.
+    // We expose a companion async method buildContextPackageAsync() below for use when AI streams.
+    // For now, include any pre-computed semantic hits from the sync cache.
+    // (The async path in AIMiddleware calls buildContextPackageAsync instead.)
+
+    // ——— 7. FTS / Fuse hybrid search ———
     if (query.trim()) {
-      const searchResults = this.searchEngine.search({ query, limit: 5 })
+      const searchResults = this.searchEngine.searchSync({ query, limit: 6 })
       let added = 0
       for (const res of searchResults) {
         const prio = this.pathPriority(res.path)
         const maxChars = prio <= 2 ? 600 : 400
         if (tryAddSnippet(res.title, res.path, 'search', maxChars, 2)) added++
-        if (added >= 3 || usedTokens >= tokenBudget * 0.9) break
+        if (added >= 4 || usedTokens >= tokenBudget * 0.9) break
       }
     }
 
-    // ——— 6. Persona rules ———
     const agent = AGENT_ROLES[agentRole] || AGENT_ROLES.general
-    const root = this.workspaceEngine.getState().rootPath
-    const kerja = isKerjaVault(root)
     const systemRules = [
       agent.systemInstruction,
       'Markdown First: Data is stored as Markdown. Cite with [[WikiLinks]].',
       'User Owns Data: Do not invent facts. If context is insufficient, say so.',
       'Write Back: Prefer clean GitHub-flavored Markdown ready to append to notes.',
-      'Never invent names, dates, NIP, or office data not present in workspace context.'
+      `Workspace Memory: notes under "${AI_MEMORY_DIR}/" are long-term how-to memory + RAG. Prefer them; grow them with [[wikilinks]] so the graph densifies.`,
+      'If AI Memory is empty or thin, suggest bootstrap "Pelajari workspace" and use tools to fill it via write proposals.'
     ]
-    if (kerja) {
-      systemRules.push(
-        'Kerja mode (vault Obsidian Diskominfo): ikuti struktur 00 Home, 02 Harian, 03 Kerjaan, 05 Pegawai, 08 Sidebrain, 99 Templates.',
-        'Untuk cuti/KGB/surat/pegawai: utamakan Sidebrain + index Kerjaan + 05 Pegawai; jangan invent data ASN.',
-        'File resmi PDF/Word/Excel tetap di Z: (DATA PEGAWAI / SURAT), vault hanya note/index Markdown.',
-        `Daily path: ${KERJA_REL.dailyDir}/YYYY-MM-DD.md · Pegawai DB: ${KERJA_REL.pegawaiDb}`
-      )
-    }
 
     // Assemble prompt
     const parts: string[] = []
@@ -295,13 +284,79 @@ export class ContextEngine {
 
   private pathPriority(p: string): number {
     const lower = p.replace(/\\/g, '/').toLowerCase()
-    for (let i = 0; i < KERJA_CONTEXT_PRIORITY.length; i++) {
-      if (lower.includes(KERJA_CONTEXT_PRIORITY[i].replace(/\\/g, '/'))) return i
-    }
+    if (lower.includes('/ai memory/') || lower.includes('\\ai memory\\')) return 0
     if (lower.includes('/rules/')) return 10
     if (lower.includes('/sop/')) return 11
     if (lower.includes('/templates/')) return 12
     if (lower.includes('/prompt/')) return 13
     return 20
+  }
+
+  /**
+   * Async version of buildContextPackage.
+   * Runs a semantic vector search step (EmbeddingEngine) BEFORE the FTS pass
+   * to inject the most semantically relevant chunks even when keyword matching fails.
+   *
+   * Use this in AIMiddleware streaming path where async is available.
+   */
+  async buildContextPackageAsync(
+    query: string,
+    activeFilePath?: string,
+    agentRole: AgentRole = 'general',
+    tokenBudget = DEFAULT_TOKEN_BUDGET
+  ): Promise<ContextPackage> {
+    // Build the base synchronous package first
+    const pkg = this.buildContextPackage(query, activeFilePath, agentRole, tokenBudget)
+
+    // If semantic search is ready and we have budget left, augment with vector hits
+    if (embeddingEngine.isReady && query.trim()) {
+      try {
+        const hits = await embeddingEngine.search(query, 5)
+        const seenPaths = new Set(pkg.relevantFiles.map((f) => f.path.replace(/\\/g, '/')))
+        if (activeFilePath) seenPaths.add(activeFilePath.replace(/\\/g, '/'))
+
+        let budgetLeft = tokenBudget - pkg.tokenEstimate
+        const semanticAdditions: typeof pkg.relevantFiles = []
+
+        for (const hit of hits) {
+          const norm = hit.filePath.replace(/\\/g, '/')
+          if (seenPaths.has(norm)) continue
+          if (budgetLeft < 80) break
+
+          const cap = Math.min(500, budgetLeft * 4)
+          const snippet = hit.chunk.slice(0, cap).trim()
+          const cost = Math.ceil(snippet.length / 4) + 20
+          if (cost > budgetLeft) continue
+
+          const title = hit.filePath.split(/[/\\]/).pop()?.replace(/\.md$/i, '') || 'Note'
+          semanticAdditions.push({ title, path: hit.filePath, snippet, tier: 'semantic' })
+          if (!pkg.citations.some((c) => c.path === hit.filePath)) {
+            pkg.citations.push({ title, path: hit.filePath })
+          }
+          seenPaths.add(norm)
+          budgetLeft -= cost
+        }
+
+        if (semanticAdditions.length > 0) {
+          // Insert semantic results right after ai-memory tier, before search tier
+          const aiMemIdx = pkg.relevantFiles.findLastIndex((f) => f.tier === 'ai-memory')
+          pkg.relevantFiles.splice(aiMemIdx + 1, 0, ...semanticAdditions)
+
+          // Rebuild formattedContext to include new files
+          const semSection = semanticAdditions
+            .map((f) => `\n[SEMANTIC] "${f.title}" (${f.path})\n${f.snippet}`)
+            .join('\n')
+          pkg.formattedContext = pkg.formattedContext.replace(
+            '=== END OF WORKSPACE CONTEXT ===',
+            `\n=== SEMANTIC MATCHES ===\n${semSection}\n=== END OF WORKSPACE CONTEXT ===`
+          )
+          pkg.tokenEstimate = estimateTokens(pkg.formattedContext)
+        }
+      } catch (err) {
+        console.warn('[ContextEngine] Semantic search failed, falling back to FTS only:', err)
+      }
+    }
+
+    return pkg
   }
 }

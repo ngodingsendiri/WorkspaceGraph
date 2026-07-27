@@ -185,26 +185,42 @@ function isGfmTableRow(line: string): boolean {
   return t.split('|').length >= 3
 }
 
-/** Split table row on `|`, respecting GFM/Obsidian escaped `\|` inside cells. */
+/**
+ * Split table row on `|`, Obsidian-compatible:
+ * - `\|` → literal pipe in cell
+ * - `[[target|alias]]` must NOT split on the alias pipe (Obsidian table parser)
+ */
 function splitGfmCells(line: string): string[] {
   let t = line.trim()
   if (t.startsWith('|')) t = t.slice(1)
   if (t.endsWith('|')) t = t.slice(0, -1)
   const cells: string[] = []
   let cur = ''
-  for (let i = 0; i < t.length; i++) {
+  let i = 0
+  while (i < t.length) {
     // Obsidian/GFM: \| → literal pipe in cell
     if (t[i] === '\\' && t[i + 1] === '|') {
       cur += '|'
-      i++
+      i += 2
       continue
+    }
+    // Keep [[...|...]] intact so alias pipe is not a column boundary
+    if (t[i] === '[' && t[i + 1] === '[') {
+      const end = t.indexOf(']]', i + 2)
+      if (end !== -1) {
+        cur += t.slice(i, end + 2)
+        i = end + 2
+        continue
+      }
     }
     if (t[i] === '|') {
       cells.push(cur.trim())
       cur = ''
+      i++
       continue
     }
     cur += t[i]
+    i++
   }
   cells.push(cur.trim())
   return cells

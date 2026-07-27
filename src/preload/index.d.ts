@@ -19,14 +19,21 @@ export interface API {
   onWorkspaceUpdated: (callback: (state: any) => void) => () => void
 
   readFile: (filePath: string) => Promise<any>
-  writeFile: (filePath: string, content: string) => Promise<boolean>
+  writeFile: (filePath: string, content: string, expectedMtime?: number) => Promise<{ conflict: false } | { conflict: true; existingMtime: number; theirs: string; yours: string }>,
   deleteFile: (filePath: string) => Promise<boolean>
   createFile: (filePath: string, content?: string) => Promise<boolean>
   createFolder: (folderPath: string) => Promise<boolean>
-  renameFile: (oldPath: string, newPath: string) => Promise<boolean>
+  renameFile: (oldPath: string, newPath: string) => Promise<{ ok: boolean; renamedLinks: number; affectedFiles: string[] }>
   openFileExternal: (filePath: string) => Promise<{ ok: boolean; error?: string }>
 
   getGraphData: () => Promise<any>
+  getGraphSkeleton: () => Promise<{
+    nodes: any[]
+    edges: any[]
+    nodeCount: number
+    edgeCount: number
+    realNodeCount: number
+  }>
   getGraphNeighbors: (nodeId: string, depth?: number) => Promise<any>
   getLocalGraph: (opts: {
     nodeIdOrPath: string
@@ -183,6 +190,12 @@ export interface API {
     baseUrl?: string
     path?: string
   }>
+  getEmbeddingStatus: () => Promise<{
+    state: 'idle' | 'loading_model' | 'indexing' | 'ready'
+    totalChunks: number
+    indexedFiles: number
+    modelReady: boolean
+  }>
   configureAIProvider: (
     providerId: string,
     apiKey?: string,
@@ -220,6 +233,19 @@ export interface API {
   rejectWriteProposal: (proposalId: string) => Promise<{ ok: boolean }>
   listWriteProposals: () => Promise<WriteProposal[]>
   getWriteProposal: (proposalId: string) => Promise<WriteProposal | null>
+  ensureAiMemory: () => Promise<{
+    ok: boolean
+    created: string[]
+    existing: string[]
+    dir?: string
+    error?: string
+  }>
+  listAiMemory: () => Promise<{
+    ok: boolean
+    dir: string
+    files: string[]
+    core?: string[]
+  }>
 
   saveChat: (conv: any) => Promise<{ ok: boolean; path?: string; error?: string }>
   listChats: () => Promise<any[]>

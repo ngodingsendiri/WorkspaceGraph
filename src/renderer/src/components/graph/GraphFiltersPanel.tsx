@@ -16,7 +16,8 @@ import { Icon } from '../ui/Icons'
 
 export type OrphanMode = 'all' | 'hide' | 'only'
 export type HubMode = 'all' | 'dim' | 'hide'
-export type ColorByMode = 'type' | 'folder'
+/** default = Obsidian mono (+ color groups); type/folder = extensions */
+export type ColorByMode = 'default' | 'type' | 'folder'
 export type { GraphPerfMode }
 
 export interface GraphFiltersPanelProps {
@@ -122,7 +123,7 @@ function displayPatch(
     dimHubs: hubMode === 'dim',
     hideOrphans: orphanMode === 'hide',
     arrows: extra?.arrows ?? false,
-    textFade: extra?.textFade ?? 1,
+    textFade: extra?.textFade ?? 0.9,
     nodeSize: extra?.nodeSize ?? 1,
     lineThickness: extra?.lineThickness ?? 1,
     existingFilesOnly: extra?.existingFilesOnly ?? true,
@@ -140,6 +141,7 @@ function modesPatch(
   return { orphanMode, hubMode, searchMode }
 }
 
+/** Labels match Obsidian Graph settings copy where possible */
 const FORCE_SLIDERS: {
   key: keyof GraphForceSettings
   label: string
@@ -149,25 +151,46 @@ const FORCE_SLIDERS: {
   /** Display transform (e.g. show positive repel strength) */
   format: (v: number) => string
 }[] = [
-  { key: 'center', label: 'Center', min: 0, max: 0.25, step: 0.01, format: (v) => v.toFixed(2) },
+  {
+    key: 'center',
+    label: 'Center force',
+    min: 0,
+    max: 0.25,
+    step: 0.01,
+    format: (v) => v.toFixed(2)
+  },
   {
     key: 'charge',
-    label: 'Repel',
+    label: 'Repel force',
     min: -400,
     max: -10,
     step: 5,
     format: (v) => String(Math.abs(v))
   },
   {
+    key: 'linkStr',
+    label: 'Link force',
+    min: 0.05,
+    max: 1,
+    step: 0.05,
+    format: (v) => v.toFixed(2)
+  },
+  {
     key: 'linkDist',
-    label: 'Link dist',
+    label: 'Link distance',
     min: 20,
     max: 200,
     step: 2,
     format: (v) => String(Math.round(v))
   },
-  { key: 'linkStr', label: 'Link str', min: 0.05, max: 1, step: 0.05, format: (v) => v.toFixed(2) },
-  { key: 'collide', label: 'Collide', min: 0, max: 1, step: 0.05, format: (v) => v.toFixed(2) }
+  {
+    key: 'collide',
+    label: 'Collision',
+    min: 0,
+    max: 1,
+    step: 0.05,
+    format: (v) => v.toFixed(2)
+  }
 ]
 
 const DISPLAY_SLIDERS: {
@@ -180,7 +203,7 @@ const DISPLAY_SLIDERS: {
 }[] = [
   {
     key: 'textFade',
-    label: 'Text fade threshold',
+    label: 'Text fade multiplier',
     min: 0.4,
     max: 2.5,
     step: 0.05,
@@ -188,7 +211,7 @@ const DISPLAY_SLIDERS: {
   },
   {
     key: 'nodeSize',
-    label: 'Node size',
+    label: 'Node size multiplier',
     min: 0.25,
     max: 2,
     step: 0.05,
@@ -196,7 +219,7 @@ const DISPLAY_SLIDERS: {
   },
   {
     key: 'lineThickness',
-    label: 'Line thickness',
+    label: 'Link thickness',
     min: 0.25,
     max: 3,
     step: 0.05,
@@ -724,7 +747,7 @@ export const GraphFiltersPanel: React.FC<GraphFiltersPanelProps> = ({
             checked={displayOpts.arrows}
             onChange={(e) => onDisplayOptsCommit({ ...displayOpts, arrows: e.target.checked })}
           />
-          Panah arah wikilink
+          Arrows
         </label>
         <label className="graph-check">
           <input
@@ -735,7 +758,7 @@ export const GraphFiltersPanel: React.FC<GraphFiltersPanelProps> = ({
               persistDisplayToggles(e.target.checked, showTagEdges, showLegend)
             }}
           />
-          Label
+          Text
         </label>
         <label className="graph-check">
           <input
@@ -746,7 +769,7 @@ export const GraphFiltersPanel: React.FC<GraphFiltersPanelProps> = ({
               persistDisplayToggles(showLabels, e.target.checked, showLegend)
             }}
           />
-          Edge tag (default off)
+          Tags as links (co-tag edges)
         </label>
         <label className="graph-check">
           <input
@@ -761,12 +784,13 @@ export const GraphFiltersPanel: React.FC<GraphFiltersPanelProps> = ({
         </label>
 
         <div className="graph-settings-row">
-          <label>Warna node</label>
+          <label>Node color</label>
           <div className="graph-filter-seg" role="group" aria-label="Color by">
             {(
               [
-                ['type', 'Tipe'],
-                ['folder', 'Folder']
+                ['default', 'Default'],
+                ['folder', 'Folder'],
+                ['type', 'Type']
               ] as const
             ).map(([id, lab]) => (
               <button
@@ -780,7 +804,9 @@ export const GraphFiltersPanel: React.FC<GraphFiltersPanelProps> = ({
               </button>
             ))}
           </div>
-          <p className="graph-filter-hint">Color groups menimpa warna tipe/folder.</p>
+          <p className="graph-filter-hint">
+            Default = mono Obsidian; Color groups override. Folder/Type = extension.
+          </p>
         </div>
       </Section>
 
@@ -827,7 +853,7 @@ export const GraphFiltersPanel: React.FC<GraphFiltersPanelProps> = ({
               })
             }}
           />
-          Animate (graph tetap hidup pelan)
+          Animate
         </label>
         {FORCE_SLIDERS.map((s) => (
           <label key={s.key} className="graph-filter-range">
@@ -867,7 +893,8 @@ export const GraphFiltersPanel: React.FC<GraphFiltersPanelProps> = ({
           </button>
         </div>
         <p className="graph-filter-hint">
-          Geser slider → layout hidup; lepas → simpan ke settings.
+          Like Obsidian Forces. Drag = live layout; release = save. Reset / Default
+          preset restores built-in values.
         </p>
       </Section>
 

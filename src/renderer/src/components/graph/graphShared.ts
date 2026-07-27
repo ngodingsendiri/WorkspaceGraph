@@ -1,15 +1,136 @@
 /**
- * Shared graph view helpers — force defaults, LOD, radius, Obsidian-like forces.
+ * Shared graph view helpers — force defaults, LOD, radius, Obsidian palette.
+ * Design authority: Obsidian Graph (force-directed, organic clusters).
  * Used by GraphCanvas + LocalGraphCanvas to avoid drift.
+ *
+ * Obsidian model (what we match):
+ * - Single default node tint; color groups override (optional type/folder modes)
+ * - Thin semi-transparent edges; solid circles; hollow ghosts
+ * - Nodes/edges scale with zoom (world space); labels readable + text-fade
+ * - Soft center, many-body repel, link spring; optional Animate breathe
+ * - Tech: we use Canvas/SVG + d3-force (Obsidian uses WebGL) — same feel, not same GPU stack
  */
 import type { GraphForceSettings, GraphPerfMode } from '../../store/graphStore'
 
+/**
+ * Obsidian-like default forces (d3 units, not Obsidian UI 0–1 sliders).
+ * Goal: soft center, clear link springs, room to breathe, settle without freeze.
+ */
 export const DEFAULT_FORCE_SETTINGS: GraphForceSettings = {
-  center: 0.06,
-  charge: -90,
-  linkDist: 68,
-  linkStr: 0.4,
-  collide: 0.6
+  center: 0.045,
+  charge: -125,
+  linkDist: 52,
+  linkStr: 0.58,
+  collide: 0.68
+}
+
+/**
+ * Simulation cooling — closer to Obsidian settle (organic → stable).
+ * animateAlphaTarget: gentle “breathe” when Animate is on.
+ */
+export const OBSIDIAN_SIM = {
+  /** friction — higher = settles smoother, less jitter */
+  velocityDecay: 0.42,
+  velocityDecayLarge: 0.5,
+  /** cool-down rate — lower = more ticks to form clusters */
+  alphaDecay: 0.028,
+  alphaDecayLarge: 0.036,
+  alphaMin: 0.001,
+  /** initial heat on (re)build */
+  alphaStart: 0.72,
+  alphaStartLarge: 0.55,
+  /** continuous animate (Obsidian “Animate”) */
+  animateAlphaTarget: 0.014
+} as const
+
+/**
+ * Obsidian-like visual tokens (not rainbow-by-type).
+ * Color groups / folder / type modes override the default note fill.
+ */
+export const OBSIDIAN_VISUAL = {
+  dark: {
+    bg: '#1e1e1e',
+    edge: 'rgba(170, 175, 190, 0.38)',
+    edgeTag: 'rgba(150, 155, 170, 0.22)',
+    edgeHot: 'rgba(167, 139, 250, 0.9)',
+    label: 'rgba(228, 230, 237, 0.92)',
+    labelBg: 'rgba(20, 20, 22, 0.72)',
+    nodeStroke: 'rgba(0, 0, 0, 0.35)',
+    nodeDefault: '#7c6cf0',
+    nodeGhost: 'rgba(160, 165, 180, 0.55)',
+    nodeTag: '#c9a227',
+    nodeAttachment: '#5a9e78',
+    nodeCenter: '#a694f0'
+  },
+  light: {
+    bg: '#f5f5f5',
+    edge: 'rgba(50, 55, 70, 0.32)',
+    edgeTag: 'rgba(50, 55, 70, 0.18)',
+    edgeHot: 'rgba(100, 80, 210, 0.85)',
+    label: 'rgba(30, 32, 40, 0.92)',
+    labelBg: 'rgba(255, 255, 255, 0.88)',
+    nodeStroke: 'rgba(255, 255, 255, 0.85)',
+    nodeDefault: '#6b5ce7',
+    nodeGhost: 'rgba(90, 95, 110, 0.5)',
+    nodeTag: '#b8860b',
+    nodeAttachment: '#3d8a5c',
+    nodeCenter: '#6d5bd0'
+  }
+} as const
+
+/** Legacy type tints — only used when Color by = Type (not Obsidian default). */
+export const TYPE_NODE_COLORS = {
+  dark: {
+    knowledge: '#a694f0',
+    project: '#5ec8e8',
+    task: '#e8b04a',
+    daily: '#5ed090',
+    people: '#f09070',
+    template: '#c090e0',
+    document: '#7ab0e0',
+    sop: '#e878a0',
+    other: '#a0aab8'
+  },
+  light: {
+    knowledge: '#6b5bb5',
+    project: '#2a8aab',
+    task: '#c48420',
+    daily: '#2f8f58',
+    people: '#c45a35',
+    template: '#8a5aa8',
+    document: '#3a7aa8',
+    sop: '#c0456a',
+    other: '#5a6575'
+  }
+} as const
+
+/** Resolve fill for a graph node — Obsidian: mono default + group override. */
+export function resolveObsidianNodeFill(opts: {
+  isLight: boolean
+  isGhost?: boolean
+  isTag?: boolean
+  isAttachment?: boolean
+  type?: string
+  relativePath?: string
+  groupColor?: string | null
+  /** default = Obsidian mono; type/folder = extensions */
+  colorBy?: 'default' | 'type' | 'folder'
+}): string {
+  const theme = opts.isLight ? OBSIDIAN_VISUAL.light : OBSIDIAN_VISUAL.dark
+  if (opts.isGhost) return theme.nodeGhost
+  if (opts.isTag) return theme.nodeTag
+  if (opts.isAttachment) return theme.nodeAttachment
+  if (opts.groupColor) return opts.groupColor
+  const mode = opts.colorBy || 'default'
+  if (mode === 'folder') {
+    return folderColor(opts.relativePath || '', opts.isLight)
+  }
+  if (mode === 'type') {
+    const bag = opts.isLight ? TYPE_NODE_COLORS.light : TYPE_NODE_COLORS.dark
+    const t = (opts.type || 'other') as keyof typeof bag
+    return bag[t] || bag.other
+  }
+  return theme.nodeDefault
 }
 
 /** Obsidian-like force presets (name → settings) */
@@ -20,15 +141,15 @@ export const FORCE_PRESETS: Record<string, { label: string; forces: GraphForceSe
   },
   compact: {
     label: 'Compact',
-    forces: { center: 0.1, charge: -55, linkDist: 42, linkStr: 0.55, collide: 0.75 }
+    forces: { center: 0.08, charge: -70, linkDist: 38, linkStr: 0.7, collide: 0.8 }
   },
   relaxed: {
     label: 'Relaxed',
-    forces: { center: 0.035, charge: -140, linkDist: 100, linkStr: 0.28, collide: 0.45 }
+    forces: { center: 0.03, charge: -165, linkDist: 85, linkStr: 0.35, collide: 0.5 }
   },
   clustered: {
     label: 'Clustered',
-    forces: { center: 0.02, charge: -180, linkDist: 55, linkStr: 0.65, collide: 0.55 }
+    forces: { center: 0.02, charge: -200, linkDist: 48, linkStr: 0.72, collide: 0.6 }
   }
 }
 
@@ -62,10 +183,10 @@ export function resolveLod(nodeCount: number, perfMode: GraphPerfMode = 'auto'):
   return 'full'
 }
 
-/** Node radius from degree (Obsidian-like: hubs larger). scale multiplies for display knob. */
+/** Node radius from degree (Obsidian: modest hubs, not huge orbs). scale = display knob. */
 export function nodeRadius(degree: number, scale = 1, hubDim = false): number {
-  const base = Math.max(3, Math.min(11, 3 + Math.sqrt(Math.max(0, degree)) * 1.35))
-  return base * scale * (hubDim ? 0.62 : 1)
+  const base = Math.max(2.6, Math.min(7.5, 2.8 + Math.sqrt(Math.max(0, degree)) * 1.05))
+  return base * scale * (hubDim ? 0.7 : 1)
 }
 
 /** Ideal link distance — longer for hubs so clusters breathe (Obsidian-ish). */
@@ -104,12 +225,14 @@ export function lerp(a: number, b: number, t: number): number {
 /**
  * Obsidian-like text fade by zoom.
  * Higher textFade → need more zoom-in before labels are solid.
+ * Default textFade ~0.9: labels soft at far zoom, solid when closer (Obsidian feel).
  */
 export function labelZoomAlpha(zoomK: number, textFade: number, degree: number): number {
-  const thr = Math.max(0.35, textFade || 1)
+  const thr = Math.max(0.35, textFade || 0.9)
   const boost = Math.min(0.35, Math.sqrt(Math.max(0, degree)) * 0.06)
+  // Hubs get labels slightly earlier
   const fullAt = thr * (1 - boost * 0.55)
-  const startAt = fullAt * 0.42
+  const startAt = fullAt * 0.38
   if (zoomK <= startAt) return 0
   if (zoomK >= fullAt) return 1
   return smooth01((zoomK - startAt) / Math.max(0.0001, fullAt - startAt))

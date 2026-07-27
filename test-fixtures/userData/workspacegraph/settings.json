@@ -1,0 +1,8 @@
+{
+  "ai": {
+    "provider1": {
+      "apiKey": "enc:v1:ZW5jcnlwdGVkOnNlY3JldA=="
+    }
+  },
+  "version": 1
+}

@@ -50,6 +50,7 @@ export type IconName =
   | 'zoomIn'
   | 'zoomOut'
   | 'fitScreen'
+  | 'psychology'
 
 /**
  * App icon key → Material Symbols ligature
@@ -97,7 +98,8 @@ export const MATERIAL_ICON: Record<IconName, string> = {
   checkCircle: 'check_circle',
   zoomIn: 'zoom_in',
   zoomOut: 'zoom_out',
-  fitScreen: 'fit_screen'
+  fitScreen: 'fit_screen',
+  psychology: 'psychology'
 }
 
 export interface IconProps {
@@ -110,12 +112,9 @@ export interface IconProps {
   title?: string
   /** Material fill: 0 outline, 1 filled */
   fill?: 0 | 1
+  onClick?: () => void
 }
 
-/**
- * Google Material Symbols Outlined icon.
- * Requires Material Symbols font loaded (see index.html / globals.css).
- */
 export const Icon: React.FC<IconProps> = ({
   name,
   size = 16,
@@ -123,7 +122,8 @@ export const Icon: React.FC<IconProps> = ({
   strokeWidth,
   style,
   title,
-  fill = 0
+  fill = 0,
+  onClick
 }) => {
   const glyph = MATERIAL_ICON[name]
   if (!glyph) return null
@@ -148,6 +148,7 @@ export const Icon: React.FC<IconProps> = ({
       aria-hidden={title ? undefined : true}
       role={title ? 'img' : undefined}
       title={title}
+      onClick={onClick}
     >
       {glyph}
     </span>

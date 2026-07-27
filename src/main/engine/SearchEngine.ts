@@ -2,19 +2,8 @@ import Fuse from 'fuse.js'
 import type { ParsedMarkdown } from './MarkdownEngine'
 import { indexDatabase } from './IndexDatabase'
 import { graphEngine } from './GraphEngine'
-
-export interface SearchResult {
-  id: string
-  title: string
-  path: string
-  relativePath: string
-  score: number
-  type: string
-  tags: string[]
-  preview?: string
-  matchedField: 'title' | 'content' | 'tag' | 'path' | 'backlink'
-  source?: 'fts' | 'fuse' | 'meta'
-}
+import { getSearchIndexWorker } from '../workers/worker-pool'
+import type { IndexEntry, SearchResult } from '../workers/worker-pool'
 
 export interface SearchOptions {
   query: string
@@ -24,25 +13,44 @@ export interface SearchOptions {
   searchIn?: ('title' | 'content' | 'tags' | 'path')[]
 }
 
-interface IndexEntry {
-  id: string
-  title: string
-  path: string
-  relativePath: string
-  content: string
-  tags: string[]
-  type: string
-  rawContent: string
-  updatedAt?: string
-  headings?: string
-}
-
 export class SearchEngine {
   private index: Map<string, IndexEntry> = new Map()
   private fuse: Fuse<IndexEntry> | null = null
   private useFts = true
 
-  private initFuse() {
+  setUseFts(enabled: boolean): void {
+    this.useFts = enabled
+  }
+
+  /** Drop in-memory search state (workspace close / switch). SQLite closed separately. */
+  clear(): void {
+    this.index.clear()
+    this.fuse = null
+    this.searchWorker = null
+    this.orphanIds = new Set()
+  }
+
+  private searchWorker: Awaited<ReturnType<typeof getSearchIndexWorker>> | null = null
+  private useWorker = true
+
+  private async ensureWorker(): Promise<boolean> {
+    if (this.searchWorker) return true
+    if (!this.useWorker) return false
+    // Skip worker in test environment (vitest sets this)
+    if (process.env.VITEST || process.env.NODE_ENV === 'test') {
+      this.useWorker = false
+      return false
+    }
+    try {
+      this.searchWorker = await getSearchIndexWorker()
+      return true
+    } catch {
+      this.useWorker = false
+      return false
+    }
+  }
+
+  private initFuseLocal() {
     this.fuse = new Fuse(Array.from(this.index.values()), {
       keys: [
         { name: 'title', weight: 0.4 },
@@ -57,27 +65,62 @@ export class SearchEngine {
     })
   }
 
-  setUseFts(enabled: boolean): void {
-    this.useFts = enabled
-  }
-
-  /** Drop in-memory search state (workspace close / switch). SQLite closed separately. */
-  clear(): void {
-    this.index.clear()
-    this.fuse = null
-    this.orphanIds = new Set()
-  }
-
-  buildIndex(parsedFiles: ParsedMarkdown[]): void {
-    this.index.clear()
-    for (const file of parsedFiles) {
-      this.addToIndex(file, false, false)
+  private rebuildWorkerIndex(): void {
+    const hasWorker = this.searchWorker !== null || this.useWorker
+    if (hasWorker) {
+      this.ensureWorker().then((ok) => {
+        if (ok && this.searchWorker) {
+          this.searchWorker.post({ type: 'buildIndex', entries: Array.from(this.index.values()) }).catch(() => {
+            this.initFuseLocal()
+          })
+        } else {
+          this.initFuseLocal()
+        }
+      })
+    } else {
+      this.initFuseLocal()
     }
-    this.initFuse()
-    // Persist to SQLite cache (Law 009)
+  }
+
+  async buildIndex(parsedFiles: ParsedMarkdown[]): Promise<void> {
+    this.index.clear()
+    const entries: IndexEntry[] = []
+    for (const file of parsedFiles) {
+      const entry: IndexEntry = {
+        id: file.id,
+        title: file.title,
+        path: file.filePath,
+        relativePath: file.relativePath,
+        content: file.content,
+        tags: file.tags,
+        type: (file.frontmatter.type as string) || 'note',
+        rawContent: file.content,
+        updatedAt:
+          this.coerceDate(file.frontmatter.updated) ||
+          this.coerceDate(file.frontmatter.date) ||
+          undefined,
+        headings: (file.headings || []).map((h) => h.text).join(' ')
+      }
+      this.index.set(file.id, entry)
+      entries.push(entry)
+    }
+    await this.buildFuseWorker(entries)
     if (indexDatabase.isOpen()) {
       indexDatabase.rebuild(parsedFiles)
     }
+  }
+
+  private async buildFuseWorker(entries: IndexEntry[]): Promise<void> {
+    const hasWorker = await this.ensureWorker()
+    if (hasWorker && this.searchWorker) {
+      try {
+        await this.searchWorker.post({ type: 'buildIndex', entries })
+        return
+      } catch {
+        // Fall through to local
+      }
+    }
+    this.initFuseLocal()
   }
 
   private coerceDate(val: unknown): string | undefined {
@@ -89,7 +132,7 @@ export class SearchEngine {
   }
 
   addToIndex(file: ParsedMarkdown, rebuildFuse = true, writeDb = true): void {
-    this.index.set(file.id, {
+    const entry: IndexEntry = {
       id: file.id,
       title: file.title,
       path: file.filePath,
@@ -103,12 +146,13 @@ export class SearchEngine {
         this.coerceDate(file.frontmatter.date) ||
         undefined,
       headings: (file.headings || []).map((h) => h.text).join(' ')
-    })
+    }
+    this.index.set(file.id, entry)
     if (writeDb && indexDatabase.isOpen()) {
       indexDatabase.upsertNote(file)
     }
     if (rebuildFuse) {
-      this.initFuse()
+      this.rebuildWorkerIndex()
     }
   }
 
@@ -117,7 +161,7 @@ export class SearchEngine {
     if (indexDatabase.isOpen()) {
       indexDatabase.removeById(fileId)
     }
-    this.initFuse()
+    this.rebuildWorkerIndex()
   }
 
   rebuildSqliteFromMemory(): number {
@@ -141,7 +185,8 @@ export class SearchEngine {
     return indexDatabase.rebuild(files as ParsedMarkdown[])
   }
 
-  search(options: SearchOptions): SearchResult[] {
+  /** Synchronous search using local Fuse + FTS — for backward compat with sync call sites. */
+  searchSync(options: SearchOptions): SearchResult[] {
     const { query, limit = 20, filterType, filterTag } = options
     const q = (query || '').trim()
 
@@ -155,13 +200,11 @@ export class SearchEngine {
       return this.searchOrphans(limit)
     }
 
-    // backlinks:NoteTitle or backlink:NoteTitle
     const backMatch = q.match(/^backlinks?:(.+)$/i)
     if (backMatch) {
       return this.searchBacklinks(backMatch[1].trim(), limit)
     }
 
-    // path:foo
     const pathMatch = q.match(/^path:(.+)$/i)
     if (pathMatch) {
       return this.searchByPathFragment(pathMatch[1].trim(), limit)
@@ -172,7 +215,6 @@ export class SearchEngine {
       return this.searchByTagExact(tagMatch[1], limit)
     }
 
-    // Hybrid: FTS first (keyword), then fuse fill for fuzzy typos
     const results: SearchResult[] = []
     const seen = new Set<string>()
 
@@ -183,7 +225,6 @@ export class SearchEngine {
         if (filterTag && !hit.tags.some((t) => t.toLowerCase() === filterTag.toLowerCase()))
           continue
         seen.add(hit.id)
-        // bm25 is negative; more negative ≈ better → map to 0–100
         const score = Math.max(0, Math.min(100, 80 + hit.rank * -2))
         results.push({
           id: hit.id,
@@ -206,8 +247,7 @@ export class SearchEngine {
         const entry = res.item
         if (seen.has(entry.id)) continue
         if (filterType && entry.type !== filterType) continue
-        if (filterTag && !entry.tags.some((t) => t.toLowerCase() === filterTag.toLowerCase()))
-          continue
+        if (filterTag && !entry.tags.some((t) => t.toLowerCase() === filterTag.toLowerCase())) continue
 
         let preview: string | undefined
         let matchedField: SearchResult['matchedField'] = 'content'
@@ -247,6 +287,123 @@ export class SearchEngine {
     }
 
     return results.slice(0, limit)
+  }
+
+  async search(options: SearchOptions): Promise<SearchResult[]> {
+    const { query, limit = 20, filterType, filterTag } = options
+    const q = (query || '').trim()
+
+    if (!q) {
+      return this.getRecentFiles(limit)
+    }
+
+    const lower = q.toLowerCase()
+
+    if (lower === 'orphan:true' || lower === 'is:orphan') {
+      return this.searchOrphans(limit)
+    }
+
+    const backMatch = q.match(/^backlinks?:(.+)$/i)
+    if (backMatch) {
+      return this.searchBacklinks(backMatch[1].trim(), limit)
+    }
+
+    const pathMatch = q.match(/^path:(.+)$/i)
+    if (pathMatch) {
+      return this.searchByPathFragment(pathMatch[1].trim(), limit)
+    }
+
+    const tagMatch = q.match(/^#([a-zA-Z0-9_/-]+)$/)
+    if (tagMatch) {
+      return this.searchByTagExact(tagMatch[1], limit)
+    }
+
+    const results: SearchResult[] = []
+    const seen = new Set<string>()
+
+    if (this.useFts && indexDatabase.isOpen()) {
+      const ftsHits = indexDatabase.searchFts(q, limit)
+      for (const hit of ftsHits) {
+        if (filterType && hit.type !== filterType) continue
+        if (filterTag && !hit.tags.some((t) => t.toLowerCase() === filterTag.toLowerCase()))
+          continue
+        seen.add(hit.id)
+        const score = Math.max(0, Math.min(100, 80 + hit.rank * -2))
+        results.push({
+          id: hit.id,
+          title: hit.title,
+          path: hit.path,
+          relativePath: hit.relativePath,
+          score,
+          type: hit.type,
+          tags: hit.tags,
+          preview: hit.snippet || undefined,
+          matchedField: 'content',
+          source: 'fts'
+        })
+      }
+    }
+
+    if (results.length < limit) {
+      const workerResults = await this.searchFuseWorker(q, limit)
+      for (const r of workerResults) {
+        if (seen.has(r.id)) continue
+        if (filterType && r.type !== filterType) continue
+        if (filterTag && !r.tags.some((t) => t.toLowerCase() === filterTag.toLowerCase())) continue
+        results.push(r)
+        seen.add(r.id)
+        if (results.length >= limit) break
+      }
+    }
+
+    return results.slice(0, limit)
+  }
+
+  private async searchFuseWorker(query: string, limit: number): Promise<SearchResult[]> {
+    const hasWorker = await this.ensureWorker()
+    if (hasWorker && this.searchWorker) {
+      try {
+        const resp = await this.searchWorker.post({ type: 'fuzzySearch', query, limit })
+        if (resp.type === 'fuzzyResult') return resp.results
+      } catch {
+        // Fall through to local
+      }
+    }
+    if (!this.fuse) return []
+    const fuseResults = this.fuse.search(query)
+    const out: SearchResult[] = []
+    for (const res of fuseResults) {
+      const entry = res.item
+      let preview: string | undefined
+      let matchedField: SearchResult['matchedField'] = 'content'
+      if (res.matches && res.matches.length > 0) {
+        const match = res.matches[0]
+        if (match.key === 'title') matchedField = 'title'
+        else if (match.key === 'tags') matchedField = 'tag'
+        else if (match.key === 'relativePath') matchedField = 'path'
+        if (match.key === 'content' && match.indices && match.indices.length > 0) {
+          const matchStart = match.indices[0][0]
+          const start = Math.max(0, matchStart - 60)
+          const end = Math.min(entry.rawContent.length, matchStart + query.length + 60)
+          preview = '...' + entry.rawContent.slice(start, end).replace(/\n/g, ' ').trim() + '...'
+        }
+      }
+      if (!preview) preview = entry.rawContent.slice(0, 120).replace(/\n/g, ' ').trim()
+      out.push({
+        id: entry.id,
+        title: entry.title,
+        path: entry.path,
+        relativePath: entry.relativePath,
+        score: (1 - (res.score || 0)) * 100,
+        type: entry.type,
+        tags: entry.tags,
+        preview,
+        matchedField,
+        source: 'fuse'
+      })
+      if (out.length >= limit) break
+    }
+    return out
   }
 
   searchBacklinks(targetTitle: string, limit = 50): SearchResult[] {

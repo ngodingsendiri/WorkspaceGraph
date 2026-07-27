@@ -26,6 +26,27 @@ export interface EditorStore {
   backlinks: { title: string; path: string }[]
   outgoing: { title: string; path: string }[]
 
+  // Merge dialog state
+  mergeDialog: {
+    isOpen: boolean
+    filePath: string
+    theirs: string
+    yours: string
+    base?: string
+    onResolve: ((content: string) => void) | null
+    onClose: (() => void) | null
+  } | null
+  openMergeDialog: (params: {
+    filePath: string
+    theirs: string
+    yours: string
+    base?: string
+    onResolve: (content: string) => void
+    onClose: () => void
+  }) => void
+  closeMergeDialog: () => void
+  resolveMergeDialog: (content: string) => void
+
   openTab: (filePath: string) => Promise<void>
   closeTab: (tabId: string) => void
   /** Close tab without writing (file already deleted / moved away). */
@@ -395,7 +416,34 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
         // Already clean and no pending timer work
         if (!tab.isDirty && !saveTimers.has(tabId)) return
         try {
-          await window.api.writeFile(tab.path, snapshot)
+          const result = await window.api.writeFile(tab.path, snapshot)
+          if (result && result.conflict) {
+            // Conflict detected - open merge dialog
+            const tab = get().tabs.find((t) => t.id === tabId)
+            if (!tab) return
+get().openMergeDialog({
+              filePath: tab.path,
+              theirs: result.theirs,
+              yours: snapshot,
+              onResolve: (resolvedContent: string) => {
+                // Retry save with resolved content
+                void get().saveTab(tabId)
+                // Update tab content with resolved content
+                set((state) => ({
+                  tabs: state.tabs.map((t) =>
+                    t.id === tabId ? { ...t, content: resolvedContent, isDirty: true } : t
+                  ),
+                }))
+              },
+              onClose: () => {
+                // User cancelled - keep tab dirty
+                set((state) => ({
+                  tabs: state.tabs.map((t) => (t.id === tabId ? { ...t, isDirty: true } : t)),
+                }))
+              },
+            })
+            return
+          }
           // Live Preview does not use pre-rendered HTML — skip markdown:render on save
           set({
             tabs: get().tabs.map((t) => {
@@ -485,5 +533,53 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
     } catch (err) {
       console.warn('refreshPreview failed:', err)
     }
-  }
+  },
+
+  // Merge dialog state
+  mergeDialog: {
+    isOpen: false,
+    filePath: '',
+    theirs: '',
+    yours: '',
+    base: '',
+    onResolve: null as ((content: string) => void) | null,
+    onClose: null as (() => void) | null,
+  },
+
+  openMergeDialog: (params: {
+    filePath: string
+    theirs: string
+    yours: string
+    base?: string
+    onResolve: (content: string) => void
+    onClose: () => void
+  }) => {
+    set({
+      mergeDialog: {
+        isOpen: true,
+        filePath: params.filePath,
+        theirs: params.theirs,
+        yours: params.yours,
+        base: params.base || '',
+        onResolve: params.onResolve,
+        onClose: params.onClose,
+      },
+    })
+  },
+
+  closeMergeDialog: () => {
+    set((state) => {
+      if (!state.mergeDialog) return state
+      if (state.mergeDialog.onClose) state.mergeDialog.onClose()
+      return { mergeDialog: { ...state.mergeDialog, isOpen: false, onResolve: null, onClose: null, filePath: '', theirs: '', yours: '', base: '' } }
+    })
+  },
+
+  resolveMergeDialog: (content: string) => {
+    set((state) => {
+      if (!state.mergeDialog) return state
+      if (state.mergeDialog.onResolve) state.mergeDialog.onResolve(content)
+      return { mergeDialog: { ...state.mergeDialog, isOpen: false, onResolve: null, onClose: null, filePath: '', theirs: '', yours: '', base: '' } }
+    })
+  },
 }))

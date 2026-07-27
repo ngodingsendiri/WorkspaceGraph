@@ -3,7 +3,7 @@
  *
  * IMPORTANT (CM6 rule): block decorations MUST NOT come from ViewPlugin —
  * they throw RangeError "Block decorations may not be specified via plugins"
- * and crash the React editor. Tables use inline line-replace widgets instead.
+ * and crash the React editor. GFM tables use a StateField + block widgets.
  *
  * Decorations are best-effort: builder failures return empty set.
  */
@@ -15,7 +15,7 @@ import {
   WidgetType,
   type ViewUpdate
 } from '@codemirror/view'
-import { RangeSetBuilder } from '@codemirror/state'
+import { EditorState, type Extension, RangeSetBuilder, StateField } from '@codemirror/state'
 
 function rangeActive(view: EditorView, from: number, to: number): boolean {
   for (const r of view.state.selection.ranges) {
@@ -93,6 +93,255 @@ let openHandler: WikiOpenHandler | null = null
 export function setLivePreviewOpenHandler(fn: WikiOpenHandler | null): void {
   openHandler = fn
 }
+
+/* ── GFM / Obsidian tables (StateField block widgets) ─────────────── */
+
+function isGfmSepRow(line: string): boolean {
+  const t = line.trim()
+  if (!t.includes('-') || !t.includes('|')) return false
+  return /^[\s|:=-]+$/.test(t) && /:-|-+/.test(t)
+}
+
+function isGfmTableRow(line: string): boolean {
+  const t = line.trim()
+  if (!t || t.startsWith('```') || t.startsWith('#')) return false
+  if (!(t.startsWith('|') || t.endsWith('|'))) return false
+  // ≥2 pipes after trim edges usually means ≥1 cell with fences
+  return (t.match(/\|/g) || []).length >= 2
+}
+
+/**
+ * Split cells like Obsidian: `\|` literal, `[[target|alias]]` not a column break.
+ */
+function splitTableCells(line: string): string[] {
+  let t = line.trim()
+  if (t.startsWith('|')) t = t.slice(1)
+  if (t.endsWith('|')) t = t.slice(0, -1)
+  const cells: string[] = []
+  let cur = ''
+  let i = 0
+  while (i < t.length) {
+    if (t[i] === '\\' && t[i + 1] === '|') {
+      cur += '|'
+      i += 2
+      continue
+    }
+    if (t[i] === '[' && t[i + 1] === '[') {
+      const end = t.indexOf(']]', i + 2)
+      if (end !== -1) {
+        cur += t.slice(i, end + 2)
+        i = end + 2
+        continue
+      }
+    }
+    if (t[i] === '|') {
+      cells.push(cur.trim())
+      cur = ''
+      i++
+      continue
+    }
+    cur += t[i]
+    i++
+  }
+  cells.push(cur.trim())
+  return cells
+}
+
+function selectionOverlaps(state: EditorState, from: number, to: number): boolean {
+  for (const r of state.selection.ranges) {
+    if (r.from <= to && r.to >= from) return true
+  }
+  return false
+}
+
+/** Fill a th/td with plain text + wikilink spans (no innerHTML). */
+function fillCell(el: HTMLElement, raw: string): void {
+  if (!raw) {
+    el.appendChild(document.createTextNode(''))
+    return
+  }
+  const wikiRe = /!?\[\[([^\]]+?)\]\]/g
+  let last = 0
+  let m: RegExpExecArray | null
+  while ((m = wikiRe.exec(raw))) {
+    if (m.index > last) {
+      el.appendChild(document.createTextNode(raw.slice(last, m.index)))
+    }
+    const { target, label } = parseWikiInner(m[1])
+    const span = document.createElement('span')
+    span.className = 'cm-lp-wiki'
+    span.textContent = label || target
+    span.setAttribute('data-target', target)
+    span.title = `[[${target}]] · Ctrl+klik buka`
+    el.appendChild(span)
+    last = m.index + m[0].length
+  }
+  if (last < raw.length) {
+    el.appendChild(document.createTextNode(raw.slice(last)))
+  }
+}
+
+class GfmTableWidget extends WidgetType {
+  constructor(
+    readonly header: string[],
+    readonly rows: string[][],
+    readonly from: number,
+    readonly to: number
+  ) {
+    super()
+  }
+  eq(o: GfmTableWidget): boolean {
+    if (this.from !== o.from || this.to !== o.to) return false
+    if (this.header.length !== o.header.length || this.rows.length !== o.rows.length) return false
+    for (let i = 0; i < this.header.length; i++) {
+      if (this.header[i] !== o.header[i]) return false
+    }
+    for (let r = 0; r < this.rows.length; r++) {
+      const a = this.rows[r]
+      const b = o.rows[r]
+      if (a.length !== b.length) return false
+      for (let c = 0; c < a.length; c++) {
+        if (a[c] !== b[c]) return false
+      }
+    }
+    return true
+  }
+  toDOM(view: EditorView): HTMLElement {
+    const wrap = document.createElement('div')
+    wrap.className = 'cm-lp-table-wrap'
+    wrap.title = 'Klik untuk edit tabel · Ctrl+klik [[link]] untuk buka'
+    const table = document.createElement('table')
+    table.className = 'cm-lp-table'
+
+    const thead = document.createElement('thead')
+    const hr = document.createElement('tr')
+    for (const h of this.header) {
+      const th = document.createElement('th')
+      fillCell(th, h)
+      hr.appendChild(th)
+    }
+    thead.appendChild(hr)
+    table.appendChild(thead)
+
+    const tbody = document.createElement('tbody')
+    const cols = Math.max(this.header.length, ...this.rows.map((r) => r.length), 1)
+    for (const row of this.rows) {
+      const tr = document.createElement('tr')
+      for (let c = 0; c < cols; c++) {
+        const td = document.createElement('td')
+        fillCell(td, row[c] ?? '')
+        tr.appendChild(td)
+      }
+      tbody.appendChild(tr)
+    }
+    table.appendChild(tbody)
+    wrap.appendChild(table)
+
+    wrap.addEventListener('mousedown', (e) => {
+      const t = e.target as HTMLElement | null
+      const wiki = t?.closest?.('.cm-lp-wiki') as HTMLElement | null
+      if (wiki && (e.ctrlKey || e.metaKey)) {
+        e.preventDefault()
+        e.stopPropagation()
+        const target = wiki.getAttribute('data-target') || ''
+        if (target) openHandler?.(target)
+        return
+      }
+      // Click table → drop caret into source so user can edit (widget hides)
+      e.preventDefault()
+      view.dispatch({ selection: { anchor: this.from }, scrollIntoView: true })
+      view.focus()
+    })
+    return wrap
+  }
+  ignoreEvent(): boolean {
+    // Let our mousedown listener own the event
+    return true
+  }
+}
+
+function buildTableDecorations(state: EditorState): DecorationSet {
+  try {
+    const doc = state.doc
+    if (doc.length === 0) return Decoration.none
+    // Huge vault dumps: skip to keep main thread free
+    if (doc.lines > 10_000 || doc.length > 500_000) return Decoration.none
+
+    const ranges: { from: number; to: number; deco: Decoration }[] = []
+    let lineNo = 1
+    let tables = 0
+    const maxTables = 60
+
+    while (lineNo <= doc.lines && tables < maxTables) {
+      const line = doc.line(lineNo)
+      if (lineNo >= doc.lines) break
+      const next = doc.line(lineNo + 1)
+      if (isGfmTableRow(line.text) && isGfmSepRow(next.text)) {
+        const header = splitTableCells(line.text)
+        if (header.length === 0) {
+          lineNo++
+          continue
+        }
+        const body: string[][] = []
+        let endLine = lineNo + 1
+        let r = lineNo + 2
+        while (r <= doc.lines && body.length < 500) {
+          const L = doc.line(r)
+          if (!isGfmTableRow(L.text) || isGfmSepRow(L.text)) break
+          body.push(splitTableCells(L.text))
+          endLine = r
+          r++
+        }
+        const from = line.from
+        const to = doc.line(endLine).to
+        // Selection inside table → show raw markdown (edit mode)
+        if (!selectionOverlaps(state, from, to)) {
+          ranges.push({
+            from,
+            to,
+            deco: Decoration.replace({
+              widget: new GfmTableWidget(header, body, from, to),
+              block: true
+            })
+          })
+          tables++
+        }
+        lineNo = endLine + 1
+        continue
+      }
+      lineNo++
+    }
+
+    if (!ranges.length) return Decoration.none
+    ranges.sort((a, b) => a.from - b.from)
+    const builder = new RangeSetBuilder<Decoration>()
+    for (const s of ranges) {
+      try {
+        builder.add(s.from, s.to, s.deco)
+      } catch {
+        /* skip bad range */
+      }
+    }
+    try {
+      return builder.finish()
+    } catch {
+      return Decoration.none
+    }
+  } catch (err) {
+    console.warn('[livePreview] table decorations failed:', err)
+    return Decoration.none
+  }
+}
+
+/** Block table widgets — MUST be StateField, not ViewPlugin. */
+const tableField = StateField.define<DecorationSet>({
+  create: (state) => buildTableDecorations(state),
+  update(deco, tr) {
+    if (tr.docChanged || tr.selection) return buildTableDecorations(tr.state)
+    return deco
+  },
+  provide: (f) => EditorView.decorations.from(f)
+})
 
 function collectInline(text: string, lineFrom: number, view: EditorView, out: DecSpec[]): void {
   let m: RegExpExecArray | null
@@ -235,22 +484,30 @@ function collectDecos(view: EditorView): DecorationSet {
     const specs: DecSpec[] = []
     const doc = view.state.doc
     if (doc.length === 0) return Decoration.none
-    // Hard cap — never hang the UI on dense notes
-    if (doc.lines > 500 || doc.length > 20_000) return Decoration.none
+    // Hard cap for inline decorations only (tables are StateField, separate)
+    if (doc.lines > 3_000 || doc.length > 120_000) return Decoration.none
 
     for (const vr of view.visibleRanges) {
       let pos = vr.from
       let guard = 0
       let linesDone = 0
-      while (pos <= vr.to && guard++ < 8000 && linesDone < 120) {
+      while (pos <= vr.to && guard++ < 8000 && linesDone < 200) {
         const line = doc.lineAt(Math.min(pos, doc.length))
         const text = line.text
         const lf = line.from
         const lt = line.to
         linesDone++
 
-        // Skip heavy table rows (many pipes / long lines) — leave as plain text
-        if (text.length > 400 || (text.match(/\|/g) || []).length >= 4) {
+        // Tables handled by tableField (block widgets) — skip here
+        if (isGfmTableRow(text) || isGfmSepRow(text)) {
+          if (line.number >= doc.lines) break
+          pos = line.to + 1
+          if (pos <= lf) break
+          continue
+        }
+
+        // Very long lines (not tables) — skip heavy inline work
+        if (text.length > 800) {
           if (line.number >= doc.lines) break
           pos = line.to + 1
           if (pos <= lf) break
@@ -462,6 +719,14 @@ const livePreviewTheme = EditorView.baseTheme({
   }
 })
 
-export function livePreviewExtension() {
-  return [livePreviewPlugin, livePreviewTheme]
+/**
+ * Live Preview extensions.
+ * @param full — include heading/wiki/bold decorations (default true).
+ *               Tables always on: even dense notes need readable GFM tables.
+ */
+export function livePreviewExtension(opts?: { full?: boolean }): Extension[] {
+  const full = opts?.full !== false
+  const out: Extension[] = [tableField, livePreviewTheme]
+  if (full) out.push(livePreviewPlugin)
+  return out
 }

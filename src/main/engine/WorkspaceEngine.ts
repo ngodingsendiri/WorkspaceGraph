@@ -6,12 +6,15 @@ import { app } from 'electron'
 // (dynamic require('../security/SecretsStore') broke at runtime: module not found)
 import { protectSettingsSecrets, revealSettingsSecrets } from '../security/SecretsStore'
 
+const SETTINGS_VERSION = 1
+
 export interface WorkspaceConfig {
   name: string
   path: string
   createdAt: string
   lastOpenedAt: string
   settings: Record<string, unknown>
+  version: number
 }
 
 export interface WorkspaceFile {
@@ -66,33 +69,16 @@ const STANDARD_FOLDERS = [
   'Archive'
 ]
 
-/**
- * Classify file by vault-relative path.
- * Aligns with GraphEngine + Diskominfo Obsidian layout (02 Harian, 03 Kerjaan, …).
- * Normalizes `\` → `/` so Windows paths match.
- */
 function fileTypeFromPath(filePath: string, rootPath: string): WorkspaceFile['type'] {
   const lower = path.relative(rootPath, filePath).toLowerCase().replace(/\\/g, '/')
   if (lower.startsWith('knowledge') || lower.includes('/knowledge/')) return 'knowledge'
   if (lower.startsWith('projects') || lower.includes('/projects/')) return 'project'
   if (lower.startsWith('tasks') || lower.includes('/tasks/')) return 'task'
-  if (lower.startsWith('daily') || lower.startsWith('02 harian') || lower.includes('/02 harian/'))
-    return 'daily'
-  if (
-    lower.startsWith('templates') ||
-    lower.startsWith('99 templates') ||
-    lower.includes('/templates/')
-  )
-    return 'template'
+  if (lower.startsWith('daily') || lower.includes('/daily/')) return 'daily'
+  if (lower.startsWith('templates') || lower.includes('/templates/')) return 'template'
   if (lower.startsWith('documents') || lower.includes('/documents/')) return 'document'
-  if (
-    lower.startsWith('people') ||
-    lower.startsWith('05 pegawai') ||
-    lower.includes('/05 pegawai/')
-  )
-    return 'people'
-  if (lower.startsWith('sop') || lower.startsWith('06 sop') || lower.includes('/sop')) return 'sop'
-  if (lower.startsWith('03 kerjaan') || lower.includes('/03 kerjaan/')) return 'project'
+  if (lower.startsWith('people') || lower.includes('/people/')) return 'people'
+  if (lower.startsWith('sop') || lower.includes('/sop/')) return 'sop'
   return 'other'
 }
 
@@ -174,6 +160,11 @@ function countFiles(files: WorkspaceFile[]): { files: number; folders: number; n
   return { files: fileCount, folders: folderCount, notes: noteCount }
 }
 
+/** Escape special regex chars so a raw title is safe inside RegExp() */
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
 export class WorkspaceEngine {
   private state: WorkspaceState = {
     isOpen: false,
@@ -241,7 +232,8 @@ export class WorkspaceEngine {
         path: resolvedPath,
         createdAt: new Date().toISOString(),
         lastOpenedAt: new Date().toISOString(),
-        settings: {}
+        settings: {},
+        version: SETTINGS_VERSION
       }
       this.initializeWorkspaceStructure(resolvedPath)
     }
@@ -272,13 +264,10 @@ export class WorkspaceEngine {
   }
 
   private initializeWorkspaceStructure(workspacePath: string): void {
-    // Vault Obsidian / kerja Diskominfo: jangan scaffold folder WG
-    const isObsidian =
-      fs.existsSync(path.join(workspacePath, '.obsidian')) ||
-      fs.existsSync(path.join(workspacePath, '00 Home.md')) ||
-      fs.existsSync(path.join(workspacePath, '08 Sidebrain'))
+    // If it's an existing Obsidian vault, skip creating our default folders to keep it clean.
+    const isObsidian = fs.existsSync(path.join(workspacePath, '.obsidian'))
     if (isObsidian) {
-      console.log('[WorkspaceEngine] Obsidian/kerja vault — skip WG folder scaffold')
+      console.log('[WorkspaceEngine] Obsidian vault detected — skip WG folder scaffold')
       return
     }
     for (const folder of STANDARD_FOLDERS) {
@@ -337,8 +326,10 @@ export class WorkspaceEngine {
     return files
   }
 
-  readFile(filePath: string): string {
-    return fs.readFileSync(filePath, 'utf-8')
+  readFile(filePath: string): { content: string; mtime: number } {
+    const stats = fs.statSync(filePath)
+    const content = fs.readFileSync(filePath, 'utf-8')
+    return { content, mtime: stats.mtimeMs }
   }
 
   writeFile(filePath: string, content: string): void {
@@ -377,11 +368,76 @@ export class WorkspaceEngine {
     }
   }
 
-  renameFile(oldPath: string, newPath: string): void {
+  /**
+   * Walk the open vault and collect absolute paths of every `.md` file.
+   * Used by renameFile to scan for wikilink references.
+   */
+  getAllMarkdownPaths(): string[] {
+    if (!this.state.rootPath) return []
+    const out: string[] = []
+    const walk = (dir: string) => {
+      let entries: fs.Dirent[] = []
+      try {
+        entries = fs.readdirSync(dir, { withFileTypes: true })
+      } catch {
+        return
+      }
+      for (const e of entries) {
+        if (e.name.startsWith('.') || e.name === 'node_modules') continue
+        const full = path.join(dir, e.name)
+        if (e.isDirectory()) walk(full)
+        else if (e.name.toLowerCase().endsWith('.md')) out.push(full)
+      }
+    }
+    walk(this.state.rootPath)
+    return out
+  }
+
+  /**
+   * Scan all vault Markdown files and rewrite [[oldTitle]] → [[newTitle]].
+   * Returns the list of absolute paths that were modified.
+   */
+  updateLinksInVault(oldTitle: string, newTitle: string): string[] {
+    if (!oldTitle || !newTitle || oldTitle === newTitle) return []
+    // Match [[OldTitle]], [[OldTitle|alias]], [[OldTitle#heading]], [[OldTitle#heading|alias]]
+    const pattern = new RegExp(
+      `\\[\\[${escapeRegex(oldTitle)}((?:#[^\\]|]*)?)?(\\|[^\\]]*)?\\]\\]`,
+      'gi'
+    )
+    const affected: string[] = []
+    for (const filePath of this.getAllMarkdownPaths()) {
+      let raw: string
+      try {
+        raw = fs.readFileSync(filePath, 'utf-8')
+      } catch {
+        continue
+      }
+      if (!pattern.test(raw)) continue
+      pattern.lastIndex = 0
+      const updated = raw.replace(pattern, (_match, heading, alias) => {
+        const h = heading || ''
+        const a = alias || ''
+        return `[[${newTitle}${h}${a}]]`
+      })
+      try {
+        fs.writeFileSync(filePath, updated, 'utf-8')
+        affected.push(filePath)
+      } catch {
+        /* skip unwritable */
+      }
+    }
+    return affected
+  }
+
+  renameFile(
+    oldPath: string,
+    newPath: string,
+    opts?: { updateLinks?: boolean }
+  ): { renamedLinks: number; affectedFiles: string[] } {
     if (!fs.existsSync(oldPath)) {
       throw new Error(`Source path does not exist: ${oldPath}`)
     }
-    if (path.resolve(oldPath) === path.resolve(newPath)) return
+    if (path.resolve(oldPath) === path.resolve(newPath)) return { renamedLinks: 0, affectedFiles: [] }
     if (fs.existsSync(newPath)) {
       throw new Error(`Target already exists: ${newPath}`)
     }
@@ -389,7 +445,39 @@ export class WorkspaceEngine {
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true })
     }
+
+    // Auto-update WikiLinks in vault before renaming the file on disk
+    let affectedFiles: string[] = []
+    const shouldUpdateLinks = opts?.updateLinks !== false
+    if (shouldUpdateLinks && oldPath.toLowerCase().endsWith('.md')) {
+      const oldTitle = path.basename(oldPath, '.md')
+      const newTitle = path.basename(newPath, '.md')
+      affectedFiles = this.updateLinksInVault(oldTitle, newTitle)
+    }
+
     fs.renameSync(oldPath, newPath)
+    return { renamedLinks: affectedFiles.length, affectedFiles }
+  }
+
+  // Settings migration system
+  private migrateSettings(raw: Record<string, unknown>): Record<string, unknown> {
+    const version = (raw.version as number) || 0
+    if (version >= SETTINGS_VERSION) return raw
+
+    let migrated = { ...raw }
+    
+    // Migration from v0 (no version) to v1
+    if (version < 1) {
+      // Add default values for new settings
+      migrated.theme = migrated.theme || 'dark'
+      migrated.editorFontSize = migrated.editorFontSize || 14
+      migrated.editorLineHeight = migrated.editorLineHeight || 1.6
+      // Ensure all AI provider keys are objects
+      if (!migrated.aiProviders) migrated.aiProviders = {}
+    }
+
+    migrated.version = SETTINGS_VERSION
+    return migrated
   }
 
   getSettingsPath(): string {
@@ -401,12 +489,17 @@ export class WorkspaceEngine {
     try {
       if (fs.existsSync(settingsPath)) {
         const raw = JSON.parse(fs.readFileSync(settingsPath, 'utf-8')) as Record<string, unknown>
-        return revealSettingsSecrets(raw)
+        const migrated = this.migrateSettings(raw)
+        // If version changed, save migrated version
+        if ((raw.version as number) !== SETTINGS_VERSION) {
+          this.saveSettings(migrated)
+        }
+        return revealSettingsSecrets(migrated)
       }
     } catch (err) {
       console.error('[WorkspaceEngine] getSettings failed:', err)
     }
-    return {}
+    return { version: SETTINGS_VERSION }
   }
 
   /** Raw settings as stored on disk (encrypted secrets) */
@@ -414,7 +507,8 @@ export class WorkspaceEngine {
     const settingsPath = this.getSettingsPath()
     try {
       if (fs.existsSync(settingsPath)) {
-        return JSON.parse(fs.readFileSync(settingsPath, 'utf-8')) as Record<string, unknown>
+        const raw = JSON.parse(fs.readFileSync(settingsPath, 'utf-8')) as Record<string, unknown>
+        return this.migrateSettings(raw)
       }
     } catch {}
     return {}
@@ -426,7 +520,9 @@ export class WorkspaceEngine {
     }
     const settingsPath = this.getSettingsPath()
 
-    const protectedSettings = protectSettingsSecrets(settings)
+    // Ensure version is included
+    const withVersion = { ...settings, version: SETTINGS_VERSION }
+    const protectedSettings = protectSettingsSecrets(withVersion)
     const json = JSON.stringify(protectedSettings, null, 2)
     // Atomic write so partial files never leave settings missing
     const tmp = settingsPath + '.tmp'

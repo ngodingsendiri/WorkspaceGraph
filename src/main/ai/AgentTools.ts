@@ -84,66 +84,104 @@ export function rejectProposal(id: string): boolean {
 
 /** Tool instructions injected into system prompt when worker tools enabled */
 export const TOOLS_SYSTEM_PROMPT = `
-## Workspace Tools (AI Worker)
+## Workspace Tools (AI Kernel)
 
 You MAY call tools by emitting one or more fenced blocks. Use EXACTLY this format:
 
 \`\`\`wg-action
-{"tool":"search","args":{"query":"cuti","limit":5}}
+{"tool":"search","args":{"query":"cara kerja","limit":5}}
 \`\`\`
 
 Available tools:
 1. search — args: { query: string, limit?: number }
 2. read_note — args: { path: string }  // absolute or vault-relative path, or note title
 3. list_dir — args: { path?: string }  // relative folder under vault root; default ""
-4. write_note — args: { path: string, content: string }  // overwrite entire file (preserve frontmatter if present in content)
+4. write_note — args: { path: string, content: string }  // overwrite entire file (preserve frontmatter if present)
 5. append_note — args: { path: string, content: string }  // append markdown section
-6. create_note — args: { path: string, content: string }  // create new .md (path relative e.g. Knowledge/Foo.md)
-7. list_templates — args: {}  // list built-in + vault templates
-8. create_from_template — args: { templateId: string, title: string, folder?: string }  // MUST prefer this over freeform create when a template fits (project/task/people/sop/daily)
+6. create_note — args: { path: string, content: string }  // create new .md (e.g. AI Memory/Topik.md)
+7. list_templates — args: {}
+8. create_from_template — args: { templateId: string, title: string, folder?: string }
 
-Rules:
-- Prefer search + read_note before inventing vault facts (Constitution Law 006).
-- For new structured notes (project, task, people, sop, daily): call list_templates then create_from_template.
-- For write/create/append/create_from_template: propose once; user must confirm before disk write.
-- Paths use vault-relative form when possible (Knowledge/..., Daily/...).
-- After tool results arrive, continue answering. Do not invent tool results.
-- When finished, write a clear user-facing summary in Markdown with [[WikiLinks]].
+Memory / graph rules:
+- Long-term how-to memory lives in **AI Memory/**. Read it early; update it when you learn durable patterns.
+- Use [[wikilinks]] between memory + domain notes so the **graph densifies** as the workspace gets smarter.
+- Prefer search + read_note before inventing vault facts (Law 006).
+- Writes create proposals — user must Apply before disk write.
+- Paths: vault-relative (AI Memory/..., Knowledge/..., Daily/...).
+- After tool results, continue answering. Do not invent tool results.
+- Finish with a clear Markdown summary + [[WikiLinks]].
 `.trim()
+
+function pushAction(actions: ToolAction[], raw: unknown): void {
+  if (!raw || typeof raw !== 'object') return
+  if (Array.isArray(raw)) {
+    for (const item of raw) pushAction(actions, item)
+    return
+  }
+  const obj = raw as Record<string, unknown>
+  const tool = String(obj.tool || obj.name || '').trim()
+  if (!tool) return
+  const args =
+    obj.args && typeof obj.args === 'object' && !Array.isArray(obj.args)
+      ? (obj.args as Record<string, unknown>)
+      : obj.parameters && typeof obj.parameters === 'object'
+        ? (obj.parameters as Record<string, unknown>)
+        : (() => {
+            const { tool: _t, name: _n, args: _a, parameters: _p, ...rest } = obj
+            return rest
+          })()
+  actions.push({ tool: tool as ToolName, args })
+}
 
 /**
  * Parse tool actions from model output.
- * Supports ```wg-action ... ``` blocks (single object or array).
+ * Supports ```wg-action, ```json with tool field, and bare JSON objects.
  */
 export function parseToolActions(text: string): ToolAction[] {
   const actions: ToolAction[] = []
-  const re = /```wg-action\s*([\s\S]*?)```/gi
+  if (!text) return actions
+
+  // 1) fenced blocks: wg-action | json | javascript
+  const fenceRe = /```(?:wg-action|json|javascript)?\s*([\s\S]*?)```/gi
   let m: RegExpExecArray | null
-  while ((m = re.exec(text)) !== null) {
+  while ((m = fenceRe.exec(text)) !== null) {
     const body = m[1].trim()
+    if (!body.includes('tool') && !body.includes('"name"')) continue
     try {
-      const parsed = JSON.parse(body) as ToolAction | ToolAction[]
-      if (Array.isArray(parsed)) {
-        for (const a of parsed) {
-          if (a && typeof a.tool === 'string') actions.push(a)
-        }
-      } else if (parsed && typeof parsed.tool === 'string') {
-        actions.push(parsed)
-      }
+      pushAction(actions, JSON.parse(body))
     } catch {
-      // try line-by-line JSON objects
-      try {
-        const lines = body.split('\n').filter((l) => l.trim().startsWith('{'))
-        for (const line of lines) {
-          const a = JSON.parse(line) as ToolAction
-          if (a?.tool) actions.push(a)
+      const lines = body.split('\n').filter((l) => l.trim().startsWith('{'))
+      for (const line of lines) {
+        try {
+          pushAction(actions, JSON.parse(line))
+        } catch {
+          /* skip */
         }
-      } catch {
-        /* skip bad block */
       }
     }
   }
-  return actions
+
+  // 2) bare single-line / multi-line JSON objects containing "tool"
+  if (actions.length === 0) {
+    const bareRe = /\{\s*"tool"\s*:\s*"[^"]+"\s*,[\s\S]*?\}/g
+    let bm: RegExpExecArray | null
+    while ((bm = bareRe.exec(text)) !== null) {
+      try {
+        pushAction(actions, JSON.parse(bm[0]))
+      } catch {
+        /* skip */
+      }
+    }
+  }
+
+  // Dedupe consecutive identical tool+args
+  const seen = new Set<string>()
+  return actions.filter((a) => {
+    const key = `${a.tool}:${JSON.stringify(a.args || {})}`
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
 }
 
 /** Strip tool fences from display text */
@@ -179,7 +217,7 @@ function resolveNotePath(input: string): string | null {
   }
 
   // Title resolve via search / graph
-  const hits = searchEngine.search({ query: input, limit: 5 })
+  const hits = searchEngine.searchSync({ query: input, limit: 5 })
   const exact = hits.find(
     (h) =>
       h.title.toLowerCase() === input.toLowerCase() ||
@@ -266,7 +304,7 @@ export async function executeTool(action: ToolAction): Promise<ToolResult> {
       case 'search': {
         const query = String(args.query || '')
         const limit = Number(args.limit) || 8
-        const hits = searchEngine.search({ query, limit })
+        const hits = searchEngine.searchSync({ query, limit })
         return {
           tool,
           ok: true,
@@ -286,7 +324,7 @@ export async function executeTool(action: ToolAction): Promise<ToolResult> {
         if (!abs || !fs.existsSync(abs)) {
           return { tool, ok: false, error: `Note not found: ${input}` }
         }
-        const raw = workspaceEngine.readFile(abs)
+        const raw = workspaceEngine.readFile(abs).content
         const root = workspaceEngine.getState().rootPath || ''
         const parsed = markdownEngine.parseFile(abs, raw, root)
         return {
@@ -331,7 +369,7 @@ export async function executeTool(action: ToolAction): Promise<ToolResult> {
         let finalContent = content
         if (fs.existsSync(abs) && !content.startsWith('---')) {
           try {
-            const existing = workspaceEngine.readFile(abs)
+const existing = workspaceEngine.readFile(abs).content
             if (existing.startsWith('---')) {
               const end = findFrontmatterClose(existing)
               if (end !== -1) {
@@ -368,7 +406,7 @@ export async function executeTool(action: ToolAction): Promise<ToolResult> {
         if (!abs || !fs.existsSync(abs)) {
           return { tool, ok: false, error: `Note not found for append: ${input}` }
         }
-        const existing = workspaceEngine.readFile(abs)
+const existing = workspaceEngine.readFile(abs).content
         const merged = existing.replace(/\s*$/, '') + '\n\n' + content.trim() + '\n'
         const prop = createProposal('append_note', abs, merged, 'append')
         // Store only the append slice in preview; full content is merged for apply

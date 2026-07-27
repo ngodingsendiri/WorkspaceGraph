@@ -130,7 +130,7 @@ export interface GraphViewSnapshot {
   showLabels: boolean
   showTagEdges: boolean
   showLegend: boolean
-  colorBy: 'type' | 'folder'
+  colorBy: 'default' | 'type' | 'folder'
   forces: GraphForceSettings
   perfMode: GraphPerfMode
   arrows: boolean
@@ -229,8 +229,9 @@ export interface GraphStore {
   consumeOpenIntent: () => GraphOpenIntent | null
 }
 
+/** Fallback when settings not yet loaded — keep in sync with graphShared / GraphLayoutStore. */
 const emptySettingsHint: GraphSettings = {
-  forces: { center: 0.06, charge: -90, linkDist: 68, linkStr: 0.4, collide: 0.6 },
+  forces: { center: 0.045, charge: -125, linkDist: 52, linkStr: 0.58, collide: 0.68 },
   display: {
     showLabels: true,
     showTagEdges: false,
@@ -238,7 +239,7 @@ const emptySettingsHint: GraphSettings = {
     dimHubs: true,
     hideOrphans: false,
     arrows: false,
-    textFade: 1,
+    textFade: 0.9,
     nodeSize: 1,
     lineThickness: 1,
     existingFilesOnly: true,
@@ -247,7 +248,7 @@ const emptySettingsHint: GraphSettings = {
     animateForces: false
   },
   filters: {
-    hubDegreeThreshold: 15,
+    hubDegreeThreshold: 12,
     localDepth: 1,
     orphanMode: 'all',
     hubMode: 'dim',
@@ -277,7 +278,10 @@ export const useGraphStore = create<GraphStore>((set, get) => ({
         set({ nodes: [], edges: [] })
         return
       }
-      const data = await window.api.getGraphData()
+      // Prefer skeleton (lightweight IPC) for Global Graph — falls back to full data
+      const data = window.api.getGraphSkeleton
+        ? await window.api.getGraphSkeleton()
+        : await window.api.getGraphData()
       const rawNodes = Array.isArray(data?.nodes) ? data.nodes : []
       const rawEdges = Array.isArray(data?.edges) ? data.edges : []
       // Normalize — bad/partial IPC payloads must not crash GraphCanvas

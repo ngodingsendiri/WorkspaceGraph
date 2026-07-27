@@ -6,9 +6,14 @@ export default defineConfig({
   main: {
     build: {
       rollupOptions: {
-        external: ['better-sqlite3']
-      }
-    }
+        external: ['better-sqlite3'],
+        input: {
+          index: resolve('src/main/index.ts'),
+          'workers/embedding.worker': resolve('src/main/workers/embedding.worker.ts'),
+          'workers/search-index.worker': resolve('src/main/workers/search-index.worker.ts'),
+        },
+      },
+    },
   },
   preload: {},
   renderer: {

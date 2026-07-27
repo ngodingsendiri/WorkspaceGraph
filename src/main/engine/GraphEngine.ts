@@ -101,23 +101,11 @@ function nodeTypeFromPath(relativePath: string): GraphNode['type'] {
   if (lower.startsWith('knowledge') || lower.includes('/knowledge/')) return 'knowledge'
   if (lower.startsWith('projects') || lower.includes('/projects/')) return 'project'
   if (lower.startsWith('tasks') || lower.includes('/tasks/')) return 'task'
-  if (lower.startsWith('daily') || lower.startsWith('02 harian') || lower.includes('/02 harian/'))
-    return 'daily'
-  if (
-    lower.startsWith('templates') ||
-    lower.startsWith('99 templates') ||
-    lower.includes('/templates/')
-  )
-    return 'template'
+  if (lower.startsWith('daily') || lower.includes('/daily/')) return 'daily'
+  if (lower.startsWith('templates') || lower.includes('/templates/')) return 'template'
   if (lower.startsWith('documents') || lower.includes('/documents/')) return 'document'
-  if (
-    lower.startsWith('people') ||
-    lower.startsWith('05 pegawai') ||
-    lower.includes('/05 pegawai/')
-  )
-    return 'people'
-  if (lower.startsWith('sop') || lower.startsWith('06 sop') || lower.includes('/sop')) return 'sop'
-  if (lower.startsWith('03 kerjaan') || lower.includes('/03 kerjaan/')) return 'project'
+  if (lower.startsWith('people') || lower.includes('/people/')) return 'people'
+  if (lower.startsWith('sop') || lower.includes('/sop/')) return 'sop'
   return 'other'
 }
 
@@ -756,6 +744,48 @@ export class GraphEngine {
     }
   }
 
+  /**
+   * Skeleton graph for Global Graph view on large vaults.
+   * Returns only lightweight node metadata — no outLinks, no heavy internal fields.
+   * The renderer can use this for layout calculation without stressing IPC serialization.
+   */
+  getGraphSkeleton(): {
+    nodes: Pick<GraphNode, 'id' | 'title' | 'type' | 'relativePath' | 'tags' | 'degree' | 'x' | 'y' | 'pinned' | 'isGhost' | 'isTag' | 'isAttachment'>[]
+    edges: GraphEdge[]
+    nodeCount: number
+    edgeCount: number
+    realNodeCount: number
+  } {
+    pruneGhostEdges(this.nodes, this.edges)
+    const allNodes = Array.from(this.nodes.values())
+    const skeletonNodes = allNodes.map((n) => ({
+      id: n.id,
+      title: n.title,
+      type: n.type,
+      relativePath: n.relativePath,
+      tags: n.tags,
+      degree: n.degree,
+      x: n.x,
+      y: n.y,
+      pinned: n.pinned,
+      isGhost: n.isGhost,
+      isTag: n.isTag,
+      isAttachment: n.isAttachment
+    }))
+    const idSet = new Set(skeletonNodes.map((n) => n.id))
+    const edges = Array.from(this.edges.values()).filter(
+      (e) => idSet.has(e.source) && idSet.has(e.target) && e.source !== e.target
+    )
+    const realNodeCount = allNodes.filter((n) => !n.isGhost && !n.isTag && !n.isAttachment).length
+    return {
+      nodes: skeletonNodes,
+      edges,
+      nodeCount: skeletonNodes.length,
+      edgeCount: edges.length,
+      realNodeCount
+    }
+  }
+
   getGhostNodeIds(): string[] {
     return Array.from(this.nodes.values())
       .filter((n) => n.isGhost)
@@ -1232,6 +1262,7 @@ export class GraphEngine {
 
   filterByTag(tag: string): GraphData {
     const filteredNodes = Array.from(this.nodes.values()).filter((n) =>
+      !n.isTag && !n.isGhost && !n.isAttachment &&
       n.tags.some((t) => t.toLowerCase() === tag.toLowerCase())
     )
     const filteredIds = new Set(filteredNodes.map((n) => n.id))

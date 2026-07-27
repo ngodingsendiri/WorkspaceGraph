@@ -1244,9 +1244,8 @@ html:not([data-theme]) {
   overflow: hidden;
   cursor: grab;
   touch-action: none;
-  background:
-    radial-gradient(ellipse 80% 60% at 50% 45%, var(--graph-bg-glow) 0%, transparent 70%),
-    var(--bg-app);
+  /* Obsidian: flat app background — no decorative glow */
+  background: var(--bg-app);
 }
 .graph-stage:active {
   cursor: grabbing;
@@ -1295,25 +1294,21 @@ html:not([data-theme]) {
   stroke: rgba(255, 255, 255, 0.9);
 }
 
+/* Debug/load only — not shown during normal Obsidian-like graph use */
 .graph-live-hud {
+  display: none;
+}
+.graph-live-hud--load {
+  display: block;
   position: absolute;
-  left: 10px;
-  bottom: 10px;
+  left: 12px;
+  top: 12px;
   z-index: 4;
   pointer-events: none;
-  font: 11px ui-monospace, Consolas, monospace;
-  color: var(--text-secondary, #c8cdd8);
-  background: rgba(12, 14, 18, 0.78);
-  padding: 4px 8px;
-  border-radius: 6px;
-  max-width: min(92%, 480px);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-[data-theme='light'] .graph-live-hud {
-  color: #334;
-  background: rgba(255, 255, 255, 0.88);
+  font: 12px system-ui, Segoe UI, sans-serif;
+  color: var(--text-muted, #9aa0b0);
+  background: transparent;
+  padding: 0;
 }
 
 .graph-toolbar {
@@ -1341,6 +1336,10 @@ html:not([data-theme]) {
   gap: 6px;
   pointer-events: auto;
   align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  z-index: calc(var(--z-panel, 20) + 6);
+  position: relative;
 }
 .graph-toolbar-hint {
   font-size: 10px;
@@ -1352,10 +1351,38 @@ html:not([data-theme]) {
   cursor: help;
   user-select: none;
 }
+.graph-toolbar-toast {
+  font-size: 11px;
+  color: var(--color-primary, #8b7cf6);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: 999px;
+  padding: 3px 10px;
+  max-width: min(280px, 40vw);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  pointer-events: none;
+  animation: graph-toast-in 0.15s ease;
+}
+@keyframes graph-toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(-2px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
 .graph-chip {
   all: unset;
   box-sizing: border-box;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   font-size: 11px;
+  line-height: 1.2;
   color: var(--text-secondary);
   background: var(--bg-surface);
   border: 1px solid var(--border-subtle);
@@ -1364,6 +1391,8 @@ html:not([data-theme]) {
   cursor: pointer;
   backdrop-filter: blur(8px);
   transition: background 0.12s ease, color 0.12s ease, border-color 0.12s ease;
+  user-select: none;
+  -webkit-user-select: none;
 }
 .graph-chip:hover {
   color: var(--text-primary);
@@ -1379,7 +1408,8 @@ html:not([data-theme]) {
 .graph-settings-panel,
 .graph-filters-panel {
   position: absolute;
-  top: 8px;
+  /* Below toolbar so Fit/Layout/Save/PNG/Settings stay clickable */
+  top: 46px;
   right: 12px;
   /* Above SVG (z=1) and stage chrome */
   z-index: calc(var(--z-panel, 20) + 5);
@@ -1399,7 +1429,7 @@ html:not([data-theme]) {
 /* Phase 2 — wider filter panel with sections */
 .graph-filters-panel {
   width: min(280px, calc(100% - 24px));
-  max-height: min(70vh, 520px);
+  max-height: min(calc(100% - 56px), 70vh, 520px);
   overflow-y: auto;
   gap: 12px;
   padding: 12px 14px 10px;
@@ -2197,6 +2227,86 @@ html:not([data-theme]) {
   font-weight: var(--weight-semibold);
   color: var(--text-primary);
   min-width: 0;
+}
+
+/* Kernel / assistant chrome */
+.chat-panel--kernel {
+  background: color-mix(in srgb, var(--bg-surface) 92%, #0a0c10);
+  font-variant-numeric: tabular-nums;
+}
+.chat-kernel-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--color-primary);
+  background: var(--color-primary-subtle, color-mix(in srgb, var(--color-primary) 18%, transparent));
+  border: 1px solid color-mix(in srgb, var(--color-primary) 35%, transparent);
+}
+.chat-kernel-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: ui-monospace, Consolas, 'Segoe UI Mono', monospace;
+  font-size: 10px;
+  color: var(--text-muted);
+  padding: 4px 8px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--bg-app) 70%, transparent);
+  border: 1px solid var(--border-subtle);
+  min-width: 0;
+}
+.chat-kernel-prompt {
+  color: var(--color-primary);
+  font-weight: 700;
+  flex-shrink: 0;
+}
+.chat-kernel-prompt::after {
+  content: '›';
+  margin-left: 2px;
+  opacity: 0.75;
+}
+.chat-kernel-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.chat-kernel-chip {
+  font-size: 11px !important;
+}
+.chat-empty--kernel {
+  text-align: left;
+  align-items: stretch;
+  gap: 12px;
+}
+.chat-empty-kernel-line {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 11px;
+  color: var(--text-secondary);
+  line-height: 1.45;
+}
+.chat-panel--kernel .message-role {
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 10px;
+  letter-spacing: 0.02em;
+  text-transform: lowercase;
+  opacity: 0.85;
+}
+.chat-panel--kernel .chat-message.assistant .message-bubble {
+  border-left: 2px solid color-mix(in srgb, var(--color-primary) 45%, transparent);
+  border-radius: 4px 8px 8px 4px;
+}
+.chat-panel--kernel .chat-input {
+  font-family: ui-monospace, Consolas, 'Segoe UI Mono', monospace;
+  font-size: 12px;
 }
 
 .chat-live-dot {
@@ -3311,4 +3421,119 @@ input,
 textarea,
 button {
   color-scheme: inherit;
+}
+
+/* ================================================
+   Merge Dialog
+   ================================================ */
+.merge-dialog-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal, 60);
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: fadeIn 0.15s ease;
+}
+.merge-dialog {
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-xl);
+  width: min(92vw, 900px);
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  animation: scaleIn 0.15s ease;
+}
+.merge-dialog-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-4) var(--space-5);
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-panel);
+}
+.merge-dialog-header h3 {
+  font-size: var(--text-base);
+  font-weight: var(--weight-semibold);
+  color: var(--text-primary);
+}
+.merge-file-path {
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+  max-width: 400px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+}
+.merge-tabs {
+  display: flex;
+  border-bottom: 1px solid var(--border-subtle);
+  background: var(--bg-panel);
+}
+.merge-tabs button {
+  all: unset;
+  box-sizing: border-box;
+  padding: var(--space-2) var(--space-4);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-medium);
+  color: var(--text-muted);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: all var(--duration-fast);
+}
+.merge-tabs button:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+.merge-tabs button.active {
+  color: var(--color-primary);
+  border-bottom-color: var(--color-primary);
+  background: var(--color-primary-subtle);
+}
+.merge-content {
+  flex: 1;
+  overflow: auto;
+  min-height: 0;
+}
+.merge-pane {
+  flex: 1;
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
+  line-height: var(--leading-normal);
+  padding: var(--space-4);
+  margin: 0;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  overflow: auto;
+  background: var(--bg-app);
+  color: var(--text-primary);
+  border: none;
+  outline: none;
+  resize: none;
+}
+.merge-pane.read-only {
+  background: var(--bg-panel);
+  color: var(--text-secondary);
+}
+.merge-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-5);
+  border-top: 1px solid var(--border-subtle);
+  background: var(--bg-panel);
+  flex-wrap: wrap;
+}
+.merge-actions .btn {
+  font-size: var(--text-sm);
+}
+.merge-actions .btn-primary {
+  font-weight: var(--weight-semibold);
 }

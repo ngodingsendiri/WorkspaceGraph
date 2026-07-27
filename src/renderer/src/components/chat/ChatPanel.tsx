@@ -18,6 +18,7 @@ export const ChatPanel: React.FC = () => {
     enableTools,
     pendingProposals,
     lastToolStatus,
+    lastKernelStatus,
     fetchProviders,
     setActiveProvider,
     setSelectedModel,
@@ -30,7 +31,8 @@ export const ChatPanel: React.FC = () => {
     applyProposal,
     rejectProposal,
     saveCurrentChat,
-    loadChat
+    loadChat,
+    learnWorkspace
   } = useChatStore()
 
   const getActiveTab = useEditorStore((s) => s.getActiveTab)
@@ -158,17 +160,47 @@ export const ChatPanel: React.FC = () => {
     const res = await applyProposal(p.id)
     if (res.ok) {
       setApplyOk(true)
-      setApplyMsg(`Applied: ${p.relativePath}`)
+      setApplyMsg(`Applied · graph/search updated · ${p.relativePath}`)
       await fetchState()
       if (p.absolutePath) {
         await openTab(p.absolutePath)
+        // Stay on editor so user sees memory/domain note — graph densifies via wikilinks
         setActiveView('editor')
       }
     } else {
       setApplyOk(false)
       setApplyMsg(res.error || 'Apply failed')
     }
-    setTimeout(() => setApplyMsg(''), 3000)
+    setTimeout(() => setApplyMsg(''), 4000)
+  }
+
+  const handleLearn = async () => {
+    if (isGenerating) return
+    stickToBottom.current = true
+    const res = await learnWorkspace(activeTab?.path)
+    if (!res.ok) {
+      setApplyOk(false)
+      setApplyMsg(res.error || 'Bootstrap gagal')
+      setTimeout(() => setApplyMsg(''), 4000)
+    }
+  }
+
+  const openMemoryIndex = async () => {
+    try {
+      await window.api.ensureAiMemory()
+      const list = await window.api.listAiMemory()
+      const index =
+        list.files?.find((f) => /00\s*Index/i.test(f)) || list.core?.[0] || list.files?.[0]
+      if (!index) return
+      const rootPath = useWorkspaceStore.getState().rootPath
+      if (!rootPath) return
+      const sep = rootPath.includes('\\') ? '\\' : '/'
+      const abs = `${rootPath.replace(/[/\\]$/, '')}${sep}${index.replace(/\//g, sep)}`
+      await openTab(abs)
+      setActiveView('editor')
+    } catch (err) {
+      console.error(err)
+    }
   }
 
   const handleClear = () => {
@@ -210,14 +242,21 @@ export const ChatPanel: React.FC = () => {
     return `${p.name} · setup`
   }
 
+  const statusLine =
+    lastToolStatus ||
+    lastKernelStatus ||
+    (isGenerating ? 'kernel: running…' : 'kernel: idle')
+
   return (
-    <aside className="chat-panel" aria-label="AI chat panel">
-      {/* ── Header: title + actions ── */}
+    <aside className="chat-panel chat-panel--kernel" aria-label="AI kernel assistant">
+      {/* ── Kernel chrome ── */}
       <div className="chat-toolbar">
         <div className="chat-toolbar-top">
           <div className="chat-toolbar-title">
-            <Icon name="bot" size={15} />
-            <span>AI Worker</span>
+            <span className="chat-kernel-badge" aria-hidden>
+              $
+            </span>
+            <span>AI Kernel</span>
             {isGenerating && <span className="chat-live-dot" title="Generating" />}
           </div>
           <div className="chat-toolbar-icons">
@@ -225,7 +264,7 @@ export const ChatPanel: React.FC = () => {
               type="button"
               className="btn btn-ghost btn-sm btn-icon"
               onClick={handleNewChat}
-              data-tooltip="New chat"
+              data-tooltip="New session"
               aria-label="New chat"
               disabled={isGenerating}
             >
@@ -244,7 +283,7 @@ export const ChatPanel: React.FC = () => {
               type="button"
               className="btn btn-ghost btn-sm btn-icon"
               onClick={() => void saveCurrentChat()}
-              data-tooltip="Save chat"
+              data-tooltip="Save session"
               aria-label="Save chat"
               disabled={messages.length === 0}
             >
@@ -254,7 +293,7 @@ export const ChatPanel: React.FC = () => {
               type="button"
               className="btn btn-ghost btn-sm btn-icon"
               onClick={handleClear}
-              data-tooltip="Clear chat"
+              data-tooltip="Clear"
               aria-label="Clear chat"
               disabled={messages.length === 0 || isGenerating}
             >
@@ -264,12 +303,17 @@ export const ChatPanel: React.FC = () => {
               type="button"
               className="btn btn-ghost btn-sm btn-icon"
               onClick={toggleAIChat}
-              data-tooltip="Close panel (Ctrl+J)"
+              data-tooltip="Close (Ctrl+J)"
               aria-label="Close AI panel"
             >
               <Icon name="close" size={14} />
             </button>
           </div>
+        </div>
+
+        <div className="chat-kernel-status" title={statusLine}>
+          <span className="chat-kernel-prompt">wg</span>
+          <span className="truncate">{statusLine}</span>
         </div>
 
         <div className="chat-toolbar-selects">
@@ -325,6 +369,26 @@ export const ChatPanel: React.FC = () => {
           </label>
         </div>
 
+        <div className="chat-kernel-actions">
+          <button
+            type="button"
+            className="local-graph-chip chat-kernel-chip"
+            onClick={() => void handleLearn()}
+            disabled={isGenerating}
+            title="Scan vault → proposal isi AI Memory + wikilink (graph tumbuh)"
+          >
+            Pelajari workspace
+          </button>
+          <button
+            type="button"
+            className="local-graph-chip chat-kernel-chip"
+            onClick={() => void openMemoryIndex()}
+            title="Buka AI Memory/00 Index.md"
+          >
+            Memori
+          </button>
+        </div>
+
         {activeTab && (
           <div className="chat-context-chip" title={activeTab.path}>
             <Icon name="file" size={11} />
@@ -373,12 +437,12 @@ export const ChatPanel: React.FC = () => {
         </div>
       )}
 
-      {/* Write proposals */}
+      {/* Write proposals — dock */}
       {openProposals.length > 0 && (
         <div className="chat-proposals">
           <div className="chat-proposals-title">
             <Icon name="warning" size={13} />
-            Write proposals — konfirmasi dulu
+            Proposals · Apply agar memori/graph update
           </div>
           {openProposals.map((p) => (
             <div key={p.id} className="chat-proposal-card">
@@ -411,7 +475,7 @@ export const ChatPanel: React.FC = () => {
 
       {applyMsg && <div className={`chat-banner ${applyOk ? 'ok' : 'err'}`}>{applyMsg}</div>}
 
-      {lastToolStatus && isGenerating && (
+      {isGenerating && lastToolStatus && (
         <div className="chat-tool-status">
           <span className="chat-spinner" />
           {lastToolStatus}
@@ -421,33 +485,37 @@ export const ChatPanel: React.FC = () => {
       {/* Messages */}
       <div className="chat-messages" ref={messagesBoxRef}>
         {messages.length === 0 ? (
-          <div className="chat-empty">
-            <Icon name="bot" size={36} />
+          <div className="chat-empty chat-empty--kernel">
+            <div className="chat-empty-kernel-line">
+              <span className="chat-kernel-prompt">wg</span>
+              <span>asisten workspace · memori di AI Memory/ · graph = peta link</span>
+            </div>
             <p>
-              Tanyakan apa saja tentang vault. Aktifkan <b>Tools</b> agar AI bisa search / usulkan
-              tulis note.
+              Semakin banyak note + [[wikilink]], semakin padat graph dan semakin tajam context AI.
+              Mulai dengan bootstrap memori, atau tanya langsung (Tools on).
             </p>
             <div className="chat-empty-hints">
               <button
                 type="button"
                 className="chat-hint"
-                onClick={() => setInputText('Ringkas notes cuti')}
+                disabled={isGenerating}
+                onClick={() => void handleLearn()}
               >
-                Ringkas cuti
+                Pelajari workspace
               </button>
               <button
                 type="button"
                 className="chat-hint"
-                onClick={() => setInputText('Cari note tentang KGB')}
+                onClick={() => setInputText('Apa yang sudah ada di AI Memory?')}
               >
-                Cari KGB
+                Cek memori
               </button>
               <button
                 type="button"
                 className="chat-hint"
-                onClick={() => setInputText('Buat checklist kerja hari ini')}
+                onClick={() => setInputText('Ringkas struktur vault dan usulkan update Cara Kerja')}
               >
-                Checklist harian
+                Map vault
               </button>
             </div>
           </div>
@@ -460,13 +528,14 @@ export const ChatPanel: React.FC = () => {
             return (
               <div key={msg.id} className={`chat-message ${msg.role}`}>
                 <div className="message-role">
-                  {msg.role === 'user' ? 'You' : 'AI'} · {msg.timestamp}
+                  {msg.role === 'user' ? 'you' : 'kernel'} · {msg.timestamp}
+                  {msg.toolStatus ? ` · ${msg.toolStatus}` : ''}
                 </div>
                 <div className={`message-bubble ${isErr ? 'is-error' : ''}`}>
                   {msg.content ||
                     (isGenerating && msg.role === 'assistant' ? (
                       <span className="chat-thinking">
-                        <span className="chat-spinner" /> Thinking…
+                        <span className="chat-spinner" /> working…
                       </span>
                     ) : (
                       ''
@@ -474,7 +543,7 @@ export const ChatPanel: React.FC = () => {
 
                   {msg.citations && msg.citations.length > 0 && (
                     <div className="chat-citations">
-                      <span className="chat-citations-label">Citations</span>
+                      <span className="chat-citations-label">refs</span>
                       {msg.citations.map((c) => (
                         <button
                           key={c.path}
@@ -522,7 +591,7 @@ export const ChatPanel: React.FC = () => {
         <textarea
           ref={inputRef}
           className="chat-input"
-          placeholder="Tanya AI… (Enter kirim · Shift+Enter baris baru)"
+          placeholder="perintah / tanya kernel… (Enter kirim · Shift+Enter baris baru)"
           value={inputText}
           onChange={(e) => setInputText(e.target.value)}
           onKeyDown={handleKeyDown}
@@ -535,7 +604,7 @@ export const ChatPanel: React.FC = () => {
           <div className="chat-toggles">
             <label
               className={`chat-toggle ${useContext ? 'on' : ''}`}
-              title="Sertakan konteks vault"
+              title="Inject vault context + AI Memory"
             >
               <input
                 type="checkbox"
@@ -546,7 +615,7 @@ export const ChatPanel: React.FC = () => {
             </label>
             <label
               className={`chat-toggle ${enableTools ? 'on' : ''}`}
-              title="Izinkan search/read/write proposals"
+              title="Tools: search / read / write proposals"
             >
               <input
                 type="checkbox"
@@ -572,7 +641,7 @@ export const ChatPanel: React.FC = () => {
               onClick={handleSend}
               disabled={!inputText.trim()}
             >
-              Send
+              Run
             </button>
           )}
         </div>

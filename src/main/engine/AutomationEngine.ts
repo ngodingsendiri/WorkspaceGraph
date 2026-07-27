@@ -186,7 +186,7 @@ export class AutomationEngine {
           `---\ntitle: ${path.basename(abs, '.md')}\ntype: daily\ndate: ${ctx.date}\n---\n\n# ${path.basename(abs, '.md')}\n\n`
         )
       }
-      const existing = workspaceEngine.readFile(abs)
+      const existing = workspaceEngine.readFile(abs).content
       workspaceEngine.writeFile(abs, existing.replace(/\s*$/, '') + '\n' + content)
       this.pushLog(ruleId, `append → ${rel}`, true)
       return
@@ -200,7 +200,7 @@ export class AutomationEngine {
         this.pushLog(ruleId, `tag skip missing ${rel}`, false)
         return
       }
-      let raw = workspaceEngine.readFile(abs)
+      let raw = workspaceEngine.readFile(abs).content
       const tag = this.interpolate(action.tag, ctx)
       if (raw.includes(`#${tag}`) || raw.includes(`- ${tag}`)) {
         this.pushLog(ruleId, `tag already present ${tag}`, true)

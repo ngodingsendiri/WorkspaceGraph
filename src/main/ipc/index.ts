@@ -11,7 +11,14 @@ import { templateEngine } from '../engine/TemplateEngine'
 import path from 'path'
 import { fileWatcher, type FileChangeEvent } from '../engine/FileWatcher'
 import { aiMiddleware } from '../ai/AIMiddleware'
+import { embeddingEngine } from '../ai/EmbeddingEngine'
 import { applyProposal, rejectProposal, listPendingProposals, getProposal } from '../ai/AgentTools'
+import {
+  ensureAiMemoryScaffold,
+  listAiMemoryPaths,
+  getCoreMemoryRelPaths,
+  AI_MEMORY_DIR
+} from '../ai/WorkspaceMemory'
 import {
   saveConversation,
   listConversations,
@@ -25,12 +32,6 @@ import { InternalAPI } from '../api/InternalAPI'
 import { readPermissions } from '../security/Permissions'
 import { assertPathInVault } from '../security/PathSandbox'
 import { isEncryptedForm } from '../security/SecretsStore'
-import {
-  resolveKerjaVault,
-  isKerjaVault,
-  KERJA_REL,
-  DEFAULT_KERJA_VAULT
-} from '../config/KerjaPaths'
 import type { ParsedMarkdown } from '../engine/MarkdownEngine'
 // Static import — dynamic require('../engine/GraphLayoutStore') fails at runtime after electron-vite
 // bundles main into out/main/index.js (MODULE_NOT_FOUND)
@@ -125,14 +126,14 @@ function filePathId(filePath: string): string {
   return crypto.createHash('sha256').update(key).digest('hex').slice(0, 24)
 }
 
-function syncWorkspaceData(rootPath: string): void {
+async function syncWorkspaceData(rootPath: string): Promise<void> {
   const fileTree = workspaceEngine.refreshFiles()
   const { mdFiles, attachments } = collectVaultFiles(fileTree)
 
   const parsedFiles: ParsedMarkdown[] = []
   for (const filePath of mdFiles) {
     try {
-      const raw = workspaceEngine.readFile(filePath)
+      const { content: raw } = workspaceEngine.readFile(filePath)
       const parsed = stampMtime(markdownEngine.parseFile(filePath, raw, rootPath), filePath)
       parsedFiles.push(parsed)
     } catch {
@@ -156,7 +157,7 @@ function syncWorkspaceData(rootPath: string): void {
   if (!indexDatabase.isOpen()) {
     indexDatabase.open(rootPath)
   }
-  searchEngine.buildIndex(parsedFiles)
+  await searchEngine.buildIndex(parsedFiles)
   searchEngine.setOrphanIds(graphEngine.getOrphanNodeIds())
 }
 
@@ -164,7 +165,7 @@ function syncSingleFile(filePath: string, rootPath: string): void {
   const lower = filePath.toLowerCase()
   if (lower.endsWith('.md')) {
     try {
-      const raw = workspaceEngine.readFile(filePath)
+      const { content: raw } = workspaceEngine.readFile(filePath)
       const parsed = stampMtime(markdownEngine.parseFile(filePath, raw, rootPath), filePath)
       graphEngine.updateNodeAndEdges(parsed)
       searchEngine.addToIndex(parsed)
@@ -210,7 +211,7 @@ function refreshDomainFromDisk(rootPath: string): void {
     const parsedFiles: ParsedMarkdown[] = []
     for (const fp of mdFiles) {
       try {
-        const raw = workspaceEngine.readFile(fp)
+        const { content: raw } = workspaceEngine.readFile(fp)
         parsedFiles.push(stampMtime(markdownEngine.parseFile(fp, raw, rootPath), fp))
       } catch {
         /* skip */
@@ -286,6 +287,10 @@ function attachFileWatcher(folderPath: string): void {
         return
       }
       syncSingleFile(event.path, folderPath)
+      // Keep embedding index in sync (only .md files)
+      if (event.path.toLowerCase().endsWith('.md')) {
+        embeddingEngine.reindexFile(event.path).catch(() => {})
+      }
       const perms = readPermissions(workspaceEngine.getSettings())
       if (perms.automation && automationEngine.isEnabled()) {
         automationEngine.handleEvent(
@@ -295,6 +300,7 @@ function attachFileWatcher(folderPath: string): void {
       }
     } else if (event.type === 'unlink' || event.type === 'unlinkDir') {
       handleFileRemove(event.path)
+      embeddingEngine.removeFile(event.path)
       const perms = readPermissions(workspaceEngine.getSettings())
       if (perms.automation && automationEngine.isEnabled()) {
         automationEngine.handleEvent('file_deleted', event.path)
@@ -383,46 +389,6 @@ export function registerIPCHandlers(): void {
     return null
   })
 
-  /** Resolve Diskominfo / Obsidian kerja vault (default D:\Obs\Obs) */
-  ipcMain.handle('kerja:resolveVault', async () => {
-    const resolved = resolveKerjaVault()
-    return {
-      path: resolved,
-      defaultPath: DEFAULT_KERJA_VAULT,
-      exists: Boolean(resolved && fs.existsSync(resolved)),
-      isKerja: resolved ? isKerjaVault(resolved) : false,
-      rel: KERJA_REL
-    }
-  })
-
-  ipcMain.handle('kerja:openVault', async () => {
-    const resolved = resolveKerjaVault()
-    if (!resolved) {
-      return { ok: false, error: `Vault kerja tidak ditemukan. Diharapkan: ${DEFAULT_KERJA_VAULT}` }
-    }
-    indexDatabase.close()
-    graphEngine.clear()
-    searchEngine.clear()
-    domainEngine.clear()
-    const state = workspaceEngine.openWorkspace(resolved)
-    const root = state.rootPath || resolved
-    indexDatabase.open(root)
-    syncWorkspaceData(root)
-    attachFileWatcher(root)
-    const perms = readPermissions(workspaceEngine.getSettings())
-    automationEngine.load(root)
-    automationEngine.setEnabled(perms.automation)
-    pluginHost.setAllowed(perms.plugins)
-    pluginHost.load(root)
-    if (perms.automation) automationEngine.handleEvent('workspace_opened')
-    // Remember as preferred
-    const settings = workspaceEngine.getSettings() as Record<string, unknown>
-    settings.defaultVault = root
-    settings.kerjaMode = true
-    workspaceEngine.saveSettings(settings)
-    return { ok: true, state }
-  })
-
   // --- Workspace Handlers ---
   ipcMain.handle('workspace:open', async (_, folderPath: string) => {
     if (!folderPath || typeof folderPath !== 'string') {
@@ -432,6 +398,7 @@ export function registerIPCHandlers(): void {
     graphEngine.clear()
     searchEngine.clear()
     domainEngine.clear()
+    embeddingEngine.clear()
     const state = workspaceEngine.openWorkspace(folderPath)
     const root = state.rootPath
     if (!root) throw new Error('Failed to open workspace')
@@ -446,6 +413,12 @@ export function registerIPCHandlers(): void {
     if (perms.automation) {
       automationEngine.handleEvent('workspace_opened')
     }
+    // Load persisted vectors, then background-index only new/changed files
+    const db = indexDatabase.getDb()
+    embeddingEngine.init().then(() => {
+      if (db) embeddingEngine.loadFromDb(db)
+      return embeddingEngine.indexVaultBackground(root, db)
+    }).catch(() => {})
     return state
   })
 
@@ -465,6 +438,7 @@ export function registerIPCHandlers(): void {
         graphEngine.clear()
         searchEngine.clear()
         domainEngine.clear()
+        embeddingEngine.clear()
         indexDatabase.open(state.rootPath)
         syncWorkspaceData(state.rootPath)
         attachFileWatcher(state.rootPath)
@@ -473,6 +447,11 @@ export function registerIPCHandlers(): void {
         automationEngine.setEnabled(perms.automation)
         pluginHost.setAllowed(perms.plugins)
         pluginHost.load(state.rootPath)
+        const db = indexDatabase.getDb()
+        embeddingEngine.init().then(() => {
+          if (db) embeddingEngine.loadFromDb(db)
+          return embeddingEngine.indexVaultBackground(state.rootPath!, db)
+        }).catch(() => {})
       }
       return state
     }
@@ -486,6 +465,7 @@ export function registerIPCHandlers(): void {
     graphEngine.clear()
     searchEngine.clear()
     domainEngine.clear()
+    embeddingEngine.clear()
     workspaceEngine.closeWorkspace()
     return true
   })
@@ -514,7 +494,7 @@ export function registerIPCHandlers(): void {
   ipcMain.handle('file:read', async (_, filePath: string) => {
     const root = requireOpenVault()
     assertPathInVault(filePath, root)
-    const raw = workspaceEngine.readFile(filePath)
+    const { content: raw } = workspaceEngine.readFile(filePath)
     const state = workspaceEngine.getState()
     // light:true — no wiki/heading scan, no HTML. Opening notes must stay snappy.
     const parsed = markdownEngine.parseFile(filePath, raw, state.rootPath || '', {
@@ -548,11 +528,31 @@ export function registerIPCHandlers(): void {
 
   ipcMain.handle(
     'file:write',
-    async (_, { filePath, content }: { filePath: string; content: string }) => {
+    async (_, { filePath, content, expectedMtime }: { filePath: string; content: string; expectedMtime?: number }) => {
       const root = requireOpenVault()
       assertPathInVault(filePath, root)
       if (typeof content !== 'string' || content.length > 5_000_000) {
         throw new Error('Invalid or oversized file content')
+      }
+      // Conflict detection: if file exists and expectedMtime provided, check it matches
+      let existingMtime: number | undefined
+      if (expectedMtime !== undefined) {
+        try {
+          const stats = fs.statSync(filePath)
+          existingMtime = stats.mtimeMs
+        } catch {
+          existingMtime = undefined
+        }
+        if (existingMtime !== undefined && existingMtime !== expectedMtime) {
+          // Conflict! Return both versions for merge UI
+          const theirs = workspaceEngine.readFile(filePath).content
+          return {
+            conflict: true,
+            existingMtime,
+            theirs,
+            yours: content,
+          }
+        }
       }
       workspaceEngine.writeFile(filePath, content)
       const state = workspaceEngine.getState()
@@ -561,7 +561,7 @@ export function registerIPCHandlers(): void {
         syncSingleFile(filePath, state.rootPath)
         debounceEmit()
       }
-      return true
+      return { conflict: false }
     }
   )
 
@@ -607,21 +607,37 @@ export function registerIPCHandlers(): void {
       const root = requireOpenVault()
       assertPathInVault(oldPath, root)
       assertPathInVault(newPath, root)
-      workspaceEngine.renameFile(oldPath, newPath)
+      // Auto-updates WikiLinks across vault; returns affected file list for toast notification
+      const result = workspaceEngine.renameFile(oldPath, newPath)
       const state = workspaceEngine.getState()
       if (state.rootPath) {
+        // Mark all affected files as self-written to suppress double-sync from chokidar
+        for (const f of result.affectedFiles) markSelfWrite(f)
         markSelfWrite(newPath)
         handleFileRemove(oldPath)
         syncSingleFile(newPath, state.rootPath)
         debounceEmit()
       }
-      return true
+      return { ok: true, renamedLinks: result.renamedLinks, affectedFiles: result.affectedFiles }
     }
   )
+
+  // --- AI Embedding Status ---
+  ipcMain.handle('ai:embeddingStatus', async () => {
+    return embeddingEngine.getStatus()
+  })
 
   // --- Graph Handlers ---
   ipcMain.handle('graph:getData', async () => {
     return graphEngine.getGraphData()
+  })
+
+  /**
+   * Skeleton graph: node metadata only (no outLinks, no content).
+   * Suitable for Global Graph view on large vaults — much lighter IPC payload.
+   */
+  ipcMain.handle('graph:getSkeleton', async () => {
+    return graphEngine.getGraphSkeleton()
   })
 
   ipcMain.handle('graph:getNeighbors', async (_, nodeId: string, depth?: number) => {
@@ -1025,6 +1041,37 @@ export function registerIPCHandlers(): void {
 
   ipcMain.handle('ai:getProposal', async (_, proposalId: string) => {
     return getProposal(proposalId) || null
+  })
+
+  /** Ensure AI Memory/ scaffold exists (L1 how-to memory for RAG + graph) */
+  ipcMain.handle('ai:ensureMemory', async () => {
+    const root = workspaceEngine.getState().rootPath
+    const res = ensureAiMemoryScaffold(root)
+    if (res.ok && res.created.length && root) {
+      for (const rel of res.created) {
+        const abs = path.join(root, rel)
+        try {
+          markSelfWrite(abs)
+          syncSingleFile(abs, root)
+        } catch {
+          /* ignore single file */
+        }
+      }
+      debounceEmit()
+    }
+    return res
+  })
+
+  ipcMain.handle('ai:listMemory', async () => {
+    const root = workspaceEngine.getState().rootPath
+    if (!root) return { ok: false, dir: AI_MEMORY_DIR, files: [] as string[] }
+    const abs = listAiMemoryPaths(root)
+    return {
+      ok: true,
+      dir: AI_MEMORY_DIR,
+      files: abs.map((p) => path.relative(root, p).replace(/\\/g, '/')),
+      core: getCoreMemoryRelPaths(root)
+    }
   })
 
   // --- Chat persistence (cache under .workspacegraph/chats) ---

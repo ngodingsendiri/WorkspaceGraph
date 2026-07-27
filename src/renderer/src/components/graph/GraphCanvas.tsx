@@ -29,7 +29,6 @@ import {
 } from './GraphFiltersPanel'
 import {
   edgeKey,
-  folderColor,
   labelZoomAlpha,
   lerp,
   nodeRadius,
@@ -39,6 +38,10 @@ import {
   smooth01,
   SpatialHash2D,
   FORCE_PRESETS,
+  OBSIDIAN_SIM,
+  OBSIDIAN_VISUAL,
+  TYPE_NODE_COLORS,
+  resolveObsidianNodeFill,
   edgeDrawBudget,
   labelDrawBudget,
   diagnoseEmptyFilter,
@@ -50,9 +53,10 @@ import {
 } from './graphShared'
 import type { GraphSearchMode } from '../../store/graphStore'
 
+/** Obsidian-like display defaults (text fade soft at distance). */
 export const DEFAULT_DISPLAY_OPTS: GraphDisplayOpts = {
   arrows: false,
-  textFade: 1,
+  textFade: 0.9,
   nodeSize: 1,
   lineThickness: 1
 }
@@ -162,58 +166,30 @@ function canvasSafeColor(raw: string, fallback: string): string {
   return s
 }
 
-/** Hardcoded high-contrast palette for graph canvas (never depends on broken CSS). */
+/**
+ * Obsidian-like palette: flat bg, mono default nodes, muted edges.
+ * Type rainbow kept only for Color by = Type (extension, not Obsidian default).
+ */
 function readPalette(): Palette {
   const isLight = document.documentElement.getAttribute('data-theme') === 'light'
-  if (isLight) {
-    return {
-      isLight: true,
-      bg: canvasSafeColor(css('--bg-app', '#f2f4f7'), '#f2f4f7'),
-      edge: 'rgba(50, 60, 80, 0.55)',
-      edgeTag: 'rgba(50, 60, 80, 0.28)',
-      edgeHot: 'rgba(90, 70, 200, 0.95)',
-      label: '#1a1f2a',
-      labelBg: 'rgba(255,255,255,0.88)',
-      nodeStroke: '#ffffff',
-      colors: {
-        knowledge: '#6b5bb5',
-        project: '#2a8aab',
-        task: '#c48420',
-        daily: '#2f8f58',
-        people: '#c45a35',
-        template: '#8a5aa8',
-        document: '#3a7aa8',
-        sop: '#c0456a',
-        other: '#5a6575',
-        ghost: 'rgba(90,100,120,0.65)',
-        tag: '#b8860b',
-        attachment: '#3a8a5a'
-      }
-    }
-  }
-  // Dark — brighter nodes so they pop on near-black bg
+  const v = isLight ? OBSIDIAN_VISUAL.light : OBSIDIAN_VISUAL.dark
+  const types = isLight ? TYPE_NODE_COLORS.light : TYPE_NODE_COLORS.dark
   return {
-    isLight: false,
-    bg: canvasSafeColor(css('--bg-app', '#1e1e22'), '#1e1e22'),
-    edge: 'rgba(200, 210, 230, 0.55)',
-    edgeTag: 'rgba(160, 170, 190, 0.32)',
-    edgeHot: 'rgba(190, 170, 255, 0.95)',
-    label: 'rgba(240, 244, 255, 0.95)',
-    labelBg: 'rgba(12, 14, 20, 0.72)',
-    nodeStroke: 'rgba(255, 255, 255, 0.55)',
+    isLight,
+    bg: canvasSafeColor(css('--bg-app', v.bg), v.bg),
+    edge: v.edge,
+    edgeTag: v.edgeTag,
+    edgeHot: v.edgeHot,
+    label: v.label,
+    labelBg: v.labelBg,
+    nodeStroke: v.nodeStroke,
     colors: {
-      knowledge: '#a694f0',
-      project: '#5ec8e8',
-      task: '#e8b04a',
-      daily: '#5ed090',
-      people: '#f09070',
-      template: '#c090e0',
-      document: '#7ab0e0',
-      sop: '#e878a0',
-      other: '#a0aab8',
-      ghost: 'rgba(180,190,210,0.55)',
-      tag: '#f0c85a',
-      attachment: '#7ad0a0'
+      ...types,
+      other: types.other,
+      ghost: v.nodeGhost,
+      tag: v.nodeTag,
+      attachment: v.nodeAttachment,
+      default: v.nodeDefault
     }
   }
 }
@@ -266,16 +242,16 @@ function applyForces(
       .distanceMax(large ? 220 : Math.max(280, forces.linkDist * 5))
       .theta(large ? 0.92 : 0.9)
   )
+  // Obsidian: weak centering so clusters form organically, not a hard ball at midpoint
   sim.force('center', d3.forceCenter(width / 2, height / 2).strength(forces.center))
-  // Soft gravity — lower than before so clusters can form away from dead-center
-  const soft = Math.min(0.08, forces.center * 0.55)
+  const soft = Math.min(0.055, forces.center * 0.45)
   sim.force('x', d3.forceX(width / 2).strength(soft))
   sim.force('y', d3.forceY(height / 2).strength(soft))
   sim.force(
     'collide',
     d3
       .forceCollide<SimNode>()
-      .radius((d) => radius(d) * sizeMul + (large ? 3 : 5))
+      .radius((d) => radius(d) * sizeMul + (large ? 4 : 6))
       .strength(forces.collide)
       .iterations(large ? 1 : 2)
   )
@@ -312,17 +288,48 @@ export const GraphCanvas: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
   /**
    * Primary display = React-owned SVG frame (state).
-   * Imperative innerHTML was wiped by React re-renders AND failed for some user boot paths.
-   * Throttled setState keeps ~20fps during sim; fine for ~100 nodes.
+   * World-space nodes/edges under camera transform (Obsidian: zoom scales graph).
+   * Labels stay screen-space with text-fade.
    */
-  type SvgEdge = { key: string; x1: number; y1: number; x2: number; y2: number; stroke: string; sw: number; op: number }
-  type SvgNode =
-    | { key: string; kind: 'circle'; cx: number; cy: number; r: number; fill: string; stroke: string; sw: number; fillOp: number }
-    | { key: string; kind: 'poly'; points: string; fill: string; stroke: string; sw: number; fillOp: number }
-  type SvgLabel = { key: string; x: number; y: number; text: string; fill: string; bold: boolean }
+  type SvgEdge = {
+    key: string
+    x1: number
+    y1: number
+    x2: number
+    y2: number
+    stroke: string
+    sw: number
+    op: number
+    dash?: string
+  }
+  type SvgNode = {
+    key: string
+    kind: 'circle' | 'ghost'
+    cx: number
+    cy: number
+    r: number
+    fill: string
+    stroke: string
+    sw: number
+    fillOp: number
+    strokeOp?: number
+  }
+  type SvgLabel = {
+    key: string
+    x: number
+    y: number
+    text: string
+    fill: string
+    bold: boolean
+    op: number
+  }
   type SvgFrame = {
     w: number
     h: number
+    /** Camera — applied as SVG group transform */
+    tx: number
+    ty: number
+    k: number
     edges: SvgEdge[]
     nodes: SvgNode[]
     labels: SvgLabel[]
@@ -372,8 +379,18 @@ export const GraphCanvas: React.FC = () => {
   const hasAutoFitRef = useRef(false)
   /** Restored camera from vault layout / named view — skips first auto-fit */
   const cameraHydratedRef = useRef(false)
+  /**
+   * User intentionally panned/zoomed this Graph visit.
+   * While true, never auto-fit / force identity (BUG-2).
+   * Cleared on Fit/Layout button and on re-enter Graph.
+   */
+  const userCameraTouchedRef = useRef(false)
   const saveLayoutTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const saveCameraTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  /** True only when auto recovery may steal the camera */
+  const canAutoFitCamera = (): boolean =>
+    !userCameraTouchedRef.current && !cameraHydratedRef.current && !hasAutoFitRef.current
   const forcesRef = useRef<GraphForceSettings>({ ...DEFAULT_FORCE_SETTINGS })
   /** Phase 7: path edge pulse 0..1 */
   const pathPulseRef = useRef(0)
@@ -382,7 +399,7 @@ export const GraphCanvas: React.FC = () => {
   const viewFlagsRef = useRef({
     searchMatchIds: null as Set<string> | null,
     dimHubs: true,
-    hubThreshold: 15,
+    hubThreshold: 12,
     focusedId: null as string | null,
     pathNodeIds: null as Set<string> | null,
     pathEdgeKeys: null as Set<string> | null,
@@ -390,12 +407,12 @@ export const GraphCanvas: React.FC = () => {
     pathToId: '' as string,
     focusNodeIds: null as Set<string> | null,
     focusEdgeKeys: null as Set<string> | null,
-    colorBy: 'type' as ColorByMode,
+    colorBy: 'default' as ColorByMode,
     perfMode: 'auto' as GraphPerfMode,
     selectedIds: null as Set<string> | null,
     /** Obsidian-like display knobs */
     arrows: false,
-    textFade: 1,
+    textFade: 0.9,
     nodeSize: 1,
     lineThickness: 1,
     groupColors: null as Map<string, string> | null
@@ -410,9 +427,9 @@ export const GraphCanvas: React.FC = () => {
   const [showLegend, setShowLegend] = useState(false)
   const [orphanMode, setOrphanMode] = useState<OrphanMode>('all')
   const [hubMode, setHubMode] = useState<HubMode>('dim')
-  const [hubThreshold, setHubThreshold] = useState(15)
+  const [hubThreshold, setHubThreshold] = useState(12)
   const [forces, setForces] = useState<GraphForceSettings>({ ...DEFAULT_FORCE_SETTINGS })
-  const [colorBy, setColorBy] = useState<ColorByMode>('type')
+  const [colorBy, setColorBy] = useState<ColorByMode>('default')
   const [pathFromId, setPathFromId] = useState('')
   const [pathToId, setPathToId] = useState('')
   const [pathNodeIds, setPathNodeIds] = useState<Set<string> | null>(null)
@@ -430,6 +447,15 @@ export const GraphCanvas: React.FC = () => {
   const [pinnedCount, setPinnedCount] = useState(0)
   const [perfMode, setPerfMode] = useState<GraphPerfMode>('auto')
   const [viewsStatus, setViewsStatus] = useState<string | null>(null)
+  /** Always-visible feedback for Fit / Layout / Save / PNG / Settings (panel may be closed) */
+  const [actionToast, setActionToast] = useState<string | null>(null)
+  const actionToastTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const flashAction = useCallback((msg: string) => {
+    setActionToast(msg)
+    setLayoutStatus(msg)
+    if (actionToastTimer.current) clearTimeout(actionToastTimer.current)
+    actionToastTimer.current = setTimeout(() => setActionToast(null), 3200)
+  }, [])
   /** Phase 7 multi-select */
   const [selectedIds, setSelectedIds] = useState<Set<string>>(() => new Set())
   /** Obsidian-like display knobs + color groups */
@@ -467,7 +493,9 @@ export const GraphCanvas: React.FC = () => {
   }, [])
 
   /** fitView assigned after declaration — used by paint auto-fit without dep cycles */
-  const fitViewRef = useRef<((animate: boolean) => void) | null>(null)
+  const fitViewRef = useRef<
+    ((animate: boolean, onlyIds?: Set<string> | null, opts?: { silent?: boolean }) => void) | null
+  >(null)
   /** ensureGraphVisible assigned later — paint HUD may call it when nodes off-screen */
   const ensureGraphVisibleRef = useRef<(reason?: string) => boolean>(() => false)
 
@@ -599,17 +627,41 @@ export const GraphCanvas: React.FC = () => {
       if (rafRef.current) cancelAnimationFrame(rafRef.current)
       if (saveLayoutTimer.current) clearTimeout(saveLayoutTimer.current)
       if (saveCameraTimer.current) clearTimeout(saveCameraTimer.current)
+      if (actionToastTimer.current) clearTimeout(actionToastTimer.current)
     }
   }, [fetchGraph, fetchGraphMeta])
+
+  /** True while mouse/touch is down for pan or node-drag */
+  const pointerGestureRef = useRef(false)
 
   const scheduleSaveCamera = useCallback(() => {
     if (saveCameraTimer.current) clearTimeout(saveCameraTimer.current)
     saveCameraTimer.current = setTimeout(() => {
+      if (pointerGestureRef.current) return
       const t = transformRef.current
       if (!t || !Number.isFinite(t.k)) return
       void saveGraphCamera({ x: t.x, y: t.y, k: t.k })
     }, 700)
   }, [saveGraphCamera])
+
+  const scheduleSaveCameraRef = useRef(scheduleSaveCamera)
+  scheduleSaveCameraRef.current = scheduleSaveCamera
+
+  /** Set camera transform (Fit / restore / keyboard / pan) */
+  const setCameraTransform = useCallback(
+    (t: d3.ZoomTransform, opts?: { user?: boolean; save?: boolean }) => {
+      transformRef.current = t
+      if (opts?.user) {
+        userCameraTouchedRef.current = true
+        cameraHydratedRef.current = true
+      }
+      requestPaint()
+      if (opts?.save !== false) scheduleSaveCameraRef.current()
+    },
+    [requestPaint]
+  )
+  const setCameraTransformRef = useRef(setCameraTransform)
+  setCameraTransformRef.current = setCameraTransform
 
   /**
    * How many nodes project into the viewport?
@@ -671,60 +723,39 @@ export const GraphCanvas: React.FC = () => {
     [requestPaint]
   )
 
-  // Restore vault camera only if it still shows layout nodes; else reject + force fit later
+  // Restore vault camera once when available (BUG-1).
+  // Never re-apply on camera auto-save (would fight pan) or mid-gesture.
+  const camRestoreOnceRef = useRef(false)
   useEffect(() => {
+    if (activeView !== 'graph') {
+      camRestoreOnceRef.current = false
+      return
+    }
+    if (camRestoreOnceRef.current) return
+    if (userCameraTouchedRef.current || pointerGestureRef.current) return
     if (cameraHydratedRef.current) return
     if (!layoutCamera) return
+
     hadSavedCameraRef.current = true
     const layoutPts = Object.values(layoutNodes || {})
       .filter((p) => p && Number.isFinite(p.x) && Number.isFinite(p.y))
       .map((p) => ({ x: p.x, y: p.y }))
-    const ok = cameraShowsPoints(layoutCamera, layoutPts)
+
+    const ok =
+      layoutPts.length === 0 ? true : cameraShowsPoints(layoutCamera, layoutPts)
+
     if (!ok) {
-      cameraHydratedRef.current = true
+      // Leave cameraHydrated false so first auto-fit may run — but mark restore attempted
+      camRestoreOnceRef.current = true
       hasAutoFitRef.current = false
-      const { inView, total, w, h } = countNodesInViewport(layoutCamera, layoutPts)
-      const diag = diagnoseViewportBlank({
-        inView,
-        total: total || layoutPts.length,
-        w,
-        h,
-        zoomK: layoutCamera.k,
-        camX: layoutCamera.x,
-        camY: layoutCamera.y,
-        trigger: 'reject-saved-camera',
-        hadSavedCamera: true
-      })
-      diag.title = 'Kamera vault ditolak (graph di luar layar)'
-      diag.action =
-        'Kamera graph-layout.json TIDAK dipakai. Auto-fit saat data siap. Tekan F / R jika masih blank.'
-      setGraphDiag(diag)
-      setLayoutStatus(formatGraphDiag(diag))
-      // Wipe bad camera from vault (null) so next open does not restore it again
-      void window.api?.saveGraphLayout?.({ camera: null, cameraOnly: true })
       return
     }
     if (applyCamera(layoutCamera, true)) {
-      const t = transformRef.current
-      const { inView, total, w, h } = countNodesInViewport(layoutCamera, layoutPts)
-      const diag: GraphDiag = {
-        code: 'CAM_RESTORED_OK',
-        title: 'Kamera vault dipulihkan',
-        cause: `graph-layout.json · x=${t.x.toFixed(0)} y=${t.y.toFixed(0)} k=${t.k.toFixed(2)} · cek layout ${inView}/${total || layoutPts.length} terlihat di ~${w}×${h}`,
-        action: 'Lolos cek awal. Jika blank setelah load → auto-fit berulang · atau tekan F.',
-        severity: 'info'
-      }
-      setGraphDiag(diag)
-      setLayoutStatus(formatGraphDiag(diag))
+      camRestoreOnceRef.current = true
+      hasAutoFitRef.current = true
+      // Quiet restore — no setState banner (setState here was re-rendering during interaction)
     }
-  }, [
-    layoutCamera,
-    layoutNodes,
-    applyCamera,
-    cameraShowsPoints,
-    countNodesInViewport,
-    saveGraphCamera
-  ])
+  }, [activeView, layoutCamera, layoutNodes, applyCamera, cameraShowsPoints])
 
   /**
    * Pending open-intent from dashboard — applied AFTER settings hydrate so
@@ -786,7 +817,7 @@ export const GraphCanvas: React.FC = () => {
       const gd = graphSettings.display || ({} as typeof graphSettings.display)
       // Hydrate filters.orphanMode + filters.hubMode from persisted settings
       const filters = graphSettings.filters || {
-        hubDegreeThreshold: 15,
+        hubDegreeThreshold: 12,
         localDepth: 1,
         orphanMode: 'all' as const,
         hubMode: 'dim' as const
@@ -795,7 +826,7 @@ export const GraphCanvas: React.FC = () => {
       setShowTagEdges(Boolean(gd.showTagEdges))
       setShowLegend(Boolean(gd.showLegend))
       const thr = filters.hubDegreeThreshold
-      setHubThreshold(typeof thr === 'number' && Number.isFinite(thr) ? thr : 15)
+      setHubThreshold(typeof thr === 'number' && Number.isFinite(thr) ? thr : 12)
       const om = filters.orphanMode
       if (om === 'all' || om === 'hide' || om === 'only') {
         setOrphanMode(om)
@@ -954,6 +985,9 @@ export const GraphCanvas: React.FC = () => {
   }, [nodes, edges, existingFilesOnly, showTags, showAttachments])
 
   // Prefer live degree (always on node); fall back to engine orphan set if degree missing
+  const filteredNodesRef = useRef<GraphNodeData[]>([])
+  const filteredEdgesRef = useRef<typeof edges>([])
+
   const filteredNodes = useMemo(() => {
     const q = searchQuery.trim().toLowerCase()
     const bare = q.replace(/^#/, '')
@@ -1037,6 +1071,10 @@ export const GraphCanvas: React.FC = () => {
       return true
     })
   }, [edges, filteredNodeIds, showTagEdges, showTags, nodeById])
+
+  // Live refs so graph-enter timers don't rebind on every filter tick
+  filteredNodesRef.current = filteredNodes
+  filteredEdgesRef.current = filteredEdges
 
   // Obsidian-like color groups: node id → group color (first match wins)
   const groupColorById = useMemo(() => resolveGroupColors(nodes, colorGroups), [nodes, colorGroups])
@@ -1123,7 +1161,7 @@ export const GraphCanvas: React.FC = () => {
     const thr = flags.hubThreshold
     const dimHubsOn = flags.dimHubs
 
-    // ── 1) React SVG frame (what user sees) ──
+    // ── 1) React SVG frame (Obsidian: world-space graph + screen labels) ──
     let drawn = 0
     try {
       if (simNodes.length === 0) {
@@ -1134,6 +1172,9 @@ export const GraphCanvas: React.FC = () => {
             {
               w: Math.max(1, w),
               h: Math.max(1, h),
+              tx: t.x,
+              ty: t.y,
+              k: t.k || 1,
               edges: [],
               nodes: [],
               labels: [],
@@ -1144,6 +1185,22 @@ export const GraphCanvas: React.FC = () => {
         }
       } else {
         emptySvgFramesRef.current = 0
+        const sizeMul = flags.nodeSize || 1
+        const lineMul = flags.lineThickness || 1
+        const kSafe = Math.max(t.k || 1, 0.05)
+
+        // Hover neighbor set (Obsidian: dim non-neighbors)
+        let hot: Set<string> | null = null
+        if (hover && hs > 0.02) {
+          hot = new Set([hover])
+          for (const e of simLinks) {
+            const s = nid(e.source)
+            const tg = nid(e.target)
+            if (s === hover) hot.add(tg)
+            if (tg === hover) hot.add(s)
+          }
+        }
+
         for (const n of simNodes) {
           if (n.x == null || n.y == null || !Number.isFinite(n.x) || !Number.isFinite(n.y)) continue
           const sx = n.x * t.k + t.x
@@ -1158,7 +1215,7 @@ export const GraphCanvas: React.FC = () => {
           return null
         }
 
-        const maxE = Math.min(simLinks.length, lod === 'low' ? 400 : lod === 'medium' ? 1200 : 4000)
+        const maxE = Math.min(simLinks.length, lod === 'low' ? 500 : lod === 'medium' ? 1500 : 6000)
         const edgesOut: SvgEdge[] = []
         let edgeList = simLinks
         if (simLinks.length > maxE) {
@@ -1171,6 +1228,7 @@ export const GraphCanvas: React.FC = () => {
                 const ek = edgeKey(s.id, tg.id)
                 if (pathE != null && pathE.has(ek)) return 3
                 if (focE != null && focE.has(ek)) return 2
+                if (hot && (s.id === hover || tg.id === hover)) return 2
                 return 0
               }
               return score(b) - score(a)
@@ -1186,56 +1244,88 @@ export const GraphCanvas: React.FC = () => {
           const ek = edgeKey(s.id, tg.id)
           const onPath = pathE != null && pathE.has(ek)
           const onFoc = focE != null && focE.has(ek)
+          const isHot =
+            Boolean(hot) &&
+            (s.id === hover || tg.id === hover) &&
+            hot!.has(s.id) &&
+            hot!.has(tg.id)
+          const dimHover = Boolean(hot && !isHot && pathN == null && focN == null)
+          const dimPath = pathN != null && !onPath
+          const dimFocus = pathN == null && focN != null && !onFoc
+          const dimSearch =
+            pathN == null &&
+            focN == null &&
+            matchIds != null &&
+            !matchIds.has(s.id) &&
+            !matchIds.has(tg.id)
+          let op = e.type === 'tag' ? 0.45 : 0.55
+          if (onPath) op = 0.92
+          else if (onFoc) op = 0.78
+          else if (isHot) op = lerp(op, 0.88, hs)
+          else if (dimHover) op = lerp(op, 0.12, hs)
+          else if (dimPath || dimFocus) op = 0.12
+          else if (dimSearch) op = 0.14
+          // World-space stroke (scales with zoom via group transform)
+          const sw =
+            (onPath ? 1.6 : isHot ? lerp(0.85, 1.15, hs) : e.type === 'tag' ? 0.55 : 0.75) *
+            lineMul
           edgesOut.push({
             key: ek,
-            x1: s.x * t.k + t.x,
-            y1: s.y * t.k + t.y,
-            x2: tg.x * t.k + t.x,
-            y2: tg.y * t.k + t.y,
-            stroke: onPath ? pal.edgeHot : e.type === 'tag' ? pal.edgeTag : pal.edge,
-            sw: onPath ? 2.6 : onFoc ? 2 : e.type === 'tag' ? 1.1 : 1.5,
-            op: onPath ? 0.95 : onFoc ? 0.85 : 0.72
+            x1: s.x,
+            y1: s.y,
+            x2: tg.x,
+            y2: tg.y,
+            stroke: onPath || (isHot && hs > 0.45) ? pal.edgeHot : e.type === 'tag' ? pal.edgeTag : pal.edge,
+            sw,
+            op,
+            dash: e.type === 'tag' && !onPath ? '3 4' : undefined
           })
         }
 
         const nodesOut: SvgNode[] = []
         const labelsOut: SvgLabel[] = []
         const labelsOn = showLabelsRef.current
-        const maxLabels = labelsOn ? (lod === 'low' ? 40 : lod === 'medium' ? 90 : 180) : 0
+        const maxLabels = labelsOn ? labelDrawBudget(lod) : 0
         let labCount = 0
         const sel = flags.selectedIds
         for (const n of simNodes) {
           if (n.x == null || n.y == null || !Number.isFinite(n.x) || !Number.isFinite(n.y)) continue
           const sx = n.x * t.k + t.x
           const sy = n.y * t.k + t.y
-          if (sx < -30 || sy < -30 || sx > w + 30 || sy > h + 30) continue
+          // Frustum in screen space
+          if (sx < -40 || sy < -40 || sx > w + 40 || sy > h + 40) continue
+
           const isTag = Boolean(n.isTag || n.type === 'tag')
           const isGhost = Boolean(n.isGhost || n.type === 'ghost')
           const isAtt = Boolean(n.isAttachment || n.type === 'attachment')
+          const isHub = !isGhost && !isTag && n.degree >= thr
           const col = canvasSafeColor(
-            isGhost
-              ? pal.colors.ghost
-              : isTag
-                ? pal.colors.tag
-                : isAtt
-                  ? pal.colors.attachment
-                  : flags.groupColors?.get(n.id) ||
-                    (colorMode === 'folder'
-                      ? folderColor(n.relativePath, pal.isLight)
-                      : pal.colors[n.type] || pal.colors.other),
-            '#a0aab8'
+            resolveObsidianNodeFill({
+              isLight: pal.isLight,
+              isGhost,
+              isTag,
+              isAttachment: isAtt,
+              type: n.type,
+              relativePath: n.relativePath,
+              groupColor: flags.groupColors?.get(n.id) || null,
+              colorBy: colorMode === 'folder' || colorMode === 'type' ? colorMode : 'default'
+            }),
+            pal.colors.default || '#7c6cf0'
           )
           const deg = typeof n.degree === 'number' ? n.degree : 0
-          const rPx =
-            Math.max(6, Math.min(14, 5 + Math.sqrt(Math.max(0, deg)) * 1.35)) *
-            (flags.nodeSize || 1)
+          // World radius — scales with zoom (Obsidian feel)
+          const rWorld = Math.max(
+            2.2,
+            nodeRadius(deg, sizeMul, dimHubsOn && isHub) * (isTag || isAtt ? 0.9 : 1)
+          )
           const isHover = n.id === hover
           const isSel = sel != null && sel.has(n.id)
           const onPath = pathN != null && pathN.has(n.id)
           const onFoc = focN != null && focN.has(n.id)
-          let fillOp = isGhost ? 0.45 : 1
-          if (pathN != null && !onPath && !isSel && !isHover) fillOp *= 0.28
-          else if (pathN == null && focN != null && !onFoc && !isSel && !isHover) fillOp *= 0.32
+          const isMatch = matchIds != null && matchIds.has(n.id)
+          let fillOp = isGhost ? 0.5 : 1
+          if (pathN != null && !onPath && !isSel && !isHover) fillOp *= 0.22
+          else if (pathN == null && focN != null && !onFoc && !isSel && !isHover) fillOp *= 0.26
           else if (
             pathN == null &&
             focN == null &&
@@ -1244,91 +1334,92 @@ export const GraphCanvas: React.FC = () => {
             !isSel &&
             !isHover
           ) {
-            fillOp *= 0.38
+            fillOp *= 0.3
+          } else if (hot && !hot.has(n.id) && pathN == null && focN == null) {
+            fillOp *= lerp(1, 0.22, hs)
           }
-          const isMatch = matchIds != null && matchIds.has(n.id)
-          const stroke = isHover || isSel || onPath || isMatch ? pal.edgeHot : pal.nodeStroke
-          const sw = isSel || onPath ? 2.8 : isHover ? 2.5 : 1.4
-          if (isTag) {
-            const d = rPx * 1.1
-            nodesOut.push({
-              key: n.id,
-              kind: 'poly',
-              points: `${sx},${sy - d} ${sx + d},${sy} ${sx},${sy + d} ${sx - d},${sy}`,
-              fill: col,
-              stroke,
-              sw,
-              fillOp
-            })
-          } else {
-            nodesOut.push({
-              key: n.id,
-              kind: 'circle',
-              cx: sx,
-              cy: sy,
-              r: rPx,
-              fill: col,
-              stroke,
-              sw,
-              fillOp
-            })
-          }
+
+          const stroke =
+            isHover || isSel || onPath || isMatch ? pal.edgeHot : isGhost ? col : pal.nodeStroke
+          const sw = isSel || onPath ? 1.35 : isHover ? lerp(0.7, 1.1, hs) : isGhost ? 1 : 0.55
+
+          nodesOut.push({
+            key: n.id,
+            kind: isGhost ? 'ghost' : 'circle',
+            cx: n.x,
+            cy: n.y,
+            r: rWorld,
+            fill: isGhost ? (pal.isLight ? 'rgba(255,255,255,0.35)' : 'rgba(20,22,28,0.4)') : col,
+            stroke,
+            sw,
+            fillOp,
+            strokeOp: isGhost ? Math.min(1, fillOp + 0.25) : fillOp
+          })
           if (isSel) {
             nodesOut.push({
               key: n.id + ':sel',
               kind: 'circle',
-              cx: sx,
-              cy: sy,
-              r: rPx + 4,
+              cx: n.x,
+              cy: n.y,
+              r: rWorld + 2.2,
               fill: 'none',
               stroke: pal.edgeHot,
-              sw: 1.6,
-              fillOp: 0.85
+              sw: 0.9,
+              fillOp: 0,
+              strokeOp: 0.75
             })
           }
-          const forceLab = isHover || isSel || onPath || onFoc || n.id === focusId
-          if (labelsOn && labCount < maxLabels && (forceLab || deg >= 1 || simNodes.length <= 80)) {
-            const titleStr = String(n.title || n.relativePath || n.id || '')
-            const text = titleStr.length > 26 ? titleStr.slice(0, 25) + '…' : titleStr
-            labelsOut.push({
-              key: n.id,
-              x: sx + rPx + 5,
-              y: sy + 4,
-              text,
-              fill: forceLab ? pal.edgeHot : pal.label,
-              bold: Boolean(forceLab)
-            })
-            labCount++
-          }
+
+          // Labels: screen-space + Obsidian text fade by zoom
+          const forceLab =
+            isHover || isSel || onPath || onFoc || n.id === focusId || isMatch
+          let zA = labelZoomAlpha(kSafe, flags.textFade, deg)
+          if (forceLab) zA = Math.max(zA, smooth01(Math.min(1, kSafe / 0.4)) * 0.95)
+          if (!labelsOn || zA < 0.04 || labCount >= maxLabels) continue
+          if (lod === 'low' && !forceLab && deg < 3) continue
+          if (lod === 'medium' && !forceLab && deg < 2) continue
+          if (large && lod === 'full' && !forceLab && deg < 2 && simNodes.length > 120) continue
+
+          let labOp = zA
+          if (hot && !hot.has(n.id) && !forceLab) labOp *= lerp(1, 0.15, hs)
+          else if (pathN != null && !onPath && !forceLab) labOp *= 0.15
+          else if (matchIds != null && !matchIds.has(n.id) && !forceLab) labOp *= 0.18
+
+          const titleStr = String(n.title || n.relativePath || n.id || '')
+          const text = titleStr.length > 28 ? titleStr.slice(0, 27) + '…' : titleStr
+          labelsOut.push({
+            key: n.id,
+            x: sx + rWorld * kSafe + 5,
+            y: sy + 1,
+            text,
+            fill: forceLab ? pal.edgeHot : pal.label,
+            bold: Boolean(forceLab),
+            op: labOp
+          })
+          labCount++
         }
 
         if (nodesOut.length === 0 && simNodes.length > 0) {
-          nodesOut.push({
-            key: '__offscreen',
-            kind: 'circle',
-            cx: w / 2,
-            cy: h / 2,
-            r: 10,
-            fill: '#a694f0',
-            stroke: '#fff',
-            sw: 2,
-            fillOp: 1
-          })
+          // Screen-space helper (outside transform) via labels only + one node at origin-ish
           labelsOut.push({
             key: '__offscreen-lab',
-            x: w / 2 + 14,
-            y: h / 2 + 4,
-            text: `${simNodes.length} node di luar layar — tekan F`,
+            x: w / 2,
+            y: h / 2,
+            text: `${simNodes.length} node di luar layar — tekan F (Fit)`,
             fill: '#f0c060',
-            bold: true
+            bold: true,
+            op: 1
           })
         }
 
-        const hud = `sim:${simNodes.length} · layar:${drawn} · ${w}×${h} · k:${t.k.toFixed(2)} · SVG`
+        const hud = `${simNodes.length} notes · ${simLinks.length} links · k:${kSafe.toFixed(2)}`
         pushSvgFrame(
           {
             w: Math.max(1, w),
             h: Math.max(1, h),
+            tx: t.x,
+            ty: t.y,
+            k: kSafe,
             edges: edgesOut,
             nodes: nodesOut,
             labels: labelsOut,
@@ -1343,6 +1434,9 @@ export const GraphCanvas: React.FC = () => {
         {
           w: Math.max(1, w),
           h: Math.max(1, h),
+          tx: 0,
+          ty: 0,
+          k: 1,
           edges: [],
           nodes: [],
           labels: [],
@@ -1352,17 +1446,16 @@ export const GraphCanvas: React.FC = () => {
       )
     }
 
-    // Off-screen auto-fit (throttled — was thrashing and blanking the view)
-    if (simNodes.length > 0 && drawn === 0) {
+    // Off-screen recovery ONLY on first load — never after user pan/zoom or vault camera (BUG-2)
+    if (simNodes.length > 0 && drawn === 0 && canAutoFitCamera()) {
       const now = Date.now()
-      if (now - lastAutoFitOffscreenAtRef.current > 600) {
+      if (now - lastAutoFitOffscreenAtRef.current > 900) {
         lastAutoFitOffscreenAtRef.current = now
         requestAnimationFrame(() => {
           try {
-            transformRef.current = d3.zoomIdentity
+            if (!canAutoFitCamera()) return
             fitViewRef.current?.(false)
             hasAutoFitRef.current = true
-            ensureGraphVisibleRef.current('paint-offscreen')
           } catch {
             /* ignore */
           }
@@ -1370,16 +1463,15 @@ export const GraphCanvas: React.FC = () => {
       }
     }
 
-    // First-fit once nodes exist (does not depend on canvas buffer)
+    // First-fit once nodes exist (skipped if vault camera restored)
     if (
       simNodes.length > 0 &&
-      !hasAutoFitRef.current &&
-      !cameraHydratedRef.current &&
+      canAutoFitCamera() &&
       simNodes.some((n) => n.x != null && n.y != null)
     ) {
       requestAnimationFrame(() => {
         try {
-          if (hasAutoFitRef.current || cameraHydratedRef.current) return
+          if (!canAutoFitCamera()) return
           fitViewRef.current?.(false)
           hasAutoFitRef.current = true
         } catch {
@@ -1400,7 +1492,7 @@ export const GraphCanvas: React.FC = () => {
       dirtyRef.current = false
       return
     }
-    let dpr = Math.min(window.devicePixelRatio || 1, 2)
+    const dpr = Math.min(window.devicePixelRatio || 1, 2)
     try {
     ctx.setTransform(1, 0, 0, 1, 0, 0)
     ctx.globalAlpha = 1
@@ -1485,21 +1577,21 @@ export const GraphCanvas: React.FC = () => {
       // Hot edges: slight thickness only (color stays mostly neutral to avoid flash)
       const edgeW =
         (onPath
-          ? 2.2 + pulse * 0.3
+          ? 1.5 + pulse * 0.2
           : isHot
-            ? lerp(1.4, 1.85, hs)
+            ? lerp(0.85, 1.2, hs)
             : e.type === 'wiki_link'
-              ? 1.55
-              : 1.1) * lineMul
+              ? 0.75
+              : 0.55) * lineMul
       const baseEdge = e.type === 'tag' ? pal.edgeTag : pal.edge
       const edgeColor = onPath ? pal.edgeHot : isHot && hs > 0.4 ? pal.edgeHot : baseEdge
       ctx.beginPath()
       ctx.moveTo(s.x, s.y)
       ctx.lineTo(tg.x, tg.y)
-      ctx.strokeStyle = canvasSafeColor(edgeColor, 'rgba(200,210,230,0.55)')
-      // Keep edges more visible on dark bg (was too faint → only "felt" via hit-test)
-      ctx.globalAlpha = Math.max(0.35, edgeAlpha)
-      ctx.lineWidth = Math.max(edgeW / t.k, 1.1 / t.k)
+      ctx.strokeStyle = canvasSafeColor(edgeColor, 'rgba(170,175,190,0.38)')
+      // Obsidian: muted edges; dimmed paths go very faint
+      ctx.globalAlpha = Math.max(0.08, Math.min(0.95, edgeAlpha * (onPath ? 1 : 0.7)))
+      ctx.lineWidth = Math.max(edgeW / t.k, 0.6 / t.k)
       if (e.type === 'tag' && !onPath) ctx.setLineDash([3 / t.k, 4 / t.k])
       else ctx.setLineDash([])
       ctx.stroke()
@@ -1553,28 +1645,28 @@ export const GraphCanvas: React.FC = () => {
       const isTag = Boolean(n.isTag || n.type === 'tag')
       const isAttachment = Boolean(n.isAttachment || n.type === 'attachment')
       const isHub = !isGhost && !isTag && n.degree >= thr
-      const hubScale = dimHubsOn && isHub ? 0.62 : 1
+      const hubScale = dimHubsOn && isHub ? 0.7 : 1
       const rBase =
         (isGhost
-          ? Math.max(3, radius(n, 0.85))
-          : isTag
-            ? Math.max(3.5, radius(n, 0.9))
-            : isAttachment
-              ? Math.max(3.5, radius(n, 0.88))
-              : radius(n, hubScale)) * sizeMul
-      // Never smaller than ~5.5px on screen — fixes "nabrak di gelap" when zoomed out
-      const r = Math.max(rBase, minWorldR)
-      const colRaw = isGhost
-        ? pal.colors.ghost
-        : isTag
-          ? pal.colors.tag
-          : isAttachment
-            ? pal.colors.attachment
-            : flags.groupColors?.get(n.id) ||
-              (colorMode === 'folder'
-                ? folderColor(n.relativePath, pal.isLight)
-                : pal.colors[n.type] || pal.colors.other)
-      const col = canvasSafeColor(colRaw, pal.colors.other)
+          ? Math.max(2.4, radius(n, 0.9))
+          : isTag || isAttachment
+            ? Math.max(2.4, radius(n, 0.9))
+            : radius(n, hubScale)) * sizeMul
+      // Floor so zoom-out never makes hits invisible
+      const r = Math.max(rBase, minWorldR * 0.85)
+      const col = canvasSafeColor(
+        resolveObsidianNodeFill({
+          isLight: pal.isLight,
+          isGhost,
+          isTag,
+          isAttachment,
+          type: n.type,
+          relativePath: n.relativePath,
+          groupColor: flags.groupColors?.get(n.id) || null,
+          colorBy: colorMode === 'folder' || colorMode === 'type' ? colorMode : 'default'
+        }),
+        pal.colors.default || '#7c6cf0'
+      )
       const dimHover =
         Boolean(hot && !hot.has(n.id) && pathN == null && focN == null && !isSelected)
       const dimPath = pathN != null && !onPath && !isSelected
@@ -1616,46 +1708,20 @@ export const GraphCanvas: React.FC = () => {
         ctx.globalAlpha = alpha
       }
 
+      // Obsidian: all nodes are circles (tags/attachments only differ by color)
       ctx.beginPath()
-      if (isTag) {
-        // Diamond for #tag (distinct from notes)
-        const d = r * 1.15
-        ctx.moveTo(n.x, n.y - d)
-        ctx.lineTo(n.x + d, n.y)
-        ctx.lineTo(n.x, n.y + d)
-        ctx.lineTo(n.x - d, n.y)
-        ctx.closePath()
-        ctx.fillStyle = col
+      ctx.arc(n.x, n.y, r, 0, Math.PI * 2)
+      if (isGhost) {
+        ctx.fillStyle = pal.isLight ? 'rgba(255,255,255,0.35)' : 'rgba(20,22,28,0.4)'
         ctx.fill()
-      } else if (isAttachment) {
-        // Rounded square for attachments
-        const s = r * 0.95
-        const rr = s * 0.35
-        const x0 = n.x - s
-        const y0 = n.y - s
-        ctx.moveTo(x0 + rr, y0)
-        ctx.arcTo(x0 + s * 2, y0, x0 + s * 2, y0 + s * 2, rr)
-        ctx.arcTo(x0 + s * 2, y0 + s * 2, x0, y0 + s * 2, rr)
-        ctx.arcTo(x0, y0 + s * 2, x0, y0, rr)
-        ctx.arcTo(x0, y0, x0 + s * 2, y0, rr)
-        ctx.closePath()
-        ctx.fillStyle = col
-        ctx.fill()
+        ctx.strokeStyle = col
+        ctx.lineWidth = 1.2 / t.k
+        ctx.setLineDash([2.5 / t.k, 2 / t.k])
+        ctx.stroke()
+        ctx.setLineDash([])
       } else {
-        ctx.arc(n.x, n.y, r, 0, Math.PI * 2)
-        if (isGhost) {
-          // Obsidian-like hollow ghost for unresolved targets
-          ctx.fillStyle = pal.isLight ? 'rgba(255,255,255,0.35)' : 'rgba(20,22,28,0.35)'
-          ctx.fill()
-          ctx.strokeStyle = col
-          ctx.lineWidth = 1.6 / t.k
-          ctx.setLineDash([2.5 / t.k, 2 / t.k])
-          ctx.stroke()
-          ctx.setLineDash([])
-        } else {
-          ctx.fillStyle = col
-          ctx.fill()
-        }
+        ctx.fillStyle = col
+        ctx.fill()
       }
       const isPinned = Boolean(n.pinned || (n.fx != null && n.fy != null))
       const strokeW =
@@ -1804,30 +1870,53 @@ export const GraphCanvas: React.FC = () => {
   }, [requestPaint])
 
   /**
-   * User-open path (npm run dev): force seed + fit when Graph View opens.
-   * Automations often wait longer; humans click immediately while layout is 0×0.
+   * Graph View open: seed nodes + restore vault camera (BUG-1).
+   * Auto-fit at most once if no camera — never steal after user pan (BUG-2).
    */
   useEffect(() => {
     if (activeView !== 'graph') return
 
+    // Fresh visit: allow vault restore; clear "user moved camera" for this enter
+    userCameraTouchedRef.current = false
     hasAutoFitRef.current = false
-    cameraHydratedRef.current = true // skip re-applying stale vault camera this session enter
+    cameraHydratedRef.current = false
     emptySvgFramesRef.current = 0
-    transformRef.current = d3.zoomIdentity
+
+    // BUG-1: try vault camera once on enter (do NOT re-run when camera auto-saves)
+    const storeSnap = useGraphStore.getState()
+    const cam = storeSnap.layoutCamera
+    const layoutSnap = storeSnap.layoutNodes || {}
+    if (cam && Number.isFinite(cam.k) && cam.k > 0 && cam.k >= 0.05 && cam.k <= 6) {
+      const layoutPts = Object.values(layoutSnap)
+        .filter((p) => p && Number.isFinite(p.x) && Number.isFinite(p.y))
+        .map((p) => ({ x: p.x, y: p.y }))
+      const ok = layoutPts.length === 0 || cameraShowsPoints(cam, layoutPts)
+      if (ok && applyCamera(cam, true)) {
+        hasAutoFitRef.current = true
+        hadSavedCameraRef.current = true
+      } else {
+        transformRef.current = d3.zoomIdentity
+      }
+    } else {
+      transformRef.current = d3.zoomIdentity
+    }
 
     void fetchGraph().finally(() => {
       setGraphLoaded(true)
       schedulePaint()
     })
 
-    const kick = (why: string) => {
+    const kick = (why: string, opts?: { allowFit?: boolean }) => {
       syncCanvasSize()
-      if (nodesRef.current.length === 0 && filteredNodes.length > 0) {
+      const fNodes = filteredNodesRef.current
+      const fEdges = filteredEdgesRef.current
+      if (nodesRef.current.length === 0 && fNodes.length > 0) {
         const wrap = wrapRef.current
         const w = Math.max(wrap?.clientWidth || 0, 400)
         const h = Math.max(wrap?.clientHeight || 0, 300)
-        nodesRef.current = filteredNodes.map((n, i) => {
-          const layout = layoutNodes[n.id]
+        const liveLayout = useGraphStore.getState().layoutNodes || {}
+        nodesRef.current = fNodes.map((n, i) => {
+          const layout = liveLayout[n.id]
           const c = posCache.current.get(n.id)
           const col = i % 12
           const row = Math.floor(i / 12)
@@ -1844,34 +1933,41 @@ export const GraphCanvas: React.FC = () => {
           }
         })
         const idSet = new Set(nodesRef.current.map((n) => n.id))
-        linksRef.current = filteredEdges
-          .filter((e) => idSet.has(e.source) && idSet.has(e.target))
+        linksRef.current = fEdges
+          .filter((e) => {
+            const s = typeof e.source === 'string' ? e.source : (e as { source?: string }).source
+            const t = typeof e.target === 'string' ? e.target : (e as { target?: string }).target
+            return Boolean(s && t && idSet.has(s) && idSet.has(t))
+          })
           .map((e) => ({
             id: e.id,
             type: e.type || 'wiki_link',
             weight: e.weight || 1,
-            source: e.source,
-            target: e.target
+            source: typeof e.source === 'string' ? e.source : String(e.source),
+            target: typeof e.target === 'string' ? e.target : String(e.target)
           }))
         setStats({
           nodes: nodesRef.current.length,
           edges: linksRef.current.length
         })
       }
-      // Sync paint now (don't only rely on rAF — user open races were dropping frames)
       try {
         paintFnRef.current()
       } catch (e) {
         console.error('[GraphCanvas] kick paint', why, e)
       }
       schedulePaint()
-      if (nodesRef.current.length > 0) {
+      // Fit only if allowed and camera not restored / user not panned
+      if (
+        opts?.allowFit !== false &&
+        nodesRef.current.length > 0 &&
+        canAutoFitCamera()
+      ) {
         requestAnimationFrame(() => {
           try {
-            transformRef.current = d3.zoomIdentity
+            if (!canAutoFitCamera()) return
             fitViewRef.current?.(false)
             hasAutoFitRef.current = true
-            ensureGraphVisibleRef.current(why)
             paintFnRef.current()
             schedulePaint()
           } catch {
@@ -1882,39 +1978,38 @@ export const GraphCanvas: React.FC = () => {
     }
 
     kick('graph-enter')
-    const delays = [100, 300, 600, 1200, 2200]
-    const timers = delays.map((ms) => setTimeout(() => kick(`graph-enter-${ms}`), ms))
+    // Fewer delayed kicks — only seed/paint + one fit chance if still needed
+    const delays = [120, 400, 1000]
+    const timers = delays.map((ms) =>
+      setTimeout(() => kick(`graph-enter-${ms}`), ms)
+    )
 
     let ro: ResizeObserver | null = null
     const wrap = wrapRef.current
     if (wrap && typeof ResizeObserver !== 'undefined') {
+      // Resize: re-paint; fit only if never fitted and user hasn't panned
       ro = new ResizeObserver(() => kick('resize'))
       ro.observe(wrap)
     }
 
+    // Watchdog: re-paint if SVG empty — do NOT force identity fit after user pan
     const watchdog = window.setInterval(() => {
-      const hasStore = filteredNodes.length > 0
-      // Read latest frame via DOM (React SVG)
+      const hasStore = filteredNodesRef.current.length > 0
       const hasSvgNodes = Boolean(
-        document.querySelector('.graph-svg g.g-nodes circle, .graph-svg g.g-nodes polygon')
+        document.querySelector('.graph-svg g.g-nodes circle')
       )
-      if (hasStore && !hasSvgNodes) kick('watchdog')
-    }, 500)
+      if (hasStore && !hasSvgNodes) {
+        kick('watchdog', { allowFit: canAutoFitCamera() })
+      }
+    }, 800)
 
     return () => {
       for (const t of timers) clearTimeout(t)
       ro?.disconnect()
       clearInterval(watchdog)
     }
-  }, [
-    activeView,
-    fetchGraph,
-    schedulePaint,
-    syncCanvasSize,
-    filteredNodes.length,
-    filteredEdges.length
-    // layoutNodes read live from closure in kick — avoid re-bind storms
-  ])
+    // ONLY activeView — any other dep re-ran this and reset camera/pan mid-session
+  }, [activeView])
 
   // If toolbar already shows node count but SVG frame empty → force paint (user blank case)
   useEffect(() => {
@@ -2006,8 +2101,8 @@ export const GraphCanvas: React.FC = () => {
       const isGhost = Boolean(n.isGhost || n.type === 'ghost')
       const hubScale = !isGhost && dimHubsOn && n.degree >= thr ? 0.62 : 1
       const baseR = radius(n, hubScale) * sizeMul
-      // Enter: modest pad; stay on sticky: larger pad
-      const pad = n.id === stickyId ? 14 : 6
+      // Generous hit pad — touch needs even larger grab area
+      const pad = n.id === stickyId ? 22 : 16
       const r = baseR + pad
       if (d <= r * r) {
         if (n.id === stickyId) {
@@ -2084,7 +2179,7 @@ export const GraphCanvas: React.FC = () => {
             )
             sim.alpha(Math.max(sim.alpha(), 0.2)).restart()
           }
-          if (!hasAutoFitRef.current) {
+          if (canAutoFitCamera()) {
             fitView(false)
             hasAutoFitRef.current = true
           }
@@ -2227,11 +2322,11 @@ export const GraphCanvas: React.FC = () => {
               .distance(f0.linkDist)
               .strength(f0.linkStr)
           )
-          // Slightly higher decay = settles smoother (alive but stable)
-          .velocityDecay(large ? 0.48 : 0.4)
-          .alphaDecay(large ? 0.06 : 0.042)
-          .alphaMin(0.02)
-          .alpha(large ? 0.45 : 0.58)
+          // Obsidian-like settle: enough heat to cluster, cool smoothly
+          .velocityDecay(large ? OBSIDIAN_SIM.velocityDecayLarge : OBSIDIAN_SIM.velocityDecay)
+          .alphaDecay(large ? OBSIDIAN_SIM.alphaDecayLarge : OBSIDIAN_SIM.alphaDecay)
+          .alphaMin(OBSIDIAN_SIM.alphaMin)
+          .alpha(large ? OBSIDIAN_SIM.alphaStartLarge : OBSIDIAN_SIM.alphaStart)
 
         applyForces(
           sim as d3.Simulation<SimNode, undefined>,
@@ -2277,8 +2372,8 @@ export const GraphCanvas: React.FC = () => {
             })
           }
         }
-        // Fit only if never fitted; always re-check viewport (stale camera → blank)
-        if (!hasAutoFitRef.current) {
+        // Fit only if never fitted / no vault camera / user hasn't panned (BUG-2)
+        if (canAutoFitCamera()) {
           hasAutoFitRef.current = true
           fitView(false)
         }
@@ -2287,7 +2382,7 @@ export const GraphCanvas: React.FC = () => {
         })
         // Obsidian-like continuous gentle motion
         if (animateForcesRef.current) {
-          activeSim.alphaTarget(0.018).restart()
+          activeSim.alphaTarget(OBSIDIAN_SIM.animateAlphaTarget).restart()
         }
         schedulePaint()
       })
@@ -2364,13 +2459,22 @@ export const GraphCanvas: React.FC = () => {
   }, [displayOpts.nodeSize, schedulePaint])
 
   const fitView = useCallback(
-    (animate: boolean, onlyIds?: Set<string> | null) => {
+    (animate: boolean, onlyIds?: Set<string> | null, opts?: { silent?: boolean }) => {
+      // Auto-fit stays quiet; user Fit/Layout pass { silent: false }
+      const announce = opts?.silent === false
       const wrap = wrapRef.current
       let simNodes = nodesRef.current
       if (onlyIds && onlyIds.size > 0) {
         simNodes = simNodes.filter((n) => onlyIds.has(n.id))
       }
-      if (!wrap || simNodes.length === 0) return
+      if (!wrap) {
+        if (announce) flashAction('Fit gagal — area graph belum siap')
+        return
+      }
+      if (simNodes.length === 0) {
+        if (announce) flashAction('Fit — belum ada node (buka vault / rebuild graph)')
+        return
+      }
       const sized = syncCanvasSize()
       // Never abort fit on 0×0 — use fallbacks (this was a silent blank-forever path)
       let width = sized.ready ? sized.w : Math.max(wrap.clientWidth, 0)
@@ -2383,7 +2487,10 @@ export const GraphCanvas: React.FC = () => {
       simNodes = simNodes.filter(
         (n) => typeof n.x === 'number' && typeof n.y === 'number' && Number.isFinite(n.x) && Number.isFinite(n.y)
       )
-      if (simNodes.length === 0) return
+      if (simNodes.length === 0) {
+        if (announce) flashAction('Fit — posisi node belum siap, coba Layout')
+        return
+      }
       const xs = simNodes.map((n) => n.x as number)
       const ys = simNodes.map((n) => n.y as number)
       const minX = Math.min(...xs)
@@ -2399,11 +2506,16 @@ export const GraphCanvas: React.FC = () => {
       const target = d3.zoomIdentity.translate(tx, ty).scale(k)
       const done = () => {
         hasAutoFitRef.current = true
+        // Explicit Fit/Layout owns camera again (auto-fit may not steal after this until pan)
+        if (announce) {
+          userCameraTouchedRef.current = false
+          cameraHydratedRef.current = true
+        }
         scheduleSaveCamera()
+        if (announce) flashAction(`Fit · ${simNodes.length} nodes · k=${k.toFixed(2)}`)
       }
       if (!animate) {
-        transformRef.current = target
-        schedulePaint()
+        setCameraTransformRef.current(target, { user: announce, save: true })
         done()
         return
       }
@@ -2415,16 +2527,19 @@ export const GraphCanvas: React.FC = () => {
         i++
         const u = i / steps
         const e = 1 - Math.pow(1 - u, 3)
-        transformRef.current = d3.zoomIdentity
+        const mid = d3.zoomIdentity
           .translate(from.x + (target.x - from.x) * e, from.y + (target.y - from.y) * e)
           .scale(from.k + (target.k - from.k) * e)
-        schedulePaint()
+        setCameraTransformRef.current(mid, { user: false, save: false })
         if (i < steps) requestAnimationFrame(step)
-        else done()
+        else {
+          setCameraTransformRef.current(target, { user: announce, save: true })
+          done()
+        }
       }
       requestAnimationFrame(step)
     },
-    [schedulePaint, syncCanvasSize, scheduleSaveCamera]
+    [schedulePaint, syncCanvasSize, scheduleSaveCamera, flashAction]
   )
   fitViewRef.current = fitView
 
@@ -2438,6 +2553,8 @@ export const GraphCanvas: React.FC = () => {
       const t = transformRef.current
       // Canvas not ready: still try fit with fallbacks (fitView uses syncCanvasSize too)
       if (w < 32 || h < 32) {
+        // Don't thrash diagnostics while user is panning a 0×0 flex frame
+        if (userCameraTouchedRef.current || cameraHydratedRef.current) return false
         const diag = diagnoseViewportBlank({
           inView,
           total,
@@ -2452,11 +2569,9 @@ export const GraphCanvas: React.FC = () => {
         setGraphDiag(diag)
         setLayoutStatus(formatGraphDiag(diag))
         console.warn(formatGraphDiag(diag))
-        // Keep trying — Windows flex often 0 for a few frames
         return false
       }
       if (total === 0) {
-        // Sim not ready yet — caller must retry; report only on late attempts
         if (reason.includes('late') || reason.includes('end') || reason.includes('retry')) {
           const diag = diagnoseViewportBlank({
             inView: 0,
@@ -2499,6 +2614,16 @@ export const GraphCanvas: React.FC = () => {
         )
         return true
       }
+
+      // BUG-2: user pan/zoom or restored camera → never steal camera
+      if (userCameraTouchedRef.current || cameraHydratedRef.current) {
+        return false
+      }
+      if (hasAutoFitRef.current) {
+        // Already fitted once; empty viewport may be intentional zoom into void
+        return false
+      }
+
       const diag = diagnoseViewportBlank({
         inView,
         total,
@@ -2511,17 +2636,12 @@ export const GraphCanvas: React.FC = () => {
         hadSavedCamera: hadSavedCameraRef.current
       })
       console.warn(formatGraphDiag(diag))
-      hasAutoFitRef.current = false
-      cameraHydratedRef.current = true
-      // Identity first so fitView doesn't lerp from a broken extreme
       transformRef.current = d3.zoomIdentity
       fitView(false)
       hasAutoFitRef.current = true
       setGraphDiag(diag)
       setLayoutStatus(formatGraphDiag(diag))
       scheduleSaveCamera()
-      hadSavedCameraRef.current = false
-      // Second pass after fit
       requestAnimationFrame(() => schedulePaint())
       return false
     },
@@ -2529,19 +2649,19 @@ export const GraphCanvas: React.FC = () => {
   )
   ensureGraphVisibleRef.current = ensureGraphVisible
 
-  // Aggressive multi-retry: blank often happens because first checks run before sim positions exist
+  // First-load recovery only — NOT re-run on camera save (removed layoutCamera dep = BUG-2)
   useEffect(() => {
     if (filteredNodes.length === 0) return
-    const delays = [50, 120, 250, 450, 800, 1400, 2200, 3500]
+    if (userCameraTouchedRef.current) return
+    const delays = [80, 200, 500, 1200]
     const timers = delays.map((ms, i) =>
       setTimeout(() => {
+        if (userCameraTouchedRef.current || cameraHydratedRef.current) return
         const ok = ensureGraphVisibleRef.current(
-          i >= delays.length - 3 ? `post-data-late-${ms}` : `post-data-${ms}`
+          i >= delays.length - 2 ? `post-data-late-${ms}` : `post-data-${ms}`
         )
-        // If still not visible on late retries, hard reset camera + fit
-        if (!ok && i >= delays.length - 3) {
-          transformRef.current = d3.zoomIdentity
-          hasAutoFitRef.current = false
+        // One hard fit only if never fitted and still blank
+        if (!ok && i === delays.length - 1 && canAutoFitCamera()) {
           fitViewRef.current?.(false)
           hasAutoFitRef.current = true
           schedulePaint()
@@ -2551,21 +2671,23 @@ export const GraphCanvas: React.FC = () => {
     return () => {
       for (const t of timers) clearTimeout(t)
     }
-  }, [filteredNodes.length, layoutCamera, schedulePaint])
+  }, [filteredNodes.length, schedulePaint])
 
-  // Every time user opens Graph View: force visibility pass (don't rely on stale camera)
+  // Soft visibility check on enter — never force-fit if vault camera restored or user panned
   useEffect(() => {
     if (activeView !== 'graph') return
-    const timers = [100, 400, 1000, 2000].map((ms) =>
+    const timers = [150, 600].map((ms) =>
       setTimeout(() => {
         syncCanvasSize()
         if (nodesRef.current.length === 0) return
+        if (userCameraTouchedRef.current || cameraHydratedRef.current) {
+          schedulePaint()
+          return
+        }
         const { inView, total } = countNodesInViewport()
-        if (total > 0 && inView < Math.max(1, Math.floor(total * 0.05))) {
-          transformRef.current = d3.zoomIdentity
+        if (total > 0 && inView < Math.max(1, Math.floor(total * 0.05)) && canAutoFitCamera()) {
           fitViewRef.current?.(false)
           hasAutoFitRef.current = true
-          ensureGraphVisibleRef.current(`view-enter-${ms}`)
         } else {
           schedulePaint()
         }
@@ -2583,66 +2705,264 @@ export const GraphCanvas: React.FC = () => {
       const cx = (sized.ready ? sized.w : wrapRef.current?.clientWidth || 400) / 2
       const cy = (sized.ready ? sized.h : wrapRef.current?.clientHeight || 300) / 2
       const t = transformRef.current
-      const nextK = Math.max(0.08, Math.min(6, t.k * factor))
-      const x = cx - ((cx - t.x) * nextK) / t.k
-      const y = cy - ((cy - t.y) * nextK) / t.k
-      transformRef.current = d3.zoomIdentity.translate(x, y).scale(nextK)
-      schedulePaint()
-      scheduleSaveCamera()
+      const k0 = t.k || 1
+      const nextK = Math.max(0.08, Math.min(6, k0 * factor))
+      const x = cx - ((cx - t.x) * nextK) / k0
+      const y = cy - ((cy - t.y) * nextK) / k0
+      setCameraTransformRef.current(d3.zoomIdentity.translate(x, y).scale(nextK), {
+        user: true,
+        save: true
+      })
     },
-    [schedulePaint, syncCanvasSize, scheduleSaveCamera]
+    [syncCanvasSize]
   )
 
-  // Pointer on STAGE (wrap), not canvas — canvas may be hidden (GPU black);
-  // hit-test is pure math on nodesRef, same as local graph interaction model.
+  // Keep latest handlers in refs so pointer listeners never rebind mid-pan
+  const hitNodeRef = useRef(hitNode)
+  hitNodeRef.current = hitNode
+  const findPathRef = useRef(findPath)
+  findPathRef.current = findPath
+  const fetchNeighborhoodRef = useRef(fetchNeighborhood)
+  fetchNeighborhoodRef.current = fetchNeighborhood
+  const openTabRef = useRef(openTab)
+  openTabRef.current = openTab
+  const setActiveViewRef = useRef(setActiveView)
+  setActiveViewRef.current = setActiveView
+  const saveLayoutPositionsRef = useRef(saveLayoutPositions)
+  saveLayoutPositionsRef.current = saveLayoutPositions
+  const showTooltipDomRef = useRef(showTooltipDom)
+  showTooltipDomRef.current = showTooltipDom
+  const hideTooltipDomRef = useRef(hideTooltipDom)
+  hideTooltipDomRef.current = hideTooltipDom
+  const moveTooltipDomRef = useRef(moveTooltipDom)
+  moveTooltipDomRef.current = moveTooltipDom
+  const setHoverIdRef = useRef(setHoverId)
+  setHoverIdRef.current = setHoverId
+
+  /**
+   * Unified pointer interaction (mouse + touch + pen):
+   * - 1 finger/pointer on empty → pan camera
+   * - 1 finger/pointer on node → drag node (pinned on release)
+   * - 2 fingers → pinch zoom + pan
+   * - wheel → zoom toward cursor
+   * No d3.zoom input (conflicts with touch + node drag on Windows).
+   */
   useEffect(() => {
-    const wrap = wrapRef.current
-    const target = wrap
-    if (!target) return
+    if (activeView !== 'graph') return
+    let cancelled = false
+    let wrapEl: HTMLDivElement | null = null
 
-    let panning = false
-    let panLast = { x: 0, y: 0 }
-    let dragged: SimNode | null = null
+    type Mode = 'none' | 'pan' | 'node' | 'pinch'
+    let mode: Mode = 'none'
     let moved = false
+    let dragged: SimNode | null = null
+    let panLast = { x: 0, y: 0 }
+    let activeId: number | null = null
+    let pinchStartDist = 0
+    let pinchStartK = 1
+    let pinchStartMid = { x: 0, y: 0 }
+    let pinchStartT = d3.zoomIdentity
+    const pointers = new Map<number, { x: number; y: number }>()
+    const DRAG_THRESH = 6
 
-    const viewRect = () => wrap!.getBoundingClientRect()
-
-    const onWheel = (e: WheelEvent) => {
-      e.preventDefault()
-      const rect = viewRect()
-      const mx = e.clientX - rect.left
-      const my = e.clientY - rect.top
+    const screenToWorld = (clientX: number, clientY: number) => {
+      const rect = wrapEl!.getBoundingClientRect()
       const t = transformRef.current
-      const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12
-      const nextK = Math.max(0.08, Math.min(6, t.k * factor))
-      const x = mx - ((mx - t.x) * nextK) / t.k
-      const y = my - ((my - t.y) * nextK) / t.k
-      transformRef.current = d3.zoomIdentity.translate(x, y).scale(nextK)
-      schedulePaint()
-      scheduleSaveCamera()
+      const k = t.k || 1
+      return {
+        x: (clientX - rect.left - t.x) / k,
+        y: (clientY - rect.top - t.y) / k
+      }
     }
 
-    const onDown = (e: PointerEvent) => {
-      moved = false
-      const hit = hitNode(e.clientX, e.clientY)
+    const distPts = (a: { x: number; y: number }, b: { x: number; y: number }) =>
+      Math.hypot(a.x - b.x, a.y - b.y)
 
-      // Phase 7: Ctrl/Cmd+click = multi-select toggle
-      if (hit && e.button === 0 && (e.ctrlKey || e.metaKey)) {
-        e.preventDefault()
+    const clearDocListeners = () => {
+      document.removeEventListener('pointermove', onDocMove, true)
+      document.removeEventListener('pointerup', onDocUp, true)
+      document.removeEventListener('pointercancel', onDocUp, true)
+    }
+
+    const endGesture = () => {
+      if (mode === 'node' && dragged) {
+        const d = dragged
+        if (!moved) {
+          if (d.isTag || d.type === 'tag') {
+            setSearchQuery((d.title || '').replace(/^#/, ''))
+            setSearchMode('filter')
+          } else if (d.path && !d.isGhost && d.type !== 'ghost') {
+            void openTabRef.current(d.path)
+            setActiveViewRef.current('editor')
+          }
+        } else {
+          d.pinned = true
+          posCache.current.set(d.id, { x: d.x!, y: d.y!, fx: d.fx, fy: d.fy })
+          setPinnedCount(nodesRef.current.filter((n) => n.pinned || n.fx != null).length)
+          if (saveLayoutTimer.current) clearTimeout(saveLayoutTimer.current)
+          saveLayoutTimer.current = setTimeout(() => {
+            const patch: Record<string, { x: number; y: number; pinned?: boolean }> = {}
+            for (const n of nodesRef.current) {
+              if (n.x == null || n.y == null) continue
+              if (n.isGhost || n.type === 'ghost' || n.isTag || n.type === 'tag') continue
+              if (n.pinned || n.fx != null) patch[n.id] = { x: n.x, y: n.y, pinned: true }
+            }
+            if (Object.keys(patch).length) void saveLayoutPositionsRef.current(patch, false)
+          }, 600)
+        }
+        simRef.current?.alphaTarget(
+          animateForcesRef.current ? OBSIDIAN_SIM.animateAlphaTarget : 0
+        )
+      } else if ((mode === 'pan' || mode === 'pinch') && moved) {
+        scheduleSaveCameraRef.current()
+      }
+      mode = 'none'
+      moved = false
+      dragged = null
+      dragIdRef.current = null
+      activeId = null
+      pointers.clear()
+      pointerGestureRef.current = false
+      clearDocListeners()
+    }
+
+    const onDocMove = (e: PointerEvent) => {
+      if (!wrapEl) return
+      if (activeId != null && e.pointerId !== activeId && mode !== 'pinch') return
+      pointers.set(e.pointerId, { x: e.clientX, y: e.clientY })
+
+      if (mode === 'pinch' && pointers.size >= 2) {
+        const pts = [...pointers.values()]
+        const d = distPts(pts[0], pts[1])
+        const mid = { x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 }
+        if (pinchStartDist > 0) {
+          const scale = Math.max(0.08, Math.min(6, pinchStartK * (d / pinchStartDist)))
+          const rect = wrapEl.getBoundingClientRect()
+          const mx = mid.x - rect.left
+          const my = mid.y - rect.top
+          const t0 = pinchStartT
+          const k0 = t0.k || 1
+          const wx = (mx - t0.x) / k0
+          const wy = (my - t0.y) / k0
+          const nx = mx - wx * scale
+          const ny = my - wy * scale
+          const dx = mid.x - pinchStartMid.x
+          const dy = mid.y - pinchStartMid.y
+          transformRef.current = d3.zoomIdentity.translate(nx + dx, ny + dy).scale(scale)
+          userCameraTouchedRef.current = true
+          cameraHydratedRef.current = true
+          moved = true
+          schedulePaint()
+        }
+        return
+      }
+
+      if (mode === 'node' && dragged) {
+        const dx = e.clientX - panLast.x
+        const dy = e.clientY - panLast.y
+        if (!moved && Math.hypot(dx, dy) < DRAG_THRESH) return
+        moved = true
+        const w = screenToWorld(e.clientX, e.clientY)
+        dragged.fx = w.x
+        dragged.fy = w.y
+        dragged.x = w.x
+        dragged.y = w.y
+        schedulePaint()
+        return
+      }
+
+      if (mode === 'pan') {
+        const dx = e.clientX - panLast.x
+        const dy = e.clientY - panLast.y
+        if (!moved && Math.hypot(dx, dy) < DRAG_THRESH) return
+        moved = true
+        panLast = { x: e.clientX, y: e.clientY }
+        const t = transformRef.current
+        transformRef.current = d3.zoomIdentity.translate(t.x + dx, t.y + dy).scale(t.k || 1)
+        userCameraTouchedRef.current = true
+        cameraHydratedRef.current = true
+        schedulePaint()
+      }
+    }
+
+    const onDocUp = (e: PointerEvent) => {
+      pointers.delete(e.pointerId)
+      if (mode === 'pinch') {
+        if (pointers.size >= 2) return
+        if (pointers.size === 1) {
+          const p = [...pointers.entries()][0]
+          activeId = p[0]
+          mode = 'pan'
+          panLast = { x: p[1].x, y: p[1].y }
+          return
+        }
+        endGesture()
+        return
+      }
+      if (activeId != null && e.pointerId !== activeId) return
+      endGesture()
+    }
+
+    const onPointerDown = (e: PointerEvent) => {
+      if (!wrapEl) return
+      if (e.pointerType === 'mouse' && e.button !== 0 && e.button !== 1) return
+      e.preventDefault()
+
+      pointers.set(e.pointerId, { x: e.clientX, y: e.clientY })
+
+      if (pointers.size >= 2) {
+        mode = 'pinch'
+        pointerGestureRef.current = true
+        const pts = [...pointers.values()]
+        pinchStartDist = distPts(pts[0], pts[1]) || 1
+        pinchStartK = transformRef.current.k || 1
+        pinchStartMid = { x: (pts[0].x + pts[1].x) / 2, y: (pts[0].y + pts[1].y) / 2 }
+        pinchStartT = transformRef.current
+        moved = false
+        if (dragged) {
+          dragged.fx = null
+          dragged.fy = null
+          dragged = null
+          dragIdRef.current = null
+        }
+        document.addEventListener('pointermove', onDocMove, true)
+        document.addEventListener('pointerup', onDocUp, true)
+        document.addEventListener('pointercancel', onDocUp, true)
+        return
+      }
+
+      if (mode !== 'none') return
+      activeId = e.pointerId
+      panLast = { x: e.clientX, y: e.clientY }
+      moved = false
+      pointerGestureRef.current = true
+
+      const hit = hitNodeRef.current(e.clientX, e.clientY)
+
+      if (e.pointerType === 'mouse' && e.button === 1) {
+        mode = 'pan'
+      } else if (hit && !e.ctrlKey && !e.metaKey && !e.shiftKey && !e.altKey) {
+        if (e.ctrlKey || e.metaKey) {
+          /* unreachable due to check above */
+        }
+        mode = 'node'
+        dragged = hit
+        dragIdRef.current = hit.id
+        hit.fx = hit.x
+        hit.fy = hit.y
+        simRef.current?.alphaTarget(OBSIDIAN_SIM.animateAlphaTarget).restart()
+      } else if (hit && (e.ctrlKey || e.metaKey)) {
         setSelectedIds((prev) => {
           const next = new Set(prev)
           if (next.has(hit.id)) next.delete(hit.id)
           else next.add(hit.id)
           return next
         })
+        pointerGestureRef.current = false
+        pointers.clear()
         schedulePaint()
         return
-      }
-
-      // Phase 4: Shift+click = path endpoints; Alt+click = neighborhood focus
-      // Use refs so pointer listeners stay stable (no rebind → no hover blink)
-      if (hit && e.button === 0 && e.shiftKey) {
-        e.preventDefault()
+      } else if (hit && e.shiftKey) {
         const from = pathFromIdRef.current
         const to = pathToIdRef.current
         if (!from || (from && to)) {
@@ -2650,246 +2970,160 @@ export const GraphCanvas: React.FC = () => {
           setPathToId('')
           setPathNodeIds(null)
           setPathEdgeKeys(null)
-          setPathStatus(`[PATH] From = “${hit.title}” · Shift+klik note tujuan`)
-        } else if (from && !to) {
+          setPathStatus(`[PATH] From = “${hit.title}” · Shift+klik tujuan`)
+        } else {
           setPathToId(hit.id)
-          const fromTitle =
-            nodesRef.current.find((n) => n.id === from)?.title || from.slice(0, 8)
-          setPathStatus(`[PATH] Mencari “${fromTitle}” → “${hit.title}”…`)
-          void findPath(from, hit.id, showTagEdgesRef.current).then((res) => {
-            if (!res) {
-              const d = diagnosePathResult({
-                phase: 'fail-engine',
-                fromTitle,
-                toTitle: hit.title
-              })
-              setGraphDiag(d)
-              setPathStatus(formatGraphDiag(d))
-              setPathNodeIds(null)
-              setPathEdgeKeys(null)
-              return
-            }
-            if (!res.found) {
-              const d = diagnosePathResult({
-                phase: 'fail-none',
-                fromTitle,
-                toTitle: hit.title
-              })
-              setGraphDiag(d)
-              setPathStatus(formatGraphDiag(d))
-              setPathNodeIds(null)
-              setPathEdgeKeys(null)
+          void findPathRef.current(from, hit.id, showTagEdgesRef.current).then((res) => {
+            if (!res?.found) {
+              setPathStatus('Path tidak ditemukan')
               return
             }
             setPathNodeIds(new Set(res.nodeIds))
             setPathEdgeKeys(new Set(res.edgeKeys))
-            const d = diagnosePathResult({
-              phase: 'ok',
-              fromTitle,
-              toTitle: hit.title,
-              hops: res.length,
-              noteCount: res.nodeIds.length
-            })
-            setGraphDiag(d)
-            setPathStatus(formatGraphDiag(d))
-            setFocusNodeIds(null)
-            setFocusEdgeKeys(null)
-            if (res.nodeIds.length > 0) {
-              requestAnimationFrame(() => fitView(true, new Set(res.nodeIds)))
+            setPathStatus(`Path ${res.length} hop`)
+            if (res.nodeIds.length) {
+              requestAnimationFrame(() => fitViewRef.current?.(true, new Set(res.nodeIds)))
             }
           })
         }
+        pointerGestureRef.current = false
+        pointers.clear()
         return
-      }
-      if (hit && e.button === 0 && e.altKey) {
-        e.preventDefault()
-        const depth = focusDepthRef.current
-        void fetchNeighborhood(hit.id, depth).then((res) => {
+      } else if (hit && e.altKey) {
+        void fetchNeighborhoodRef.current(hit.id, focusDepthRef.current).then((res) => {
           if (!res) return
           setFocusNodeIds(new Set(res.ids))
           setFocusEdgeKeys(new Set(res.edgeKeys))
-          setPathNodeIds(null)
-          setPathEdgeKeys(null)
-          setPathStatus(`Focus “${hit.title}” depth ${depth} · ${res.ids.length}`)
+          setPathStatus(`Focus “${hit.title}” · ${res.ids.length}`)
         })
+        pointerGestureRef.current = false
+        pointers.clear()
         return
+      } else {
+        mode = 'pan'
       }
 
-      if (hit && e.button === 0) {
-        dragged = hit
-        dragIdRef.current = hit.id
-        hit.fx = hit.x
-        hit.fy = hit.y
-        simRef.current?.alphaTarget(0.15).restart()
-        try {
-          target.setPointerCapture(e.pointerId)
-        } catch {
-          /* ignore */
-        }
-      } else if (e.button === 0 || e.button === 1) {
-        panning = true
-        panLast = { x: e.clientX, y: e.clientY }
-        try {
-          target.setPointerCapture(e.pointerId)
-        } catch {
-          /* ignore */
-        }
-      }
-    }
-
-    const onMove = (e: PointerEvent) => {
-      if (dragged) {
-        moved = true
-        const rect = viewRect()
-        const t = transformRef.current
-        dragged.fx = (e.clientX - rect.left - t.x) / t.k
-        dragged.fy = (e.clientY - rect.top - t.y) / t.k
-        // Keep sim node position in sync while dragging
-        dragged.x = dragged.fx
-        dragged.y = dragged.fy
-        schedulePaint()
-        return
-      }
-      if (panning) {
-        moved = true
-        const dx = e.clientX - panLast.x
-        const dy = e.clientY - panLast.y
-        panLast = { x: e.clientX, y: e.clientY }
-        const t = transformRef.current
-        transformRef.current = d3.zoomIdentity.translate(t.x + dx, t.y + dy).scale(t.k)
-        schedulePaint()
-        scheduleSaveCamera()
-        return
-      }
-      // hover — animated strength via setHoverId (no React setState)
-      const hit = hitNode(e.clientX, e.clientY)
-      const next = hit?.id || null
-      if (next !== hoverIdRef.current) {
-        setHoverId(next)
-        if (hit) showTooltipDom(hit, e.clientX, e.clientY)
-        else hideTooltipDom()
-      } else if (hit) {
-        moveTooltipDom(e.clientX, e.clientY)
-      }
-    }
-
-    const onLeave = () => {
-      setHoverId(null)
-      hideTooltipDom()
-    }
-
-    const onUp = (e: PointerEvent) => {
-      if (dragged) {
-        const d = dragged
-        if (!moved) {
-          // click open — ghosts have no file; tags filter by tag name
-          if (d.isTag || d.type === 'tag') {
-            const tag = (d.title || '').replace(/^#/, '')
-            setSearchQuery(tag.startsWith('#') ? tag : tag)
-            setSearchMode('filter')
-            setPathStatus(`Filter tag #${tag}`)
-            schedulePaint()
-          } else if (d.isGhost || d.type === 'ghost' || !d.path) {
-            setPathStatus(`Ghost “${d.title}” — note belum ada (buat [[${d.title}]])`)
-          } else if (d.isAttachment || d.type === 'attachment') {
-            if (d.path && window.api?.openFileExternal) {
-              void window.api.openFileExternal(d.path).then((res) => {
-                if (res?.ok) setPathStatus(`Opened: ${d.title}`)
-                else setPathStatus(`Gagal buka attachment: ${res?.error || d.title}`)
-              })
-            } else {
-              setPathStatus(`Attachment: ${d.title}${d.path ? ` · ${d.relativePath || d.path}` : ''}`)
-            }
-          } else {
-            void openTab(d.path)
-            setActiveView('editor')
-          }
-        } else {
-          d.pinned = true
-          posCache.current.set(d.id, { x: d.x!, y: d.y!, fx: d.fx, fy: d.fy })
-          setPinnedCount(nodesRef.current.filter((n) => n.pinned || n.fx != null).length)
-          // Debounced auto-save of pinned positions to vault layout
-          if (saveLayoutTimer.current) clearTimeout(saveLayoutTimer.current)
-          saveLayoutTimer.current = setTimeout(() => {
-            const patch: Record<string, { x: number; y: number; pinned?: boolean }> = {}
-            for (const n of nodesRef.current) {
-              if (n.x == null || n.y == null) continue
-              // Never persist synthetic nodes (ghost / tag) into layout file
-              if (n.isGhost || n.type === 'ghost' || n.isTag || n.type === 'tag') continue
-              if (n.pinned || n.fx != null) {
-                patch[n.id] = { x: n.x, y: n.y, pinned: true }
-              }
-            }
-            if (Object.keys(patch).length) {
-              void saveLayoutPositions(patch, false).then((ok) => {
-                if (ok) setLayoutStatus(`Auto-saved ${Object.keys(patch).length} pin(s)`)
-              })
-            }
-          }, 600)
-        }
-        // Keep gentle animate if enabled (don't kill continuous motion after drag)
-        simRef.current?.alphaTarget(animateForcesRef.current ? 0.018 : 0)
-        dragged = null
-        dragIdRef.current = null
-      }
-      panning = false
+      document.addEventListener('pointermove', onDocMove, true)
+      document.addEventListener('pointerup', onDocUp, true)
+      document.addEventListener('pointercancel', onDocUp, true)
       try {
-        target.releasePointerCapture(e.pointerId)
+        wrapEl?.setPointerCapture(e.pointerId)
       } catch {
         /* ignore */
       }
     }
 
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault()
+      if (!wrapEl) return
+      const rect = wrapEl.getBoundingClientRect()
+      const mx = e.clientX - rect.left
+      const my = e.clientY - rect.top
+      const t = transformRef.current
+      const k0 = t.k || 1
+      const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12
+      const nextK = Math.max(0.08, Math.min(6, k0 * factor))
+      const x = mx - ((mx - t.x) * nextK) / k0
+      const y = my - ((my - t.y) * nextK) / k0
+      setCameraTransformRef.current(d3.zoomIdentity.translate(x, y).scale(nextK), {
+        user: true,
+        save: true
+      })
+    }
+
+    const onHover = (e: PointerEvent) => {
+      if (mode !== 'none') return
+      if (e.pointerType === 'touch') return
+      const hit = hitNodeRef.current(e.clientX, e.clientY)
+      const next = hit?.id || null
+      if (next !== hoverIdRef.current) {
+        setHoverIdRef.current(next)
+        if (hit) showTooltipDomRef.current(hit, e.clientX, e.clientY)
+        else hideTooltipDomRef.current()
+      } else if (hit) {
+        moveTooltipDomRef.current(e.clientX, e.clientY)
+      }
+    }
+
+    const onLeave = () => {
+      if (mode !== 'none') return
+      setHoverIdRef.current(null)
+      hideTooltipDomRef.current()
+    }
+
     const onDbl = (e: MouseEvent) => {
-      const hit = hitNode(e.clientX, e.clientY)
-      if (!hit) return
-      if (hit.isGhost || hit.isTag || hit.type === 'ghost' || hit.type === 'tag') return
+      const hit = hitNodeRef.current(e.clientX, e.clientY)
+      if (!hit || hit.isGhost || hit.isTag) return
       hit.fx = null
       hit.fy = null
       hit.pinned = false
       posCache.current.set(hit.id, { x: hit.x!, y: hit.y!, fx: null, fy: null })
       setPinnedCount(nodesRef.current.filter((n) => n.pinned || n.fx != null).length)
       simRef.current?.alpha(0.3).restart()
-      if (animateForcesRef.current) simRef.current?.alphaTarget(0.018)
       schedulePaint()
     }
 
-    const el = target as HTMLElement
-    el.addEventListener('wheel', onWheel, { passive: false })
-    el.addEventListener('pointerdown', onDown)
-    el.addEventListener('pointermove', onMove)
-    el.addEventListener('pointerup', onUp)
-    el.addEventListener('pointercancel', onUp)
-    el.addEventListener('pointerleave', onLeave)
-    el.addEventListener('dblclick', onDbl)
+    const bind = (el: HTMLDivElement) => {
+      wrapEl = el
+      el.style.touchAction = 'none'
+      el.style.userSelect = 'none'
+      el.style.webkitUserSelect = 'none'
+
+      el.addEventListener('pointerdown', onPointerDown, { passive: false })
+      el.addEventListener('pointermove', onHover, { passive: true })
+      el.addEventListener('pointerleave', onLeave)
+      el.addEventListener('wheel', onWheel, { passive: false })
+      el.addEventListener('dblclick', onDbl)
+
+      ;(window as unknown as { __wgGraph?: object }).__wgGraph = {
+        getTransform: () => {
+          const t = transformRef.current
+          return { x: t.x, y: t.y, k: t.k }
+        },
+        panBy: (dx: number, dy: number) => {
+          const t = transformRef.current
+          setCameraTransformRef.current(
+            d3.zoomIdentity.translate(t.x + dx, t.y + dy).scale(t.k || 1),
+            { user: true, save: false }
+          )
+        }
+      }
+    }
+
+    const unbind = () => {
+      clearDocListeners()
+      if (!wrapEl) return
+      wrapEl.removeEventListener('pointerdown', onPointerDown)
+      wrapEl.removeEventListener('pointermove', onHover)
+      wrapEl.removeEventListener('pointerleave', onLeave)
+      wrapEl.removeEventListener('wheel', onWheel)
+      wrapEl.removeEventListener('dblclick', onDbl)
+      wrapEl = null
+      try {
+        delete (window as unknown as { __wgGraph?: object }).__wgGraph
+      } catch {
+        /* */
+      }
+    }
+
+    const tryBind = () => {
+      if (cancelled) return
+      const el = wrapRef.current
+      if (el) {
+        bind(el)
+        return
+      }
+      requestAnimationFrame(tryBind)
+    }
+    tryBind()
 
     return () => {
-      el.removeEventListener('wheel', onWheel)
-      el.removeEventListener('pointerdown', onDown)
-      el.removeEventListener('pointermove', onMove)
-      el.removeEventListener('pointerup', onUp)
-      el.removeEventListener('pointercancel', onUp)
-      el.removeEventListener('pointerleave', onLeave)
-      el.removeEventListener('dblclick', onDbl)
+      cancelled = true
+      unbind()
     }
-    // filteredNodes.length: rebind after first data load (canvas was empty shell)
-  }, [
-    filteredNodes.length,
-    hitNode,
-    openTab,
-    setActiveView,
-    schedulePaint,
-    saveLayoutPositions,
-    findPath,
-    fetchNeighborhood,
-    showTooltipDom,
-    hideTooltipDom,
-    moveTooltipDom,
-    setHoverId,
-    scheduleSaveCamera,
-    schedulePaint,
-    fitView
-  ])
+  }, [activeView, schedulePaint])
+
+
 
   // External focus — retry until sim has positions (was clearing focus too early)
   useEffect(() => {
@@ -2960,15 +3194,19 @@ export const GraphCanvas: React.FC = () => {
           )
           sim.alpha(Math.max(sim.alpha(), wasZero ? 0.35 : 0.08)).restart()
         }
-        // First real size: always fit so graph isn't off-screen / blank-looking
-        if (wasZero && nodesRef.current.length > 0) {
+        // First real size (0→valid): fit only if camera not restored/user panned
+        if (wasZero && nodesRef.current.length > 0 && canAutoFitCamera()) {
           hasAutoFitRef.current = true
           fitView(false)
-        } else if (grewALot && !hasAutoFitRef.current && nodesRef.current.length > 0) {
+        } else if (grewALot && canAutoFitCamera() && nodesRef.current.length > 0) {
           hasAutoFitRef.current = true
           fitView(false)
-        } else if (grewALot && nodesRef.current.length > 0) {
-          // Window resize can push old camera off-screen
+        } else if (
+          grewALot &&
+          nodesRef.current.length > 0 &&
+          !userCameraTouchedRef.current &&
+          !cameraHydratedRef.current
+        ) {
           ensureGraphVisibleRef.current('resize')
         }
         schedulePaint()
@@ -3010,7 +3248,7 @@ export const GraphCanvas: React.FC = () => {
     setLayoutStatus('Pins released · re-layout')
     const sim = simRef.current
     if (sim) {
-      sim.alphaTarget(animateForcesRef.current ? 0.018 : 0)
+      sim.alphaTarget(animateForcesRef.current ? OBSIDIAN_SIM.animateAlphaTarget : 0)
       sim.alpha(0.75).restart()
     }
     schedulePaint()
@@ -3018,12 +3256,15 @@ export const GraphCanvas: React.FC = () => {
 
   /** Reheat forces + fit camera (Obsidian "start" feel) */
   const handleReheatAndFit = useCallback(() => {
+    userCameraTouchedRef.current = false
+    cameraHydratedRef.current = false
+    hasAutoFitRef.current = false
     handleReheat()
+    flashAction('Layout — reheat forces…')
     requestAnimationFrame(() => {
-      requestAnimationFrame(() => fitView(true))
+      requestAnimationFrame(() => fitView(true, null, { silent: false }))
     })
-    setLayoutStatus('Re-layout + fit')
-  }, [handleReheat, fitView])
+  }, [handleReheat, fitView, flashAction])
 
   const applyForcePreset = useCallback(
     (key: string) => {
@@ -3038,12 +3279,12 @@ export const GraphCanvas: React.FC = () => {
     [updateGraphSettings]
   )
 
-  // Live animate forces toggle
+  // Obsidian "Animate" — gentle continuous forces when on
   useEffect(() => {
     const sim = simRef.current
     if (!sim) return
     if (animateForces) {
-      sim.alphaTarget(0.018).restart()
+      sim.alphaTarget(OBSIDIAN_SIM.animateAlphaTarget).restart()
     } else {
       sim.alphaTarget(0)
     }
@@ -3054,19 +3295,29 @@ export const GraphCanvas: React.FC = () => {
     const patch = collectLayoutPatch(false)
     const count = Object.keys(patch).length
     if (count === 0) {
-      setLayoutStatus('Tidak ada posisi untuk disimpan')
+      flashAction('Save — tidak ada posisi (tunggu sim / buka vault)')
       return
     }
+    flashAction(`Save — menyimpan ${count} nodes…`)
     const ok = await saveLayoutPositions(patch, false)
-    setLayoutStatus(ok ? `Layout tersimpan (${count} nodes)` : 'Gagal simpan layout')
-  }, [collectLayoutPatch, saveLayoutPositions])
+    // Also persist camera so Fit state survives reload
+    const t = transformRef.current
+    if (ok && Number.isFinite(t.k)) {
+      void saveGraphCamera({ x: t.x, y: t.y, k: t.k })
+    }
+    flashAction(
+      ok
+        ? `Save OK · ${count} nodes → .workspacegraph/graph-layout.json`
+        : 'Save gagal — vault belum open / write error'
+    )
+  }, [collectLayoutPatch, saveLayoutPositions, saveGraphCamera, flashAction])
 
   const handleClearLayout = useCallback(async () => {
     handleReheat()
     const ok = await saveLayoutPositions({}, true)
     layoutHydratedRef.current = false
-    setLayoutStatus(ok ? 'File layout dikosongkan' : 'Gagal clear layout')
-  }, [handleReheat, saveLayoutPositions])
+    flashAction(ok ? 'Layout file dikosongkan' : 'Gagal clear layout')
+  }, [handleReheat, saveLayoutPositions, flashAction])
 
   const handleForcesChange = useCallback((next: GraphForceSettings) => {
     setForces(next)
@@ -3283,13 +3534,15 @@ export const GraphCanvas: React.FC = () => {
       const s = view.snapshot
       setOrphanMode(s.orphanMode === 'hide' || s.orphanMode === 'only' ? s.orphanMode : 'all')
       setHubMode(s.hubMode === 'hide' || s.hubMode === 'dim' ? s.hubMode : 'all')
-      setHubThreshold(s.hubDegreeThreshold ?? 15)
+      setHubThreshold(s.hubDegreeThreshold ?? 12)
       setSelectedType(s.selectedType || 'all')
       setSelectedTag(s.selectedTag || 'all')
       setShowLabels(s.showLabels !== false)
       setShowTagEdges(Boolean(s.showTagEdges))
       setShowLegend(Boolean(s.showLegend))
-      setColorBy(s.colorBy === 'folder' ? 'folder' : 'type')
+      setColorBy(
+        s.colorBy === 'folder' ? 'folder' : s.colorBy === 'type' ? 'type' : 'default'
+      )
       if (s.forces) setForces({ ...DEFAULT_FORCE_SETTINGS, ...s.forces })
       setPerfMode(s.perfMode === 'quality' || s.perfMode === 'speed' ? s.perfMode : 'auto')
       setExistingFilesOnly(s.existingFilesOnly !== false)
@@ -3307,7 +3560,7 @@ export const GraphCanvas: React.FC = () => {
           dimHubs: s.hubMode === 'dim',
           hideOrphans: s.orphanMode === 'hide',
           arrows: s.arrows ?? false,
-          textFade: s.textFade ?? 1,
+          textFade: s.textFade ?? DEFAULT_DISPLAY_OPTS.textFade,
           nodeSize: s.nodeSize ?? 1,
           lineThickness: s.lineThickness ?? 1,
           existingFilesOnly: s.existingFilesOnly !== false,
@@ -3316,7 +3569,7 @@ export const GraphCanvas: React.FC = () => {
           animateForces: Boolean(s.animateForces)
         },
         filters: {
-          hubDegreeThreshold: s.hubDegreeThreshold ?? 15,
+          hubDegreeThreshold: s.hubDegreeThreshold ?? 12,
           localDepth: graphSettings?.filters.localDepth ?? 1,
           orphanMode: s.orphanMode || 'all',
           hubMode: s.hubMode || 'dim',
@@ -3351,45 +3604,92 @@ export const GraphCanvas: React.FC = () => {
   const handleExportPng = useCallback(() => {
     const sized = syncCanvasSize()
     if (!sized.ready) {
+      flashAction('PNG — area graph belum siap, tekan Fit dulu')
       setViewsStatus('Area graph belum berukuran — coba Fit dulu')
       schedulePaint()
+      return
+    }
+    if (nodesRef.current.length === 0) {
+      flashAction('PNG — graph kosong')
       return
     }
     if (!hasAutoFitRef.current && nodesRef.current.length > 0) {
       hasAutoFitRef.current = true
       fitView(false)
     }
-    // SVG display + optional canvas fallback buffer
+    flashAction('PNG — mengekspor…')
+    // Paint hidden canvas buffer now (export path inside paint)
     exportCanvasPaintRef.current = true
     paint()
     const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')
-    const download = (url: string, note: string) => {
-      const a = document.createElement('a')
-      a.href = url
-      a.download = `workspacegraph-${stamp}.png`
-      a.click()
-      setViewsStatus(`PNG diexport · ${stats.nodes} nodes${note}`)
+    const fileName = `workspacegraph-${stamp}.png`
+
+    /** Electron-safe download: append <a> to body (bare click often no-ops). */
+    const downloadDataUrl = (url: string, note: string) => {
+      try {
+        const a = document.createElement('a')
+        a.href = url
+        a.download = fileName
+        a.rel = 'noopener'
+        a.style.display = 'none'
+        document.body.appendChild(a)
+        a.click()
+        window.setTimeout(() => {
+          try {
+            a.remove()
+          } catch {
+            /* ignore */
+          }
+          if (url.startsWith('blob:')) URL.revokeObjectURL(url)
+        }, 1500)
+        const msg = `PNG OK · ${stats.nodes} nodes${note}`
+        setViewsStatus(msg)
+        flashAction(msg)
+      } catch (err) {
+        console.error(err)
+        flashAction('PNG gagal unduh')
+        setViewsStatus('Export PNG gagal unduh')
+      }
     }
 
-    // Prefer SVG → canvas (what user actually sees). Hidden canvas toDataURL can be blank
-    // on the same Windows GPU path that made Graph View black.
-    const svg = svgRef.current
+    const tryCanvasDownload = (note: string) => {
+      const canvas = canvasRef.current
+      if (!canvas || canvas.width < 8 || canvas.height < 8) {
+        flashAction('PNG gagal — canvas kosong')
+        setViewsStatus('Export PNG gagal (canvas kosong)')
+        return
+      }
+      try {
+        downloadDataUrl(canvas.toDataURL('image/png'), note)
+      } catch (e) {
+        console.error(e)
+        flashAction('PNG gagal (canvas)')
+        setViewsStatus('Export PNG gagal')
+      }
+    }
+
+    // Prefer SVG → raster (what user sees). Wait 1–2 frames so React SVG is current.
     const { w, h } = sized
-    if (svg && w > 8 && h > 8) {
+    const runSvgExport = () => {
+      const svg = svgRef.current
+      if (!svg || w <= 8 || h <= 8) {
+        tryCanvasDownload(' · canvas')
+        return
+      }
       try {
         const clone = svg.cloneNode(true) as SVGSVGElement
         clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg')
         clone.setAttribute('width', String(w))
         clone.setAttribute('height', String(h))
-        // Opaque background (SVG is transparent)
         const bg = document.createElementNS('http://www.w3.org/2000/svg', 'rect')
         bg.setAttribute('width', '100%')
         bg.setAttribute('height', '100%')
         bg.setAttribute('fill', paletteRef.current.bg || '#1e1e22')
         clone.insertBefore(bg, clone.firstChild)
         const xml = new XMLSerializer().serializeToString(clone)
-        const blob = new Blob([xml], { type: 'image/svg+xml;charset=utf-8' })
-        const url = URL.createObjectURL(blob)
+        // data: URL avoids blob CORS issues on some Electron builds
+        const url =
+          'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(xml)
         const img = new Image()
         img.onload = () => {
           try {
@@ -3403,48 +3703,22 @@ export const GraphCanvas: React.FC = () => {
             c.fillStyle = paletteRef.current.bg || '#1e1e22'
             c.fillRect(0, 0, w, h)
             c.drawImage(img, 0, 0, w, h)
-            download(out.toDataURL('image/png'), ' · SVG')
+            downloadDataUrl(out.toDataURL('image/png'), ' · SVG')
           } catch (err) {
             console.error(err)
-            setViewsStatus('Export PNG gagal (SVG raster)')
-          } finally {
-            URL.revokeObjectURL(url)
+            tryCanvasDownload(' · canvas fallback')
           }
         }
-        img.onerror = () => {
-          URL.revokeObjectURL(url)
-          // Fallback: hidden canvas buffer
-          const canvas = canvasRef.current
-          if (!canvas) {
-            setViewsStatus('Export PNG gagal')
-            return
-          }
-          try {
-            download(canvas.toDataURL('image/png'), ' · canvas')
-          } catch (e) {
-            console.error(e)
-            setViewsStatus('Export PNG gagal')
-          }
-        }
+        img.onerror = () => tryCanvasDownload(' · canvas fallback')
         img.src = url
-        return
       } catch (err) {
         console.error(err)
+        tryCanvasDownload(' · canvas')
       }
     }
 
-    const canvas = canvasRef.current
-    if (!canvas) {
-      setViewsStatus('Export belum siap')
-      return
-    }
-    try {
-      download(canvas.toDataURL('image/png'), ' · canvas')
-    } catch (err) {
-      console.error(err)
-      setViewsStatus('Export PNG gagal')
-    }
-  }, [paint, stats.nodes, syncCanvasSize, schedulePaint, fitView])
+    requestAnimationFrame(() => requestAnimationFrame(runSvgExport))
+  }, [paint, stats.nodes, syncCanvasSize, schedulePaint, fitView, flashAction])
 
   // Phase 6: keyboard shortcuts when Graph view is active
   useEffect(() => {
@@ -3505,7 +3779,7 @@ export const GraphCanvas: React.FC = () => {
       }
       if (e.key === 'f' || e.key === 'F') {
         e.preventDefault()
-        fitView(true)
+        fitView(true, null, { silent: false })
         return
       }
       if (e.key === 'r' || e.key === 'R') {
@@ -3525,7 +3799,11 @@ export const GraphCanvas: React.FC = () => {
       }
       if (e.key === 'p' || e.key === 'P') {
         e.preventDefault()
-        setShowFilters((v) => !v)
+        setShowFilters((v) => {
+          const next = !v
+          flashAction(next ? 'Settings terbuka' : 'Settings ditutup')
+          return next
+        })
         return
       }
       if (e.key === '/') {
@@ -3562,33 +3840,37 @@ export const GraphCanvas: React.FC = () => {
       if (e.key === 'ArrowLeft') {
         e.preventDefault()
         const t = transformRef.current
-        transformRef.current = d3.zoomIdentity.translate(t.x + panStep, t.y).scale(t.k)
-        schedulePaint()
-        scheduleSaveCamera()
+        setCameraTransformRef.current(
+          d3.zoomIdentity.translate(t.x + panStep, t.y).scale(t.k || 1),
+          { user: true, save: true }
+        )
         return
       }
       if (e.key === 'ArrowRight') {
         e.preventDefault()
         const t = transformRef.current
-        transformRef.current = d3.zoomIdentity.translate(t.x - panStep, t.y).scale(t.k)
-        schedulePaint()
-        scheduleSaveCamera()
+        setCameraTransformRef.current(
+          d3.zoomIdentity.translate(t.x - panStep, t.y).scale(t.k || 1),
+          { user: true, save: true }
+        )
         return
       }
       if (e.key === 'ArrowUp') {
         e.preventDefault()
         const t = transformRef.current
-        transformRef.current = d3.zoomIdentity.translate(t.x, t.y + panStep).scale(t.k)
-        schedulePaint()
-        scheduleSaveCamera()
+        setCameraTransformRef.current(
+          d3.zoomIdentity.translate(t.x, t.y + panStep).scale(t.k || 1),
+          { user: true, save: true }
+        )
         return
       }
       if (e.key === 'ArrowDown') {
         e.preventDefault()
         const t = transformRef.current
-        transformRef.current = d3.zoomIdentity.translate(t.x, t.y - panStep).scale(t.k)
-        schedulePaint()
-        scheduleSaveCamera()
+        setCameraTransformRef.current(
+          d3.zoomIdentity.translate(t.x, t.y - panStep).scale(t.k || 1),
+          { user: true, save: true }
+        )
         return
       }
       // Zoom: +/= and -/_
@@ -3605,12 +3887,12 @@ export const GraphCanvas: React.FC = () => {
       // Home = fit all; 0 = mild re-center fit
       if (e.key === 'Home') {
         e.preventDefault()
-        fitView(true)
+        fitView(true, null, { silent: false })
         return
       }
       if (e.key === '0') {
         e.preventDefault()
-        fitView(true)
+        fitView(true, null, { silent: false })
         return
       }
       // A = toggle animate forces
@@ -3651,35 +3933,33 @@ export const GraphCanvas: React.FC = () => {
     zoomBy,
     updateGraphSettings,
     openTab,
-    setActiveView
+    setActiveView,
+    flashAction
   ])
 
   return (
     <div className="graph-container">
       <div className="graph-toolbar">
         <span className="graph-toolbar-stats">
-          {stats.nodes}/{nodes.filter((n) => !n.isGhost).length} notes · {stats.edges} links
-          {!existingFilesOnly
-            ? ` · ghosts:${nodes.filter((n) => n.isGhost).length}`
-            : ''}
-          {searchQuery.trim()
-            ? ` · ${searchMode === 'filter' ? 'filter' : 'spot'} “${searchQuery.trim()}”`
-            : ''}
-          {orphanMode !== 'all' ? ` · orphans:${orphanMode}` : ''}
-          {hubMode !== 'all' ? ` · hubs:${hubMode}` : ''}
-          {pathNodeIds ? ` · path:${pathNodeIds.size}` : ''}
-          {focusNodeIds ? ` · focus:${focusNodeIds.size}` : ''}
-          {selectedIds.size ? ` · sel:${selectedIds.size}` : ''}
-          {colorBy !== 'type' ? ` · color:${colorBy}` : ''}
-          {` · lod:${resolveLod(stats.nodes, perfMode)}`}
+          {stats.nodes} notes · {stats.edges} links
+          {searchQuery.trim() ? ` · “${searchQuery.trim()}”` : ''}
+          {pathNodeIds ? ` · path ${pathNodeIds.size}` : ''}
+          {focusNodeIds ? ` · focus` : ''}
+          {selectedIds.size ? ` · ${selectedIds.size} sel` : ''}
         </span>
         <div className="graph-toolbar-actions">
-          <span
-            className="graph-toolbar-hint"
-            title="←↑↓→ pan · +/− zoom · Home/0 fit · Esc clear · F fit · R layout · S save · E PNG · P panel · / search · 1–4 orphans · A animate · T tags · Ctrl+A select · Ctrl+C copy · O open"
-          >
-            keys
-          </span>
+          {actionToast ? (
+            <span className="graph-toolbar-toast" role="status" aria-live="polite" title={actionToast}>
+              {actionToast}
+            </span>
+          ) : (
+            <span
+              className="graph-toolbar-hint"
+              title="←↑↓→ pan · +/− zoom · Home/0 fit · Esc clear · F fit · R layout · S save · E PNG · P panel · / search · 1–4 orphans · A animate · T tags · Ctrl+A select · Ctrl+C copy · O open"
+            >
+              keys
+            </span>
+          )}
           {selectedIds.size > 0 && (
             <button
               type="button"
@@ -3696,8 +3976,8 @@ export const GraphCanvas: React.FC = () => {
           <button
             type="button"
             className="graph-chip"
-            onClick={() => fitView(true)}
-            title="Fit (F)"
+            onClick={() => fitView(true, null, { silent: false })}
+            title="Fit all nodes in view (F)"
           >
             Fit
           </button>
@@ -3705,7 +3985,7 @@ export const GraphCanvas: React.FC = () => {
             type="button"
             className="graph-chip"
             onClick={handleReheatAndFit}
-            title="Lepas pin, re-layout & fit (R)"
+            title="Release pins, re-layout & fit (R)"
           >
             Layout
           </button>
@@ -3713,19 +3993,32 @@ export const GraphCanvas: React.FC = () => {
             type="button"
             className="graph-chip"
             onClick={() => void handleSaveLayout()}
-            title="Simpan posisi"
+            title="Save node positions + camera to vault (S)"
           >
             Save
           </button>
-          <button type="button" className="graph-chip" onClick={handleExportPng} title="Export PNG">
+          <button
+            type="button"
+            className="graph-chip"
+            onClick={handleExportPng}
+            title="Export graph as PNG (E)"
+          >
             PNG
           </button>
           <button
             type="button"
             className={`graph-chip graph-chip-icon ${showFilters ? 'active' : ''}`}
-            onClick={() => setShowFilters((p) => !p)}
-            title="Graph settings (P)"
+            onClick={() =>
+              setShowFilters((p) => {
+                const next = !p
+                flashAction(next ? 'Settings terbuka' : 'Settings ditutup')
+                return next
+              })
+            }
+            title="Graph settings panel (P)"
             aria-label="Graph settings"
+            aria-expanded={showFilters}
+            aria-pressed={showFilters}
           >
             <Icon name="settings" size={13} />
           </button>
@@ -3856,7 +4149,7 @@ export const GraphCanvas: React.FC = () => {
         className="graph-canvas graph-canvas--export"
         aria-hidden="true"
       />
-      {/* React-owned SVG — survives re-renders (unlike innerHTML on bare <svg>) */}
+      {/* React-owned SVG — world graph under camera transform (Obsidian zoom scale) */}
       <div className="graph-svg-host" role="img" aria-label="Knowledge graph">
         {svgFrame ? (
           <svg
@@ -3867,45 +4160,42 @@ export const GraphCanvas: React.FC = () => {
             height={svgFrame.h}
             preserveAspectRatio="none"
           >
-            <g className="g-edges">
-              {svgFrame.edges.map((e) => (
-                <line
-                  key={e.key}
-                  x1={e.x1}
-                  y1={e.y1}
-                  x2={e.x2}
-                  y2={e.y2}
-                  stroke={e.stroke}
-                  strokeWidth={e.sw}
-                  strokeOpacity={e.op}
-                />
-              ))}
-            </g>
-            <g className="g-nodes">
-              {svgFrame.nodes.map((n) =>
-                n.kind === 'poly' ? (
-                  <polygon
-                    key={n.key}
-                    points={n.points}
-                    fill={n.fill}
-                    stroke={n.stroke}
-                    strokeWidth={n.sw}
-                    fillOpacity={n.fillOp}
+            <g
+              className="g-world"
+              transform={`translate(${svgFrame.tx},${svgFrame.ty}) scale(${svgFrame.k})`}
+            >
+              <g className="g-edges">
+                {svgFrame.edges.map((e) => (
+                  <line
+                    key={e.key}
+                    x1={e.x1}
+                    y1={e.y1}
+                    x2={e.x2}
+                    y2={e.y2}
+                    stroke={e.stroke}
+                    strokeWidth={e.sw}
+                    strokeOpacity={e.op}
+                    strokeLinecap="round"
+                    strokeDasharray={e.dash}
                   />
-                ) : (
+                ))}
+              </g>
+              <g className="g-nodes">
+                {svgFrame.nodes.map((n) => (
                   <circle
                     key={n.key}
                     cx={n.cx}
                     cy={n.cy}
                     r={n.r}
-                    fill={n.fill}
+                    fill={n.fill === 'none' ? 'none' : n.fill}
                     stroke={n.stroke}
                     strokeWidth={n.sw}
                     fillOpacity={n.fill === 'none' ? 0 : n.fillOp}
-                    strokeOpacity={n.fill === 'none' ? n.fillOp : 1}
+                    strokeOpacity={n.strokeOp ?? (n.fill === 'none' ? n.fillOp : 1)}
+                    strokeDasharray={n.kind === 'ghost' ? '2 2' : undefined}
                   />
-                )
-              )}
+                ))}
+              </g>
             </g>
             <g className="g-labels">
               {svgFrame.labels.map((lab) => (
@@ -3914,9 +4204,11 @@ export const GraphCanvas: React.FC = () => {
                   x={lab.x}
                   y={lab.y}
                   fill={lab.fill}
+                  fillOpacity={lab.op}
                   fontSize={11}
-                  fontFamily="system-ui, Segoe UI, sans-serif"
+                  fontFamily='Inter, "Segoe UI", system-ui, sans-serif'
                   fontWeight={lab.bold ? 600 : 400}
+                  dominantBaseline="middle"
                 >
                   {lab.text}
                 </text>
@@ -3924,13 +4216,10 @@ export const GraphCanvas: React.FC = () => {
             </g>
           </svg>
         ) : (
-          <div className="graph-live-hud" style={{ position: 'absolute', left: 12, top: 12 }}>
+          <div className="graph-live-hud graph-live-hud--load" aria-live="polite">
             Memuat graph…
           </div>
         )}
-      </div>
-      <div className="graph-live-hud" aria-live="polite">
-        {svgFrame?.hud || (graphLoaded ? 'sim:…' : 'memuat…')}
       </div>
       {nodes.length === 0 || filteredNodes.length === 0
         ? (() => {
@@ -4062,7 +4351,7 @@ export const GraphCanvas: React.FC = () => {
               className="graph-chip"
               onClick={() => {
                 transformRef.current = d3.zoomIdentity
-                fitView(true)
+                fitView(true, null, { silent: false })
                 setGraphDiag(null)
               }}
             >
@@ -4122,7 +4411,7 @@ export const GraphCanvas: React.FC = () => {
         </button>
         <button
           type="button"
-          onClick={() => fitView(true)}
+          onClick={() => fitView(true, null, { silent: false })}
           title="Zoom to fit (F)"
           aria-label="Zoom to fit"
         >

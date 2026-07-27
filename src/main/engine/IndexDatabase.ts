@@ -56,6 +56,11 @@ export class IndexDatabase {
     return this.dbPath
   }
 
+  /** Exposes the raw DB handle — used by EmbeddingEngine for the embedding_chunks table. */
+  getDb(): SqliteDb | null {
+    return this.available ? this.db : null
+  }
+
   open(workspaceRoot: string): boolean {
     this.close()
     try {

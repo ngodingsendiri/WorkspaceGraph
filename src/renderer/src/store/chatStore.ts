@@ -62,11 +62,14 @@ export interface ChatStore {
   sendMessage: (text: string, activeFilePath?: string) => Promise<void>
   cancelStream: () => Promise<void>
   clearHistory: () => void
-  applyProposal: (id: string) => Promise<{ ok: boolean; error?: string }>
+  applyProposal: (id: string) => Promise<{ ok: boolean; error?: string; path?: string }>
   rejectProposal: (id: string) => Promise<void>
   saveCurrentChat: () => Promise<void>
   loadChat: (id: string) => Promise<void>
   ensureConversationId: () => Promise<string>
+  /** Scaffold AI Memory/ then run bootstrap agent prompt */
+  learnWorkspace: (activeFilePath?: string) => Promise<{ ok: boolean; error?: string; created?: string[] }>
+  lastKernelStatus: string
 }
 
 function mergeProposals(
@@ -92,6 +95,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   conversationId: null,
   activeStreamId: null,
   lastToolStatus: '',
+  lastKernelStatus: '',
 
   fetchProviders: async () => {
     try {
@@ -264,23 +268,35 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       messages: [],
       pendingProposals: [],
       conversationId: null,
-      lastToolStatus: ''
+      lastToolStatus: '',
+      lastKernelStatus: ''
     }),
 
   applyProposal: async (id: string) => {
-    const res = await window.api.applyWriteProposal(id)
-    if (res.ok) {
-      set((state) => ({
-        pendingProposals: state.pendingProposals.map((p) =>
-          p.id === id ? { ...p, status: 'applied' } : p
-        ),
-        messages: state.messages.map((m) => ({
-          ...m,
-          proposals: m.proposals?.map((p) => (p.id === id ? { ...p, status: 'applied' } : p))
+    try {
+      const res = await window.api.applyWriteProposal(id)
+      if (res.ok) {
+        set((state) => ({
+          pendingProposals: state.pendingProposals.map((p) =>
+            p.id === id ? { ...p, status: 'applied' } : p
+          ),
+          messages: state.messages.map((m) => ({
+            ...m,
+            proposals: m.proposals?.map((p) => (p.id === id ? { ...p, status: 'applied' } : p))
+          })),
+          lastKernelStatus: res.path
+            ? `Applied → reindexed · ${res.path.split(/[/\\]/).pop()}`
+            : 'Applied + reindexed'
         }))
-      }))
+      } else {
+        set({ lastKernelStatus: res.error || 'Apply failed' })
+      }
+      return res
+    } catch (err) {
+      const error = err instanceof Error ? err.message : String(err)
+      set({ lastKernelStatus: error })
+      return { ok: false, error }
     }
-    return res
   },
 
   rejectProposal: async (id: string) => {
@@ -292,8 +308,51 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       messages: state.messages.map((m) => ({
         ...m,
         proposals: m.proposals?.map((p) => (p.id === id ? { ...p, status: 'rejected' } : p))
-      }))
+      })),
+      lastKernelStatus: 'Proposal rejected'
     }))
+  },
+
+  learnWorkspace: async (activeFilePath?: string) => {
+    try {
+      const mem = await window.api.ensureAiMemory()
+      if (!mem.ok) {
+        set({ lastKernelStatus: mem.error || 'AI Memory scaffold failed' })
+        return { ok: false, error: mem.error || 'scaffold failed' }
+      }
+      set({
+        enableTools: true,
+        useContext: true,
+        agentRole: 'curator',
+        lastKernelStatus:
+          mem.created.length > 0
+            ? `AI Memory scaffold · ${mem.created.length} file baru`
+            : 'AI Memory siap · bootstrap agent…'
+      })
+      // Structured bootstrap prompt — agent uses tools to fill memory + densify graph
+      const prompt = `Mode: **PELAJARI WORKSPACE** (bootstrap memori).
+
+Tugas:
+1. list_dir root (+ folder penting).
+2. Baca AI Memory/00 Index.md dan catatan AI Memory lain.
+3. Isi/perbarui via write_note atau append_note (proposal):
+   - AI Memory/Cara Kerja.md
+   - AI Memory/Aturan.md
+   - AI Memory/Pola & Naming.md
+   - AI Memory/Glossary.md
+   - AI Memory/00 Index.md (wikilink domain)
+   - AI Memory/Log Ingest.md (append log hari ini)
+4. Pakai [[wikilink]] agar graph memadat.
+5. Jangan invent data. Akhiri ringkasan + daftar proposal.
+
+Mulai: list_dir "" lalu read_note "AI Memory/00 Index.md".`
+      await get().sendMessage(prompt, activeFilePath)
+      return { ok: true, created: mem.created }
+    } catch (err) {
+      const error = err instanceof Error ? err.message : String(err)
+      set({ lastKernelStatus: error })
+      return { ok: false, error }
+    }
   },
 
   saveCurrentChat: async () => {

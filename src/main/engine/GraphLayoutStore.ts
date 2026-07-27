@@ -127,13 +127,14 @@ export function normalizeCamera(v: unknown): GraphCamera | null {
   return { x, y, k: Math.min(6, Math.max(0.08, k)) }
 }
 
+/** Defaults aligned with Obsidian Graph force + display model (renderer graphShared). */
 export const DEFAULT_GRAPH_SETTINGS: GraphSettings = {
   forces: {
-    center: 0.06,
-    charge: -90,
-    linkDist: 68,
-    linkStr: 0.4,
-    collide: 0.6
+    center: 0.045,
+    charge: -125,
+    linkDist: 52,
+    linkStr: 0.58,
+    collide: 0.68
   },
   display: {
     showLabels: true,
@@ -142,7 +143,7 @@ export const DEFAULT_GRAPH_SETTINGS: GraphSettings = {
     dimHubs: true,
     hideOrphans: false,
     arrows: false,
-    textFade: 1,
+    textFade: 0.9,
     nodeSize: 1,
     lineThickness: 1,
     existingFilesOnly: true,
@@ -151,7 +152,7 @@ export const DEFAULT_GRAPH_SETTINGS: GraphSettings = {
     animateForces: false
   },
   filters: {
-    hubDegreeThreshold: 15,
+    hubDegreeThreshold: 12,
     localDepth: 1,
     orphanMode: 'all',
     hubMode: 'dim',
@@ -410,7 +411,7 @@ export interface GraphViewSnapshot {
   showLabels: boolean
   showTagEdges: boolean
   showLegend: boolean
-  colorBy: 'type' | 'folder'
+  colorBy: 'default' | 'type' | 'folder'
   forces: GraphForceSettings
   /** Performance preference */
   perfMode: 'auto' | 'quality' | 'speed'
@@ -446,13 +447,13 @@ export interface GraphViewsFile {
 export const DEFAULT_VIEW_SNAPSHOT: GraphViewSnapshot = {
   orphanMode: 'all',
   hubMode: 'dim',
-  hubDegreeThreshold: 15,
+  hubDegreeThreshold: DEFAULT_GRAPH_SETTINGS.filters.hubDegreeThreshold,
   selectedType: 'all',
   selectedTag: 'all',
   showLabels: true,
   showTagEdges: false,
   showLegend: false,
-  colorBy: 'type',
+  colorBy: 'default',
   forces: { ...DEFAULT_GRAPH_SETTINGS.forces },
   perfMode: 'auto',
   arrows: DEFAULT_GRAPH_SETTINGS.display.arrows,
@@ -502,7 +503,8 @@ function sanitizeSnapshot(raw: Partial<GraphViewSnapshot> | null | undefined): G
     showLabels: s.showLabels ?? true,
     showTagEdges: s.showTagEdges ?? false,
     showLegend: s.showLegend ?? false,
-    colorBy: s.colorBy === 'folder' ? 'folder' : 'type',
+    colorBy:
+      s.colorBy === 'folder' ? 'folder' : s.colorBy === 'type' ? 'type' : 'default',
     forces,
     perfMode: s.perfMode === 'quality' || s.perfMode === 'speed' ? s.perfMode : 'auto',
     arrows: disp.arrows,

@@ -6,6 +6,7 @@ import { useEditorStore, normPath } from '../../store/editorStore'
 import { useWorkspaceStore } from '../../store/workspaceStore'
 import { BacklinksPanel } from './BacklinksPanel'
 import { LocalGraphView } from '../graph/LocalGraphView'
+import { MergeDialog } from './MergeDialog'
 import { Icon } from '../ui/Icons'
 import { getActiveMode, subscribeThemePreferenceChange, type ThemeMode } from '../../utils/theme'
 import {
@@ -90,7 +91,10 @@ export const MarkdownEditor: React.FC = () => {
   const [formatOpen, setFormatOpen] = useState(false)
   const formatMenuRef = useRef<HTMLDivElement | null>(null)
 
-  const activeTab = tabs.find((t) => t.id === activeTabId)
+const activeTab = tabs.find((t) => t.id === activeTabId)
+  const closeMergeDialog = useEditorStore((s) => s.closeMergeDialog)
+  const resolveMergeDialog = useEditorStore((s) => s.resolveMergeDialog)
+  const mergeDialog = useEditorStore((s) => s.mergeDialog)
   const cmRef = useRef<ReactCodeMirrorRef>(null)
   const isLive = surfaceMode === 'live'
   /**
@@ -106,13 +110,15 @@ export const MarkdownEditor: React.FC = () => {
   /**
    * Freeze "big note" decision at tab switch — do NOT recompute on every keystroke.
    * Recreating CM extensions each length change reconfigured the whole editor (lag/hang feel).
+   * Tables still render via StateField even when full LP is off (see livePreviewExtension).
    */
   const lpEnabled = useMemo(() => {
     const tab = useEditorStore.getState().tabs.find((t) => t.id === activeTabId)
     const v = typeof tab?.content === 'string' ? tab.content : ''
     if (!v) return true
     const lines = v.split('\n').length
-    return v.length <= 6_000 && lines <= 200
+    // Higher ceiling than before — tables + wikilinks need LP on pegawai notes
+    return v.length <= 80_000 && lines <= 2_000
   }, [activeTabId])
 
   useEffect(() => subscribeThemePreferenceChange(setCmTheme), [])
@@ -151,8 +157,8 @@ export const MarkdownEditor: React.FC = () => {
     const dark = cmTheme !== 'light'
     // Minimal extensions only — markdown() lezer hang on pegawai tables
     const base = [makeNoteShellTheme(dark), EditorView.lineWrapping]
-    // Live Preview for notes that were small when opened
-    if (isLive && lpEnabled) base.push(...livePreviewExtension())
+    // Live: always enable table widgets; full heading/wiki LP when note not huge
+    if (isLive) base.push(...livePreviewExtension({ full: lpEnabled }))
     return base
   }, [isLive, cmTheme, lpEnabled])
 
@@ -484,6 +490,18 @@ export const MarkdownEditor: React.FC = () => {
 
       {/* Obsidian-like local graph dock under the note */}
       <LocalGraphView />
+
+      {mergeDialog && mergeDialog.isOpen && (
+        <MergeDialog
+          isOpen={mergeDialog.isOpen}
+          onClose={closeMergeDialog}
+          onResolve={resolveMergeDialog}
+          filePath={mergeDialog.filePath}
+          theirs={mergeDialog.theirs}
+          yours={mergeDialog.yours}
+          base={mergeDialog.base}
+        />
+      )}
     </div>
   )
 }

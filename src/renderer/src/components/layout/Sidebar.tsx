@@ -3,6 +3,7 @@ import { useWorkspaceStore, FileItem } from '../../store/workspaceStore'
 import { useEditorStore, normPath } from '../../store/editorStore'
 import { TemplatePicker } from '../systems/TemplatePicker'
 import { Icon } from '../ui/Icons'
+import { toast } from '../ui/Toast'
 
 interface FileTreeItemProps {
   item: FileItem
@@ -172,7 +173,14 @@ export const Sidebar: React.FC<{ onOpenSearch: () => void }> = ({ onOpenSearch }
     const parent = item.path.split(/[/\\]/).slice(0, -1).join(sep)
     const newPath = `${parent}${sep}${clean}`
     try {
-      await window.api.renameFile(item.path, newPath)
+      const result = await window.api.renameFile(item.path, newPath)
+      // Show WikiLink update toast if any links were updated
+      if (result && typeof result === 'object' && result.renamedLinks > 0) {
+        toast(
+          `✏️ Rename selesai — ${result.renamedLinks} WikiLink diperbarui di ${result.affectedFiles.length} file`,
+          { variant: 'success', duration: 5000 }
+        )
+      }
       // Update open tab path if this file was open
       const editor = useEditorStore.getState()
       const open = editor.tabs.find((t) => normPath(t.path) === normPath(item.path))
@@ -187,7 +195,7 @@ export const Sidebar: React.FC<{ onOpenSearch: () => void }> = ({ onOpenSearch }
       }
       await fetchState()
     } catch (err) {
-      window.alert(err instanceof Error ? err.message : String(err))
+      toast(err instanceof Error ? err.message : String(err), { variant: 'error' })
     }
     setCtx(null)
   }
