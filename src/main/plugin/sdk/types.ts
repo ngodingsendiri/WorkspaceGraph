@@ -14,6 +14,7 @@ export interface PluginManifest {
   commands?: PluginCommand[]
   enabled?: boolean
   minAppVersion?: string
+  main: string
 }
 
 export type PluginPermission = 

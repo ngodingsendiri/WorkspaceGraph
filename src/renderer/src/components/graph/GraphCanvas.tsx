@@ -3938,7 +3938,7 @@ export const GraphCanvas: React.FC = () => {
   ])
 
   return (
-    <div className="graph-container">
+    <div className="graph-container" role="application" aria-label="Knowledge graph" tabIndex={0} onKeyDown={onKeyDown}>
       <div className="graph-toolbar">
         <span className="graph-toolbar-stats">
           {stats.nodes} notes · {stats.edges} links

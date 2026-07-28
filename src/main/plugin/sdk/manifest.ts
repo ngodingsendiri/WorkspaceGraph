@@ -1,3 +1,5 @@
+import { AppAPI } from './types'
+
 export interface PluginManifest {
   id: string
   name: string
