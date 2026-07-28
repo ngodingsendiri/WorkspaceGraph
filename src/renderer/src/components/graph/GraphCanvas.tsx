@@ -3720,40 +3720,39 @@ export const GraphCanvas: React.FC = () => {
     requestAnimationFrame(() => requestAnimationFrame(runSvgExport))
   }, [paint, stats.nodes, syncCanvasSize, schedulePaint, fitView, flashAction])
 
-  // Phase 6: keyboard shortcuts when Graph view is active
-  useEffect(() => {
+// Phase 6: keyboard shortcuts when Graph view is active
+  const onKey = useCallback(async (e: KeyboardEvent) => {
     if (activeView !== 'graph') return
-    const onKey = (e: KeyboardEvent) => {
-      const el = e.target as HTMLElement | null
-      if (!el) return
-      const tag = el.tagName
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable) {
-        if (e.key === 'Escape') {
-          ;(el as HTMLInputElement).blur?.()
-          return
-        }
+    const el = e.target as HTMLElement | null
+    if (!el) return
+    const tag = el.tagName
+    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable) {
+      if (e.key === 'Escape') {
+        ;(el as HTMLInputElement).blur?.()
         return
       }
-      // Phase 7: Ctrl/Cmd+A select all visible; Ctrl+C copy wikilinks
-      if ((e.ctrlKey || e.metaKey) && (e.key === 'a' || e.key === 'A')) {
-        e.preventDefault()
-        setSelectedIds(new Set(nodesRef.current.map((n) => n.id)))
-        setPathStatus(`Selected ${nodesRef.current.length} nodes`)
-        schedulePaint()
-        return
-      }
-      if ((e.ctrlKey || e.metaKey) && (e.key === 'c' || e.key === 'C')) {
-        const ids = selectedIdsRef.current
-        if (ids.size === 0) return
-        e.preventDefault()
-        const titles = nodesRef.current.filter((n) => ids.has(n.id)).map((n) => `[[${n.title}]]`)
-        void navigator.clipboard?.writeText(titles.join(' ')).then(
-          () => setPathStatus(`Copied ${titles.length} wikilink(s)`),
-          () => setPathStatus('Clipboard gagal')
-        )
-        return
-      }
-      if (e.ctrlKey || e.metaKey || e.altKey) return
+      return
+    }
+    // Phase 7: Ctrl/Cmd+A select all visible; Ctrl+C copy wikilinks
+    if ((e.ctrlKey || e.metaKey) && (e.key === 'a' || e.key === 'A')) {
+      e.preventDefault()
+      setSelectedIds(new Set(nodesRef.current.map((n) => n.id)))
+      setPathStatus(`Selected ${nodesRef.current.length} nodes`)
+      schedulePaint()
+      return
+    }
+    if ((e.ctrlKey || e.metaKey) && (e.key === 'c' || e.key === 'C')) {
+      const ids = selectedIdsRef.current
+      if (ids.size === 0) return
+      e.preventDefault()
+      const titles = nodesRef.current.filter((n) => ids.has(n.id)).map((n) => `[[${n.title}]]`)
+      void navigator.clipboard?.writeText(titles.join(' ')).then(
+        () => setPathStatus(`Copied ${titles.length} wikilink(s)`),
+        () => setPathStatus('Clipboard gagal')
+      )
+      return
+    }
+    if (e.ctrlKey || e.metaKey || e.altKey) return
 
       if (e.key === 'Escape') {
         e.preventDefault()
