@@ -1286,12 +1286,13 @@ html:not([data-theme]) {
 }
 .graph-svg .g-labels text {
   paint-order: stroke;
-  stroke: rgba(12, 14, 18, 0.75);
-  stroke-width: 3px;
+  stroke: rgba(12, 14, 18, 0.55);
+  stroke-width: 2px;
   stroke-linejoin: round;
 }
 [data-theme='light'] .graph-svg .g-labels text {
-  stroke: rgba(255, 255, 255, 0.9);
+  stroke: rgba(255, 255, 255, 0.85);
+  stroke-width: 2.5px;
 }
 
 /* Debug/load only — not shown during normal Obsidian-like graph use */

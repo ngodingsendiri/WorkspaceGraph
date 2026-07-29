@@ -11,6 +11,7 @@
  * - Tech: we use Canvas/SVG + d3-force (Obsidian uses WebGL) — same feel, not same GPU stack
  */
 import type { GraphForceSettings, GraphPerfMode } from '../../store/graphStore'
+import type { Palette } from './graphTypes'
 
 /**
  * Obsidian-like default forces (d3 units, not Obsidian UI 0–1 sliders).
@@ -593,4 +594,79 @@ export class SpatialHash2D<T extends { x?: number | null; y?: number | null; id:
     }
     return out
   }
+}
+
+// ─── Shared utility functions (used by GraphCanvas + LocalGraphCanvas) ──────
+
+/** Read CSS custom property from document root */
+export function css(name: string, fb: string): string {
+  if (typeof document === 'undefined') return fb
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fb
+}
+
+/**
+ * Canvas 2D is picky: some CSS color functions / unresolved vars silently fail.
+ * Always prefer plain hex / rgba for stroke & fill.
+ */
+export function canvasSafeColor(raw: string, fallback: string): string {
+  const s = (raw || '').trim()
+  if (!s) return fallback
+  if (s.startsWith('var(') || s.startsWith('color-mix') || s.startsWith('oklch') || s.startsWith('oklab')) {
+    return fallback
+  }
+  return s
+}
+
+/**
+ * Obsidian-like palette: flat bg, mono default nodes, muted edges.
+ * Type rainbow kept only for Color by = Type (extension, not Obsidian default).
+ */
+export function readPalette(): Palette {
+  const isLight = document.documentElement.getAttribute('data-theme') === 'light'
+  const v = isLight ? OBSIDIAN_VISUAL.light : OBSIDIAN_VISUAL.dark
+  const types = isLight ? TYPE_NODE_COLORS.light : TYPE_NODE_COLORS.dark
+  return {
+    isLight,
+    bg: canvasSafeColor(css('--bg-app', v.bg), v.bg),
+    edge: v.edge,
+    edgeTag: v.edgeTag,
+    edgeHot: v.edgeHot,
+    label: v.label,
+    labelBg: v.labelBg,
+    nodeStroke: v.nodeStroke,
+    colors: {
+      ...types,
+      other: types.other,
+      ghost: v.nodeGhost,
+      tag: v.nodeTag,
+      attachment: v.nodeAttachment,
+      default: v.nodeDefault
+    }
+  }
+}
+
+/** Node radius wrapper (reads degree from SimNode-like object) */
+export function radius(d: { degree?: number }, scale = 1): number {
+  return nodeRadius(d.degree ?? 0, scale, false)
+}
+
+/** Extract string id from d3 node/link (handles string | SimNode) */
+export function nid(x: string | { id: string }): string {
+  return typeof x === 'object' ? x.id : x
+}
+
+/** Safe tag extraction from node data */
+export function safeTags(n: { tags?: string | string[] }): string[] {
+  if (!n.tags) return []
+  if (Array.isArray(n.tags)) return n.tags
+  return typeof n.tags === 'string' ? n.tags.split(',').map((t) => t.trim()).filter(Boolean) : []
+}
+
+/** Escape HTML entities for safe DOM insertion */
+export function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
 }

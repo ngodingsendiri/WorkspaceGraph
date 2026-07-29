@@ -6,30 +6,23 @@ import React, { useCallback, useEffect, useRef, useState } from 'react'
 import * as d3 from 'd3'
 import { useEditorStore } from '../../store/editorStore'
 import { useWorkspaceStore } from '../../store/workspaceStore'
-import { useGraphStore, GraphNodeData, type GraphForceSettings } from '../../store/graphStore'
+import { useGraphStore, type GraphForceSettings } from '../../store/graphStore'
 import { Icon } from '../ui/Icons'
 import { DEFAULT_FORCE_SETTINGS } from './GraphFiltersPanel'
+import type { SimNode, SimLink } from './graphTypes'
 import {
   chargeFor,
   linkDistanceFor,
   nodeRadius,
   OBSIDIAN_SIM,
   OBSIDIAN_VISUAL,
-  resolveObsidianNodeFill
+  resolveObsidianNodeFill,
+  lerp,
+  nid,
+  css
 } from './graphShared'
 
-interface SimNode extends d3.SimulationNodeDatum, GraphNodeData {
-  pinned?: boolean
-  isCenter?: boolean
-}
-interface SimLink extends d3.SimulationLinkDatum<SimNode> {
-  id: string
-  type: string
-  source: string | SimNode
-  target: string | SimNode
-}
-
-type Palette = {
+type LocalPalette = {
   isLight: boolean
   bg: string
   edge: string
@@ -41,12 +34,7 @@ type Palette = {
   colors: Record<string, string>
 }
 
-function css(name: string, fb: string): string {
-  if (typeof document === 'undefined') return fb
-  return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fb
-}
-
-function readPalette(): Palette {
+function readLocalPalette(): LocalPalette {
   const isLight = document.documentElement.getAttribute('data-theme') === 'light'
   const v = isLight ? OBSIDIAN_VISUAL.light : OBSIDIAN_VISUAL.dark
   return {
@@ -76,15 +64,7 @@ function readPalette(): Palette {
   }
 }
 
-function lerp(a: number, b: number, t: number): number {
-  return a + (b - a) * t
-}
-
-function nid(x: string | SimNode): string {
-  return typeof x === 'object' ? x.id : x
-}
-
-function radius(d: SimNode): number {
+function localRadius(d: SimNode): number {
   if (d.isCenter) return Math.max(7, Math.min(12, nodeRadius(d.degree, 1.15)))
   return Math.max(4, Math.min(9, nodeRadius(d.degree, 0.95)))
 }
@@ -113,7 +93,7 @@ export const LocalGraphCanvas: React.FC = () => {
   const nodesRef = useRef<SimNode[]>([])
   const linksRef = useRef<SimLink[]>([])
   const transformRef = useRef(d3.zoomIdentity)
-  const paletteRef = useRef(readPalette())
+  const paletteRef = useRef(readLocalPalette())
   const hoverIdRef = useRef<string | null>(null)
   const hoverStrengthRef = useRef(0)
   const hoverAnimRafRef = useRef(0)
@@ -241,7 +221,7 @@ export const LocalGraphCanvas: React.FC = () => {
 
     for (const n of simNodes) {
       if (n.x == null || n.y == null) continue
-      const r = radius(n)
+      const r = localRadius(n)
       const isTag = Boolean(n.isTag || n.type === 'tag')
       const isGhost = Boolean(n.isGhost || n.type === 'ghost')
       const isAtt = Boolean(n.isAttachment || n.type === 'attachment')
@@ -300,7 +280,7 @@ export const LocalGraphCanvas: React.FC = () => {
       for (const n of simNodes) {
         if (n.x == null || n.y == null) continue
         if (hot && !hot.has(n.id) && n.id !== hover) continue
-        const rWorld = radius(n)
+        const rWorld = localRadius(n)
         const titleStr = String(n.title || n.id || '')
         const text = titleStr.length > 22 ? titleStr.slice(0, 21) + '…' : titleStr
         const sx = n.x * t.k + t.x + rWorld * t.k + 5
@@ -374,7 +354,7 @@ export const LocalGraphCanvas: React.FC = () => {
 
   useEffect(() => {
     const apply = () => {
-      paletteRef.current = readPalette()
+      paletteRef.current = readLocalPalette()
       dirtyRef.current = true
       schedulePaint()
     }
@@ -419,7 +399,7 @@ export const LocalGraphCanvas: React.FC = () => {
       const dy = n.y - y
       const d = dx * dx + dy * dy
       const pad = n.id === stickyId ? 12 : 5
-      const r = radius(n) + pad
+      const r = localRadius(n) + pad
       if (d <= r * r) {
         if (n.id === stickyId) {
           sticky = n
@@ -584,7 +564,7 @@ export const LocalGraphCanvas: React.FC = () => {
             'collide',
             d3
               .forceCollide<SimNode>()
-              .radius((d) => radius(d) + 6)
+              .radius((d) => localRadius(d) + 6)
               .strength(collideStr)
               .iterations(2)
           )
