@@ -40,35 +40,25 @@ function EmbeddingBadge() {
 
   const labels: Record<EmbedState, string> = {
     idle: '',
-    loading_model: 'Loading AI model…',
-    indexing: `Indexing ${status.indexedFiles} files`,
-    ready: `Semantic: ${status.totalChunks} chunks`
+    loading_model: 'Memuat model AI…',
+    indexing: `Mengindeks ${status.indexedFiles} file`,
+    ready: `Semantik: ${status.totalChunks} chunk`
   }
-  const colors: Record<EmbedState, string> = {
+  const tone: Record<EmbedState, string> = {
     idle: 'transparent',
-    loading_model: 'var(--color-warning, #f59e0b)',
-    indexing: 'var(--accent, #6366f1)',
-    ready: 'var(--color-success, #22c55e)'
+    loading_model: 'var(--color-warning)',
+    indexing: 'var(--color-accent)',
+    ready: 'var(--color-success)'
   }
   const spinning = status.state === 'loading_model' || status.state === 'indexing'
 
   return (
     <span
+      className={`status-embed ${spinning ? 'is-busy' : ''}`}
+      style={{ color: tone[status.state] }}
       title={`Semantic RAG — ${labels[status.state]}`}
-      style={{
-        display: 'inline-flex',
-        alignItems: 'center',
-        gap: 4,
-        color: colors[status.state],
-        fontSize: 'var(--text-xs)',
-        cursor: 'default'
-      }}
     >
-      {spinning ? (
-        <span style={{ display: 'inline-block', animation: 'spin 1s linear infinite' }}>⟳</span>
-      ) : (
-        <Icon name="psychology" size={12} />
-      )}
+      {spinning ? <Icon name="sync" size={12} /> : <Icon name="psychology" size={12} />}
       {labels[status.state]}
     </span>
   )
@@ -78,13 +68,11 @@ export const StatusBar: React.FC = () => {
   const { totalFiles, totalFolders, totalNotes, rootPath } = useWorkspaceStore()
   const nodeCount = useGraphStore((s) => s.nodes.length)
   const edgeCount = useGraphStore((s) => s.edges.length)
-  // Only active tab meta + content length-ish fields — not full tabs array churn for inactive
   const surfaceMode = useEditorStore((s) => s.surfaceMode)
   const active = useEditorStore((s) => s.tabs.find((t) => t.id === s.activeTabId))
 
   const wordCount = useMemo(() => {
     if (!active?.content) return 0
-    // strip frontmatter for count
     let body = active.content
     if (body.startsWith('---')) {
       const end = body.indexOf('\n---', 3)
@@ -99,57 +87,50 @@ export const StatusBar: React.FC = () => {
       : active.path
     : null
 
+  const vaultName = rootPath ? rootPath.split(/[/\\]/).pop() : 'Tanpa vault'
+
   return (
     <div className="app-statusbar">
-      <span className="truncate" style={{ maxWidth: 280 }} title={rootPath || ''}>
-        {rootPath ? rootPath.split(/[/\\]/).pop() : 'No vault'}
+      {/* Left group — file context */}
+      <span className="status-left">
+        <span className="truncate" title={rootPath || ''}>
+          {vaultName}
+        </span>
+        <span className="status-sep">•</span>
+        <span>{totalNotes} catatan</span>
+        <span className="status-sep status-optional">•</span>
+        <span className="status-optional">
+          {totalFiles} file / {totalFolders} folder
+        </span>
+        <span className="status-sep status-optional">•</span>
+        <span className="status-optional">
+          Graph {nodeCount}/{edgeCount}
+        </span>
+        {shortPath && (
+          <>
+            <span className="status-sep">•</span>
+            <span className="truncate" title={active?.path}>
+              {shortPath}
+              {active?.isDirty ? ' •' : ''}
+            </span>
+            <span className="status-sep status-optional">•</span>
+            <span className="status-optional">{wordCount} kata</span>
+            <span className="status-mode status-optional">
+              {surfaceMode === 'source' ? 'source' : 'live'}
+            </span>
+            {active?.isDirty && <span className="status-dirty">belum disimpan</span>}
+          </>
+        )}
       </span>
-      <span>•</span>
-      <span>{totalNotes} notes</span>
-      <span>•</span>
-      <span>
-        {totalFiles} files / {totalFolders} folders
-      </span>
-      <span>•</span>
-      <span>
-        Graph {nodeCount}/{edgeCount}
-      </span>
-      {shortPath && (
-        <>
-          <span>•</span>
-          <span className="truncate" style={{ maxWidth: 220 }} title={active?.path}>
-            {shortPath}
-            {active?.isDirty ? ' •' : ''}
-          </span>
-          <span>•</span>
-          <span>{wordCount} words</span>
-          <span style={{ opacity: 0.85 }}>{surfaceMode === 'source' ? 'source' : 'live'}</span>
-          {active?.isDirty && <span style={{ color: 'var(--color-warning)' }}>unsaved</span>}
-        </>
-      )}
-      <span
-        style={{
-          marginLeft: 'auto',
-          display: 'inline-flex',
-          alignItems: 'center',
-          gap: 8
-        }}
-      >
+
+      {/* Right group — system status */}
+      <span className="status-right">
         <EmbeddingBadge />
-        <span
-          style={{
-            color: 'var(--color-success)',
-            fontSize: 'var(--text-xs)',
-            display: 'inline-flex',
-            alignItems: 'center',
-            gap: 4
-          }}
-        >
+        <span className="status-ready" title="Vault aktif & terindeks">
           <Icon name="checkCircle" size={12} />
-          Active
+          Siap
         </span>
       </span>
-      <style>{`@keyframes spin { from{transform:rotate(0deg)} to{transform:rotate(360deg)} }`}</style>
     </div>
   )
 }

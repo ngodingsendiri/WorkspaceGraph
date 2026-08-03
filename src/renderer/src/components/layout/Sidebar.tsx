@@ -4,6 +4,8 @@ import { useEditorStore, normPath } from '../../store/editorStore'
 import { TemplatePicker } from '../systems/TemplatePicker'
 import { Icon } from '../ui/Icons'
 import { toast } from '../ui/Toast'
+import { alertDialog, confirmDialog, promptDialog } from '../ui/Dialog'
+import { usePanelWidth } from '../../hooks/usePanelWidth'
 
 interface FileTreeItemProps {
   item: FileItem
@@ -95,8 +97,22 @@ interface CtxMenu {
   item: FileItem
 }
 
+const NavGroup: React.FC<{ title: string; children: React.ReactNode }> = ({ title, children }) => (
+  <div className="nav-group">
+    <div className="nav-group-title">{title}</div>
+    {children}
+  </div>
+)
+
 export const Sidebar: React.FC<{ onOpenSearch: () => void }> = ({ onOpenSearch }) => {
   const { files, rootPath, setActiveView, activeView, fetchState } = useWorkspaceStore()
+  const { width: sidebarWidth, onHandleMouseDown: sidebarResize, resizing } = usePanelWidth(
+    'wg.sidebarWidth',
+    260,
+    200,
+    480,
+    (x) => x
+  )
   const openTab = useEditorStore((s) => s.openTab)
   // Only re-render tree highlight when active path changes — not on every keystroke
   const activeNormPath = useEditorStore((s) => {
@@ -138,12 +154,12 @@ export const Sidebar: React.FC<{ onOpenSearch: () => void }> = ({ onOpenSearch }
 
   const handleNewFolder = async (parentPath?: string) => {
     if (!rootPath) return
-    const name = window.prompt('Nama folder baru:')
+    const name = await promptDialog({ title: 'Folder baru', message: 'Nama folder baru:', placeholder: 'Nama folder' })
     if (!name?.trim()) return
     const clean = name.trim()
     // Reject path segments that would create nested escapes (../, a/b, …)
     if (/[/\\]/.test(clean) || clean === '.' || clean === '..') {
-      window.alert('Nama folder tidak valid (tanpa / \\ atau ..)')
+      await alertDialog({ title: 'Nama tidak valid', message: 'Nama folder tidak boleh mengandung / \\ atau ..' })
       return
     }
     const base = parentPath || rootPath
@@ -152,20 +168,25 @@ export const Sidebar: React.FC<{ onOpenSearch: () => void }> = ({ onOpenSearch }
       await window.api.createFolder(`${base}${sep}${clean}`)
       await fetchState()
     } catch (err) {
-      window.alert(err instanceof Error ? err.message : String(err))
+      await alertDialog({ title: 'Gagal membuat folder', message: err instanceof Error ? err.message : String(err) })
     }
     setCtx(null)
   }
 
   const handleRename = async (item: FileItem) => {
-    const next = window.prompt('Rename:', item.name)
+    const next = await promptDialog({
+      title: 'Ubah nama',
+      message: 'Nama baru:',
+      initialValue: item.name,
+      placeholder: 'Nama baru'
+    })
     if (!next?.trim() || next === item.name) {
       setCtx(null)
       return
     }
     const clean = next.trim()
     if (/[/\\]/.test(clean) || clean === '.' || clean === '..') {
-      window.alert('Nama tidak valid (tanpa / \\ atau ..)')
+      await alertDialog({ title: 'Nama tidak valid', message: 'Nama tidak boleh mengandung / \\ atau ..' })
       setCtx(null)
       return
     }
@@ -201,9 +222,12 @@ export const Sidebar: React.FC<{ onOpenSearch: () => void }> = ({ onOpenSearch }
   }
 
   const handleDelete = async (item: FileItem) => {
-    const ok = window.confirm(
-      `Hapus "${item.name}"?${item.isDirectory ? ' (termasuk isinya)' : ''}`
-    )
+    const ok = await confirmDialog({
+      title: 'Hapus?',
+      message: `Hapus "${item.name}"?${item.isDirectory ? ' (termasuk isinya)' : ''}`,
+      danger: true,
+      okLabel: 'Hapus'
+    })
     if (!ok) {
       setCtx(null)
       return
@@ -214,7 +238,7 @@ export const Sidebar: React.FC<{ onOpenSearch: () => void }> = ({ onOpenSearch }
       await window.api.deleteFile(item.path)
       await fetchState()
     } catch (err) {
-      window.alert(err instanceof Error ? err.message : String(err))
+      await alertDialog({ title: 'Gagal menghapus', message: err instanceof Error ? err.message : String(err) })
     }
     setCtx(null)
   }
@@ -247,7 +271,17 @@ export const Sidebar: React.FC<{ onOpenSearch: () => void }> = ({ onOpenSearch }
   }
 
   return (
-    <div className="sidebar">
+    <div
+      className={`sidebar ${resizing ? 'is-resizing' : ''}`}
+      style={{ '--sidebar-w': `${sidebarWidth}px` } as React.CSSProperties}
+    >
+      <div
+        className="wg-resize-handle wg-resize-handle--right"
+        onMouseDown={sidebarResize}
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Ubah lebar sidebar"
+      />
       <div className="sidebar-header" style={{ justifyContent: 'space-between' }}>
         <span
           style={{
@@ -263,34 +297,45 @@ export const Sidebar: React.FC<{ onOpenSearch: () => void }> = ({ onOpenSearch }
       </div>
 
       <div className="sidebar-nav">
-        <button
-          className={`nav-item ${activeView === 'dashboard' ? 'active' : ''}`}
-          onClick={() => setActiveView('dashboard')}
-        >
-          <Icon name="dashboard" size={16} />
-          Dashboard
-        </button>
+        <NavGroup title="Utama">
+          <button
+            className={`nav-item ${activeView === 'dashboard' ? 'active' : ''}`}
+            onClick={() => setActiveView('dashboard')}
+          >
+            <Icon name="dashboard" size={16} />
+            Dashboard
+          </button>
 
-        <button
-          className={`nav-item ${activeView === 'editor' ? 'active' : ''}`}
-          onClick={() => setActiveView('editor')}
-        >
-          <Icon name="note" size={16} />
-          Editor
-        </button>
+          <button
+            className={`nav-item ${activeView === 'editor' ? 'active' : ''}`}
+            onClick={() => setActiveView('editor')}
+          >
+            <Icon name="note" size={16} />
+            Editor
+          </button>
 
-        <button
-          className={`nav-item ${activeView === 'graph' ? 'active' : ''}`}
-          onClick={() => setActiveView('graph')}
-        >
-          <Icon name="graph" size={16} />
-          Graph View
-        </button>
+          <button
+            className={`nav-item ${activeView === 'graph' ? 'active' : ''}`}
+            onClick={() => setActiveView('graph')}
+          >
+            <Icon name="graph" size={16} />
+            Graph
+          </button>
+        </NavGroup>
 
-        <button className="nav-item" onClick={onOpenSearch}>
-          <Icon name="search" size={16} />
-          Search (Ctrl+K)
-        </button>
+        <NavGroup title="Alat">
+          <button className="nav-item" onClick={onOpenSearch}>
+            <Icon name="search" size={16} />
+            Cari (Ctrl+K)
+          </button>
+          <button
+            className="nav-item"
+            onClick={() => window.dispatchEvent(new Event('wg:open-palette'))}
+          >
+            <Icon name="command" size={16} />
+            Palette (Ctrl+P)
+          </button>
+        </NavGroup>
       </div>
 
       <div className="sidebar-content">
@@ -303,20 +348,20 @@ export const Sidebar: React.FC<{ onOpenSearch: () => void }> = ({ onOpenSearch }
           }}
         >
           <span className="section-title" style={{ padding: 0 }}>
-            Files
+            File
           </span>
           <div style={{ display: 'flex', gap: 2 }}>
             <button
               className="btn btn-ghost btn-sm btn-icon"
               onClick={() => setTplOpen(true)}
-              data-tooltip="From template (Ctrl+Shift+N)"
+              data-tooltip="Dari template (Ctrl+Shift+N)"
             >
               <Icon name="template" size={15} />
             </button>
             <button
               className="btn btn-ghost btn-sm btn-icon"
               onClick={() => handleNewNote()}
-              data-tooltip="New Note (Ctrl+N)"
+              data-tooltip="Note baru (Ctrl+N)"
             >
               <Icon name="plus" size={15} />
             </button>
@@ -337,13 +382,15 @@ export const Sidebar: React.FC<{ onOpenSearch: () => void }> = ({ onOpenSearch }
       </div>
 
       <div className="sidebar-footer">
-        <button
-          className={`nav-item ${activeView === 'settings' ? 'active' : ''}`}
-          onClick={() => setActiveView('settings')}
-        >
-          <Icon name="settings" size={16} />
-          Settings
-        </button>
+        <NavGroup title="Sistem">
+          <button
+            className={`nav-item ${activeView === 'settings' ? 'active' : ''}`}
+            onClick={() => setActiveView('settings')}
+          >
+            <Icon name="settings" size={16} />
+            Pengaturan
+          </button>
+        </NavGroup>
       </div>
 
       <TemplatePicker open={tplOpen} onClose={() => setTplOpen(false)} />
@@ -358,26 +405,26 @@ export const Sidebar: React.FC<{ onOpenSearch: () => void }> = ({ onOpenSearch }
           {ctx.item.isDirectory && (
             <>
               <button type="button" onClick={() => handleNewNote(ctx.item.path)}>
-                New note here
+                Note baru di sini
               </button>
               <button type="button" onClick={() => handleNewFolder(ctx.item.path)}>
-                New folder
+                Folder baru
               </button>
             </>
           )}
           {ctx.item.id !== 'root' && (
             <>
               <button type="button" onClick={() => handleRename(ctx.item)}>
-                Rename
+                Ubah nama
               </button>
               <button type="button" className="danger" onClick={() => handleDelete(ctx.item)}>
-                Delete
+                Hapus
               </button>
             </>
           )}
           {ctx.item.id === 'root' && (
             <button type="button" onClick={() => handleNewNote()}>
-              New note in Knowledge
+              Note baru di Knowledge
             </button>
           )}
         </div>

@@ -5,6 +5,15 @@ import { useGraphStore } from '../../store/graphStore'
 import { TemplatePicker } from '../systems/TemplatePicker'
 import { Icon } from '../ui/Icons'
 
+const SkeletonRows: React.FC<{ count?: number }> = ({ count = 4 }) => (
+  <div className="dash-skeleton">
+    <div className="dash-skeleton-row wide" />
+    {Array.from({ length: count }).map((_, i) => (
+      <div key={i} className="dash-skeleton-row" />
+    ))}
+  </div>
+)
+
 interface DomainOverview {
   projects: { title: string; path: string; status?: string; relativePath: string }[]
   tasks: { title: string; path: string; status?: string; priority?: string; relativePath: string }[]
@@ -34,6 +43,7 @@ export const DashboardView: React.FC<{ onOpenSearch: () => void }> = ({ onOpenSe
   const [tags, setTags] = useState<{ tag: string; count: number }[]>([])
   const [domain, setDomain] = useState<DomainOverview | null>(null)
   const [tplOpen, setTplOpen] = useState(false)
+  const [loading, setLoading] = useState(true)
 
   useEffect(() => {
     fetchGraph()
@@ -46,6 +56,7 @@ export const DashboardView: React.FC<{ onOpenSearch: () => void }> = ({ onOpenSe
   }, [fetchGraph])
 
   const loadDashboardData = async () => {
+    setLoading(true)
     try {
       const recent = await window.api.getRecentNotes(6)
       setRecentNotes(recent || [])
@@ -55,6 +66,8 @@ export const DashboardView: React.FC<{ onOpenSearch: () => void }> = ({ onOpenSe
       setDomain(ov || null)
     } catch (err) {
       console.error('Failed to load dashboard data:', err)
+    } finally {
+      setLoading(false)
     }
   }
 
@@ -129,40 +142,46 @@ export const DashboardView: React.FC<{ onOpenSearch: () => void }> = ({ onOpenSe
   )
   const realNoteCount = nodes.filter((n) => !n.isGhost && !n.isTag && !n.isAttachment).length
 
-  const metrics = [
+  const metrics: {
+    label: string
+    value: number | string
+    color: string
+    hint?: string
+    onClick?: () => void
+  }[] = [
     {
-      label: 'Markdown Notes',
+      label: 'Catatan',
       value: totalNotes || nodes.length,
       color: 'var(--color-primary)',
       onClick: onOpenSearch
     },
     {
-      label: 'Projects',
+      label: 'Proyek',
       value: domain?.counts.projects ?? 0,
       color: 'var(--color-accent)',
       onClick: undefined
     },
     {
-      label: 'Open Tasks',
+      label: 'Tugas terbuka',
       value: domain?.counts.openTasks ?? 0,
       color: 'var(--color-warning)',
       onClick: undefined
     },
     {
-      label: 'People',
+      label: 'Orang',
       value: domain?.counts.people ?? 0,
       color: 'var(--node-person)',
       onClick: undefined
     },
     {
-      label: 'Checkboxes',
+      label: 'Checklist',
       value: domain?.counts.openCheckboxes ?? 0,
       color: 'var(--color-success)',
       onClick: undefined,
-      hint: 'Open - [ ] across vault'
+      hint: '- [ ] terbuka di seluruh vault'
     },
     {
-      label: 'Orphans',
+      label: 'Orphan',
       value: orphanNodes.length,
       color: orphanNodes.length > 0 ? 'var(--color-warning)' : 'var(--text-muted)',
       onClick: orphanNodes.length > 0 ? handleOrphanClick : undefined,
@@ -175,7 +194,7 @@ export const DashboardView: React.FC<{ onOpenSearch: () => void }> = ({ onOpenSe
       onClick: () => setActiveView('graph')
     },
     {
-      label: 'Files',
+      label: 'File',
       value: totalFiles,
       color: 'var(--text-secondary)',
       onClick: undefined
@@ -183,236 +202,166 @@ export const DashboardView: React.FC<{ onOpenSearch: () => void }> = ({ onOpenSe
   ]
 
   const listItem = (title: string, sub: string, onClick: () => void, badge?: string) => (
-    <div
-      key={title + sub}
-      style={{
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        padding: 'var(--space-2) var(--space-3)',
-        borderRadius: 'var(--radius-md)',
-        cursor: 'pointer'
-      }}
-      onClick={onClick}
-      onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--bg-hover)')}
-      onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
-    >
+    <div key={`${title}\u0000${sub}`} className="dash-list-item" onClick={onClick}>
       <div style={{ minWidth: 0 }}>
-        <div style={{ fontSize: 'var(--text-sm)', fontWeight: 500 }} className="truncate">
-          {title}
-        </div>
-        <div style={{ fontSize: 10, color: 'var(--text-muted)' }} className="truncate">
-          {sub}
-        </div>
+        <div className="dash-list-title truncate">{title}</div>
+        <div className="dash-list-sub truncate">{sub}</div>
       </div>
-      {badge && (
-        <span style={{ fontSize: 10, color: 'var(--text-muted)', flexShrink: 0, marginLeft: 8 }}>
-          {badge}
-        </span>
-      )}
+      {badge && <span className="dash-list-badge">{badge}</span>}
     </div>
   )
 
   return (
-    <div
-      style={{
-        padding: 'var(--space-6) var(--space-8)',
-        height: '100%',
-        overflowY: 'auto',
-        background: 'var(--bg-app)'
-      }}
-    >
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          marginBottom: 'var(--space-6)'
-        }}
-      >
-        <div>
-          <h1 style={{ fontSize: 'var(--text-2xl)', fontWeight: 'var(--weight-bold)' }}>
-            Workspace
-          </h1>
-          <p
-            style={{
-              fontSize: 'var(--text-xs)',
-              color: 'var(--text-muted)',
-              marginTop: 4,
-              fontFamily: 'var(--font-mono)'
-            }}
-          >
+    <div className="dashboard-view">
+      <div className="dash-head">
+        <div style={{ minWidth: 0 }}>
+          <h1 className="dash-title">Workspace</h1>
+          <p className="dash-path truncate" title={rootPath ?? undefined}>
             {rootPath}
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2" style={{ flexShrink: 0 }}>
           <button className="btn btn-primary btn-sm" onClick={() => setTplOpen(true)}>
-            + From template
+            + Dari template
           </button>
           <button className="btn btn-surface btn-sm" onClick={handleCreateDailyNote}>
             + Daily
           </button>
           <button className="btn btn-ghost btn-sm" onClick={onOpenSearch}>
-            Search
+            Cari
           </button>
         </div>
       </div>
 
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))',
-          gap: 'var(--space-3)',
-          marginBottom: 'var(--space-6)'
-        }}
-      >
+      <div className="dash-metrics">
         {metrics.map((m) => (
-          <div
+          <button
             key={m.label}
-            style={{
-              background: 'var(--bg-surface)',
-              borderRadius: 'var(--radius-md)',
-              padding: 'var(--space-3)',
-              cursor: m.onClick ? 'pointer' : 'default'
-            }}
+            type="button"
+            className={`dash-metric ${m.onClick ? 'clickable' : ''}`}
             onClick={m.onClick}
-            title={(m as { hint?: string }).hint}
+            title={m.hint}
           >
-            <span
-              style={{
-                fontSize: 10,
-                color: 'var(--text-muted)',
-                textTransform: 'uppercase',
-                letterSpacing: '0.05em'
-              }}
-            >
-              {m.label}
-            </span>
-            <div style={{ fontSize: 'var(--text-xl)', fontWeight: 700, color: m.color }}>
+            <span className="dash-metric-label">{m.label}</span>
+            <span className="dash-metric-value" style={{ color: m.color }}>
               {m.value}
-            </div>
-          </div>
+            </span>
+          </button>
         ))}
       </div>
 
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
-          gap: 'var(--space-6)'
-        }}
-      >
+      <div className="dash-grid">
         {/* Open tasks + checkboxes */}
-        <div>
+        <section className="dash-section">
           <div className="section-title" style={{ padding: '0 0 var(--space-2) 0' }}>
-            Open tasks
+            Tugas terbuka
           </div>
-          {(domain?.tasks.filter((t) => t.status !== 'done' && t.status !== 'completed') || [])
-            .slice(0, 6)
-            .map((t) =>
-              listItem(t.title, t.relativePath, () => openNote(t.path), t.priority || t.status)
-            )}
-          {(!domain || domain.tasks.length === 0) && (
-            <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', padding: 8 }}>
-              No task notes yet. Use template <b>Task</b>.
-            </div>
+          {loading ? (
+            <SkeletonRows count={4} />
+          ) : (
+            <>
+              {(domain?.tasks.filter(
+                (t) => t.status !== 'done' && t.status !== 'completed'
+              ) || [])
+                .slice(0, 6)
+                .map((t) =>
+                  listItem(t.title, t.relativePath, () => openNote(t.path), t.priority || t.status)
+                )}
+              {(!domain || domain.tasks.length === 0) && (
+                <div className="dash-empty">Belum ada catatan tugas. Buat lewat template Task.</div>
+              )}
+            </>
           )}
 
           <div className="section-title" style={{ padding: 'var(--space-4) 0 var(--space-2) 0' }}>
-            Open checkboxes
+            Checklist terbuka
           </div>
           {(domain?.openCheckboxes || [])
             .slice(0, 8)
-            .map((c) => listItem(c.text, c.noteTitle, () => openNote(c.notePath), undefined))}
-        </div>
+            .map((c) => listItem(c.text, c.noteTitle, () => openNote(c.notePath)))}
+        </section>
 
         {/* Projects + People */}
-        <div>
+        <section className="dash-section">
           <div className="section-title" style={{ padding: '0 0 var(--space-2) 0' }}>
-            Projects
+            Proyek
           </div>
-          {(domain?.projects || [])
-            .slice(0, 8)
-            .map((p) => listItem(p.title, p.relativePath, () => openNote(p.path), p.status))}
-          {(!domain || domain.projects.length === 0) && (
-            <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', padding: 8 }}>
-              No projects. Create from template.
-            </div>
+          {loading ? (
+            <SkeletonRows count={3} />
+          ) : (
+            <>
+              {(domain?.projects || [])
+                .slice(0, 8)
+                .map((p) => listItem(p.title, p.relativePath, () => openNote(p.path), p.status))}
+              {(!domain || domain.projects.length === 0) && (
+                <div className="dash-empty">Belum ada proyek. Buat dari template.</div>
+              )}
+            </>
           )}
 
           <div className="section-title" style={{ padding: 'var(--space-4) 0 var(--space-2) 0' }}>
-            People
+            Orang
           </div>
-          {(domain?.people || [])
-            .slice(0, 8)
-            .map((p) => listItem(p.title, p.relativePath, () => openNote(p.path)))}
-          {(!domain || domain.people.length === 0) && (
-            <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', padding: 8 }}>
-              No people notes. Link rekan via [[Name]].
-            </div>
+          {loading ? (
+            <SkeletonRows count={3} />
+          ) : (
+            <>
+              {(domain?.people || [])
+                .slice(0, 8)
+                .map((p) => listItem(p.title, p.relativePath, () => openNote(p.path)))}
+              {(!domain || domain.people.length === 0) && (
+                <div className="dash-empty">Belum ada catatan orang. Link rekan via [[Nama]].</div>
+              )}
+            </>
           )}
-        </div>
+        </section>
 
         {/* Recent + tags */}
-        <div>
+        <section className="dash-section">
           <div className="section-title" style={{ padding: '0 0 var(--space-2) 0' }}>
-            Recent
+            Terbaru
           </div>
-          {recentNotes.map((note) => (
-            <div
-              key={note.id}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                padding: 'var(--space-2) var(--space-3)',
-                borderRadius: 'var(--radius-md)',
-                cursor: 'pointer'
-              }}
-              onClick={() => openNote(note.path)}
-              onMouseEnter={(e) => (e.currentTarget.style.background = 'var(--bg-hover)')}
-              onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
-            >
-              <div style={{ minWidth: 0 }}>
-                <div style={{ fontSize: 'var(--text-sm)' }} className="truncate">
-                  {note.title}
+          {loading ? (
+            <SkeletonRows count={4} />
+          ) : (
+            recentNotes.map((note) => (
+              <div key={note.id} className="dash-list-item" onClick={() => openNote(note.path)}>
+                <div style={{ minWidth: 0 }}>
+                  <div className="dash-list-title truncate">{note.title}</div>
+                  <div className="dash-list-sub truncate">{note.relativePath}</div>
                 </div>
-                <div style={{ fontSize: 10, color: 'var(--text-muted)' }} className="truncate">
-                  {note.relativePath}
-                </div>
+                <button
+                  className="btn btn-ghost btn-sm btn-icon"
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    handleOpenInGraph(note.path)
+                  }}
+                  title="Graph"
+                >
+                  <Icon name="graph" size={14} />
+                </button>
               </div>
-              <button
-                className="btn btn-ghost btn-sm btn-icon"
-                onClick={(e) => {
-                  e.stopPropagation()
-                  handleOpenInGraph(note.path)
-                }}
-                title="Graph"
-              >
-                <Icon name="graph" size={14} />
-              </button>
-            </div>
-          ))}
+            ))
+          )}
 
           <div className="section-title" style={{ padding: 'var(--space-4) 0 var(--space-2) 0' }}>
-            Tags
+            Tag
           </div>
           <div className="flex flex-wrap gap-2">
-            {tags.slice(0, 14).map((t) => (
-              <span
-                key={t.tag}
-                style={{
-                  fontSize: 'var(--text-xs)',
-                  background: 'var(--bg-surface)',
-                  padding: '3px 8px',
-                  borderRadius: 'var(--radius-sm)',
-                  cursor: 'pointer'
-                }}
-                onClick={() => handleTagClick(t.tag)}
-              >
-                #{t.tag} ({t.count})
-              </span>
-            ))}
+            {loading ? (
+              <SkeletonRows count={2} />
+            ) : (
+              tags.slice(0, 14).map((t) => (
+                <button
+                  key={t.tag}
+                  type="button"
+                  className="dash-tag"
+                  onClick={() => handleTagClick(t.tag)}
+                >
+                  #{t.tag} ({t.count})
+                </button>
+              ))
+            )}
           </div>
 
           <div
@@ -425,23 +374,20 @@ export const DashboardView: React.FC<{ onOpenSearch: () => void }> = ({ onOpenSe
               gap: 8
             }}
           >
-            <span>Orphan notes</span>
+            <span>Catatan orphan</span>
             {orphanNodes.length > 0 && (
               <button
                 type="button"
-                className="btn btn-ghost btn-sm"
-                style={{ fontSize: 10, padding: '2px 6px' }}
+                className="btn btn-ghost btn-sm btn-tiny"
                 onClick={handleOrphanClick}
-                title="Buka Graph · orphans only"
+                title="Buka Graph · hanya orphan"
               >
                 Graph
               </button>
             )}
           </div>
           {orphanNodes.length === 0 ? (
-            <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', padding: 8 }}>
-              Tidak ada orphan — semua note terhubung.
-            </div>
+            <div className="dash-empty">Tidak ada orphan — semua catatan terhubung.</div>
           ) : (
             orphanNodes
               .slice(0, 8)
@@ -452,8 +398,8 @@ export const DashboardView: React.FC<{ onOpenSearch: () => void }> = ({ onOpenSe
           {orphanNodes.length > 8 && (
             <button
               type="button"
-              className="btn btn-ghost btn-sm"
-              style={{ marginTop: 4, fontSize: 11 }}
+              className="btn btn-ghost btn-sm btn-tiny"
+              style={{ marginTop: 4 }}
               onClick={handleOrphanClick}
             >
               +{orphanNodes.length - 8} lagi di Graph
@@ -462,14 +408,14 @@ export const DashboardView: React.FC<{ onOpenSearch: () => void }> = ({ onOpenSe
           {orphanNodes.length > 0 && (
             <button
               type="button"
-              className="btn btn-ghost btn-sm"
-              style={{ marginTop: 2, fontSize: 10, color: 'var(--text-muted)' }}
+              className="btn btn-ghost btn-sm btn-tiny"
+              style={{ marginTop: 2, color: 'var(--text-muted)' }}
               onClick={handleOrphanSearch}
             >
               Cari orphan:true
             </button>
           )}
-        </div>
+        </section>
       </div>
 
       <TemplatePicker open={tplOpen} onClose={() => setTplOpen(false)} />

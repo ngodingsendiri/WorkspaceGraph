@@ -2,6 +2,9 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import CodeMirror from '@uiw/react-codemirror'
 import type { ReactCodeMirrorRef } from '@uiw/react-codemirror'
 import { EditorView } from '@codemirror/view'
+import { markdown } from '@codemirror/lang-markdown'
+import { HighlightStyle, syntaxHighlighting } from '@codemirror/language'
+import { tags as t } from '@lezer/highlight'
 import { useEditorStore, normPath } from '../../store/editorStore'
 import { useWorkspaceStore } from '../../store/workspaceStore'
 import { BacklinksPanel } from './BacklinksPanel'
@@ -12,10 +15,30 @@ import { getActiveMode, subscribeThemePreferenceChange, type ThemeMode } from '.
 import { livePreviewExtension, setLivePreviewOpenHandler } from './livePreviewExtension'
 
 /**
- * Minimal editor chrome. No @codemirror/lang-markdown here —
- * lezer markdown parse of dense tables was hanging the renderer on open.
- * Plain text + our Live Preview decorations (headings/wiki) is enough.
+ * Editor chrome.
+ *
+ * F-7: syntax highlighting + line numbers re-enabled with a safety gate.
+ * Full lezer markdown parsing was hanging the renderer on dense tables, so the
+ * language/highlight extensions only attach for small notes (hlEnabled below);
+ * large notes stay plain text + Live Preview decorations (perf-safe).
  */
+const markdownHighlight = HighlightStyle.define([
+  { tag: [t.heading1, t.heading2], fontWeight: '700', color: 'var(--note-heading, var(--text-primary))' },
+  { tag: [t.heading3, t.heading4, t.heading5, t.heading6], fontWeight: '600', color: 'var(--note-heading, var(--text-primary))' },
+  { tag: t.strong, fontWeight: '700' },
+  { tag: t.emphasis, fontStyle: 'italic' },
+  { tag: t.strikethrough, textDecoration: 'line-through', opacity: 0.7 },
+  { tag: t.monospace, fontFamily: 'var(--font-mono)', color: 'var(--note-code, var(--color-accent))' },
+  { tag: t.link, color: 'var(--color-primary)', textDecoration: 'underline' },
+  { tag: t.url, color: 'var(--color-accent)' },
+  { tag: t.quote, color: 'var(--text-muted)', fontStyle: 'italic' },
+  { tag: t.list, color: 'var(--text-secondary)' },
+  { tag: [t.keyword, t.labelName], color: 'var(--color-primary)' },
+  { tag: [t.processingInstruction, t.meta, t.comment], color: 'var(--text-muted)' },
+  { tag: t.contentSeparator, color: 'var(--text-muted)' },
+  { tag: t.escape, color: 'var(--color-warning)' },
+  { tag: t.invalid, color: 'var(--color-error)' }
+])
 /** Cache themes — recreating EditorView.theme each memo rebuild still thrashs CM facets */
 const noteShellThemeCache = new Map<boolean, ReturnType<typeof EditorView.theme>>()
 function makeNoteShellTheme(dark: boolean) {
@@ -44,7 +67,19 @@ function makeNoteShellTheme(dark: boolean) {
         backgroundColor: 'var(--note-active-line)'
       },
       '.cm-gutters': {
-        display: 'none'
+        backgroundColor: 'transparent',
+        color: 'var(--text-faint, var(--text-muted))',
+        border: 'none',
+        fontFamily: 'var(--font-mono)',
+        fontSize: '11px'
+      },
+      '.cm-lineNumbers .cm-gutterElement': {
+        padding: '0 8px 0 4px',
+        minWidth: '28px'
+      },
+      '.cm-activeLineGutter': {
+        backgroundColor: 'transparent',
+        color: 'var(--note-caret)'
       }
     },
     { dark }
@@ -117,6 +152,18 @@ export const MarkdownEditor: React.FC = () => {
     return v.length <= 80_000 && lines <= 2_000
   }, [activeTabId])
 
+  /**
+   * F-7: syntax highlight gate — tighter than LP so dense-table hangs stay out.
+   * Big notes fall back to plain text (still line-numbered).
+   */
+  const hlEnabled = useMemo(() => {
+    const tab = useEditorStore.getState().tabs.find((t) => t.id === activeTabId)
+    const v = typeof tab?.content === 'string' ? tab.content : ''
+    if (!v) return true
+    const lines = v.split('\n').length
+    return v.length <= 24_000 && lines <= 600
+  }, [activeTabId])
+
   useEffect(() => subscribeThemePreferenceChange(setCmTheme), [])
 
   useEffect(() => {
@@ -151,12 +198,13 @@ export const MarkdownEditor: React.FC = () => {
 
   const cmExtensions = useMemo(() => {
     const dark = cmTheme !== 'light'
-    // Minimal extensions only — markdown() lezer hang on pegawai tables
     const base = [makeNoteShellTheme(dark), EditorView.lineWrapping]
     // Live: always enable table widgets; full heading/wiki LP when note not huge
     if (isLive) base.push(...livePreviewExtension({ full: lpEnabled }))
+    // F-7: gated lezer markdown language + token-based highlight (small notes only)
+    if (hlEnabled) base.push(markdown(), syntaxHighlighting(markdownHighlight, { fallback: true }))
     return base
-  }, [isLive, cmTheme, lpEnabled])
+  }, [isLive, cmTheme, lpEnabled, hlEnabled])
 
   const handleChange = (value: string) => {
     if (!activeTabId) return
@@ -261,7 +309,7 @@ export const MarkdownEditor: React.FC = () => {
             onClick={() => void createNewNote()}
           >
             <Icon name="plus" size={14} />
-            New note
+            Note baru
           </button>
           <button
             type="button"
@@ -453,7 +501,7 @@ export const MarkdownEditor: React.FC = () => {
               extensions={cmExtensions}
               onChange={handleChange}
               basicSetup={{
-                lineNumbers: false,
+                lineNumbers: true,
                 foldGutter: false,
                 highlightActiveLine: true,
                 bracketMatching: false,

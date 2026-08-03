@@ -3,10 +3,19 @@ import { useChatStore, WriteProposalItem } from '../../store/chatStore'
 import { useEditorStore } from '../../store/editorStore'
 import { useWorkspaceStore } from '../../store/workspaceStore'
 import { Icon } from '../ui/Icons'
+import { confirmDialog } from '../ui/Dialog'
+import { usePanelWidth } from '../../hooks/usePanelWidth'
 
 type ChatListItem = { id: string; title?: string; updatedAt?: string }
 
 export const ChatPanel: React.FC = () => {
+  const { width: chatWidth, onHandleMouseDown: chatResize, resizing } = usePanelWidth(
+    'wg.chatWidth',
+    360,
+    280,
+    640,
+    (x) => window.innerWidth - x
+  )
   const {
     messages,
     providers,
@@ -156,7 +165,7 @@ export const ChatPanel: React.FC = () => {
     const res = await applyProposal(p.id)
     if (res.ok) {
       setApplyOk(true)
-      setApplyMsg(`Applied · graph/search updated · ${p.relativePath}`)
+      setApplyMsg(`Diterapkan · graph/search ter-update · ${p.relativePath}`)
       await fetchState()
       if (p.absolutePath) {
         await openTab(p.absolutePath)
@@ -165,7 +174,7 @@ export const ChatPanel: React.FC = () => {
       }
     } else {
       setApplyOk(false)
-      setApplyMsg(res.error || 'Apply failed')
+      setApplyMsg(res.error || 'Gagal menerapkan')
     }
     setTimeout(() => setApplyMsg(''), 4000)
   }
@@ -199,9 +208,15 @@ export const ChatPanel: React.FC = () => {
     }
   }
 
-  const handleClear = () => {
+  const handleClear = async () => {
     if (messages.length === 0) return
-    if (!window.confirm('Hapus percakapan ini?')) return
+    const ok = await confirmDialog({
+      title: 'Hapus percakapan?',
+      message: 'Percakapan ini akan dihapus dari sesi ini.',
+      danger: true,
+      okLabel: 'Hapus'
+    })
+    if (!ok) return
     clearHistory()
     setShowHistory(false)
   }
@@ -242,7 +257,18 @@ export const ChatPanel: React.FC = () => {
     lastToolStatus || lastKernelStatus || (isGenerating ? 'kernel: running…' : 'kernel: idle')
 
   return (
-    <aside className="chat-panel chat-panel--kernel" aria-label="AI kernel assistant">
+    <aside
+      className={`chat-panel chat-panel--kernel ${resizing ? 'is-resizing' : ''}`}
+      style={{ '--chat-w': `${chatWidth}px` } as React.CSSProperties}
+      aria-label="AI kernel assistant"
+    >
+      <div
+        className="wg-resize-handle wg-resize-handle--left"
+        onMouseDown={chatResize}
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Ubah lebar panel AI"
+      />
       {/* ── Kernel chrome ── */}
       <div className="chat-toolbar">
         <div className="chat-toolbar-top">
@@ -401,7 +427,7 @@ export const ChatPanel: React.FC = () => {
               className="btn btn-ghost btn-sm"
               onClick={() => void refreshHistory()}
             >
-              Refresh
+              Muat ulang
             </button>
           </div>
           {history.length === 0 ? (
@@ -436,7 +462,7 @@ export const ChatPanel: React.FC = () => {
         <div className="chat-proposals">
           <div className="chat-proposals-title">
             <Icon name="warning" size={13} />
-            Proposals · Apply agar memori/graph update
+            Proposal · Terapkan agar memori/graph ter-update
           </div>
           {openProposals.map((p) => (
             <div key={p.id} className="chat-proposal-card">
@@ -452,14 +478,14 @@ export const ChatPanel: React.FC = () => {
                   className="btn btn-primary btn-sm"
                   onClick={() => void handleApply(p)}
                 >
-                  Apply
+                  Terapkan
                 </button>
                 <button
                   type="button"
                   className="btn btn-ghost btn-sm"
                   onClick={() => void rejectProposal(p.id)}
                 >
-                  Reject
+                  Tolak
                 </button>
               </div>
             </div>

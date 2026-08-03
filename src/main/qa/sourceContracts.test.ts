@@ -266,8 +266,8 @@ describe('Renderer wiring', () => {
     const sm = read('src/renderer/src/components/search/SearchModal.tsx')
     expect(has(sm, 'search:prefill', 'getRecentNotes')).toBe(true)
     const dash = read('src/renderer/src/components/dashboard/DashboardView.tsx')
-    expect(hasAny(dash, 'totalNotes', 'Markdown Notes')).toBe(true)
-    expect(has(dash, 'onGraphUpdated', 'getDomainOverview', 'From template')).toBe(true)
+    expect(hasAny(dash, 'totalNotes', 'Catatan')).toBe(true)
+    expect(has(dash, 'onGraphUpdated', 'getDomainOverview', 'Dari template')).toBe(true)
     const status = read('src/renderer/src/components/layout/StatusBar.tsx')
     expect(hasAny(status, 'wordCount', 'words')).toBe(true)
   })
@@ -297,10 +297,11 @@ describe('Renderer wiring', () => {
   it('GraphFiltersPanel controls', () => {
     const f = read('src/renderer/src/components/graph/GraphFiltersPanel.tsx')
     expect(has(f, 'Spotlight', "'hide'", "'only'", 'Ambang hub', 'orphanMode', 'hubMode')).toBe(true)
-    expect(has(f, 'Save layout', 'Clear file', 'Reset forces', 'DEFAULT_FORCE_SETTINGS')).toBe(true)
-    expect(has(f, 'Explore', 'Find path', 'Node color', 'Folder')).toBe(true)
-    expect(has(f, 'Export PNG', 'Performance', 'Quality')).toBe(true)
-    expect(has(f, 'Views & Export', 'existingFilesOnly', 'showTags', 'showAttachments', 'animateForces')).toBe(true)
+    // Copy unified to Indonesian (F-1): labels follow UI language
+    expect(has(f, 'Simpan layout', 'Hapus file', 'Reset gaya', 'DEFAULT_FORCE_SETTINGS')).toBe(true)
+    expect(has(f, 'Jelajah', 'Cari path', 'Warna node', 'Folder')).toBe(true)
+    expect(has(f, 'Ekspor PNG', 'Performa', 'Quality')).toBe(true)
+    expect(has(f, 'View & Ekspor', 'existingFilesOnly', 'showTags', 'showAttachments', 'animateForces')).toBe(true)
   })
   it('GraphCanvas fluid UI + guards', () => {
     const gc = read('src/renderer/src/components/graph/GraphCanvas.tsx')

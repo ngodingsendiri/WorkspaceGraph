@@ -55,7 +55,10 @@ export const MergeDialog: React.FC<MergeDialogProps> = ({
     <div className="merge-dialog-overlay" onClick={onClose}>
       <div className="merge-dialog" onClick={(e) => e.stopPropagation()}>
         <div className="merge-dialog-header">
-          <h3>⚠️ Conflict detected</h3>
+          <h3 style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+            <Icon name="warning" size={16} style={{ color: 'var(--color-warning)' }} />
+            Conflict detected
+          </h3>
           <span className="merge-file-path">{filePath}</span>
           <button className="btn btn-ghost btn-icon" onClick={onClose} aria-label="Close">
             <Icon name="close" size={20} />

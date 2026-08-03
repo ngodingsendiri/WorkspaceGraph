@@ -49,6 +49,7 @@ import {
 } from './graphShared'
 import { computeHotSet, drawCanvas2DScene, type DrawContext } from './graphCanvas2D'
 import { Icon } from '../ui/Icons'
+import { confirmDialog } from '../ui/Dialog'
 
 import {
   GraphFiltersPanel,
@@ -3704,13 +3705,20 @@ export const GraphCanvas: React.FC = () => {
             n.path
         )
         if (targets.length === 0) {
-          setPathStatus('No deletable nodes selected')
+          setPathStatus('Tidak ada node yang bisa dihapus')
           return
         }
-        if (!window.confirm(`Delete ${targets.length} file(s)?`)) return
-        for (const n of targets) void window.api.deleteFile(n.path)
-        setSelectedIds(new Set())
-        setPathStatus(`Deleted ${targets.length} file(s)`)
+        void confirmDialog({
+          title: 'Hapus file?',
+          message: `Hapus ${targets.length} file?`,
+          danger: true,
+          okLabel: 'Hapus'
+        }).then((ok) => {
+          if (!ok) return
+          for (const n of targets) void window.api.deleteFile(n.path)
+          setSelectedIds(new Set())
+          setPathStatus(`Terhapus ${targets.length} file`)
+        })
         return
       }
     },
@@ -3737,6 +3745,20 @@ export const GraphCanvas: React.FC = () => {
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [activeView, onKey])
+
+  // Command palette bridge (F-3) — wg:graph-command runs even in split view
+  useEffect(() => {
+    const onGraphCommand = (e: Event): void => {
+      const cmd = (e as CustomEvent<string>).detail
+      if (cmd === 'fit') fitView(true)
+      else if (cmd === 'export-png') handleExportPng()
+      else if (cmd === 'save-layout') void handleSaveLayout()
+      else if (cmd === 'reheat') handleReheatAndFit()
+      else if (cmd === 'toggle-panel') setShowFilters((v) => !v)
+    }
+    window.addEventListener('wg:graph-command', onGraphCommand)
+    return () => window.removeEventListener('wg:graph-command', onGraphCommand)
+  }, [fitView, handleExportPng, handleSaveLayout, handleReheatAndFit])
 
   // Close context menu on outside click
   useEffect(() => {
@@ -4058,7 +4080,16 @@ export const GraphCanvas: React.FC = () => {
                   <p className="muted">
                     <strong>Lakukan:</strong> {emptyDiag.action}
                   </p>
-                  {nodes.length > 0 && filteredNodes.length === 0 ? (
+                  {nodes.length === 0 && graphLoaded ? (
+                    <button
+                      type="button"
+                      className="btn btn-primary btn-sm"
+                      style={{ marginTop: 12, pointerEvents: 'auto' }}
+                      onClick={() => window.dispatchEvent(new Event('wg:new-note'))}
+                    >
+                      + Buat note pertama
+                    </button>
+                  ) : nodes.length > 0 && filteredNodes.length === 0 ? (
                     <button
                       type="button"
                       className="btn btn-surface btn-sm"
@@ -4259,11 +4290,11 @@ export const GraphCanvas: React.FC = () => {
               type="button"
               onClick={() => {
                 navigator.clipboard.writeText(ctxMenu.node.path || ctxMenu.node.title || '')
-                flashAction('Path copied')
+                flashAction('Path disalin')
                 setCtxMenu(null)
               }}
             >
-              Copy path
+              Salin path
             </button>
           )}
           <button
@@ -4285,7 +4316,7 @@ export const GraphCanvas: React.FC = () => {
               setCtxMenu(null)
             }}
           >
-            {ctxMenu.node.pinned || ctxMenu.node.fx != null ? 'Unpin' : 'Pin'}
+            {ctxMenu.node.pinned || ctxMenu.node.fx != null ? 'Lepas pin' : 'Pin'}
           </button>
           {!ctxMenu.node.isGhost &&
             ctxMenu.node.type !== 'ghost' &&
@@ -4296,13 +4327,18 @@ export const GraphCanvas: React.FC = () => {
                 type="button"
                 className="danger"
                 onClick={() => {
-                  if (!window.confirm(`Delete "${ctxMenu.node.title || ctxMenu.node.path}"?`))
-                    return
-                  void window.api.deleteFile(ctxMenu.node.path)
-                  setCtxMenu(null)
-                }}
-              >
-                Delete
+                  void confirmDialog({
+                    title: 'Hapus file?',
+                    message: `Hapus "${ctxMenu.node.title || ctxMenu.node.path}"?`,
+                    danger: true,
+                    okLabel: 'Hapus'
+                  }).then((ok) => {
+                    if (!ok) return
+                    void window.api.deleteFile(ctxMenu.node.path)
+                    setCtxMenu(null)
+                  })
+                }}                >
+                Hapus
               </button>
             )}
         </div>

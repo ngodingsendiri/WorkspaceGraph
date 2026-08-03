@@ -153,7 +153,7 @@ const FORCE_SLIDERS: {
 }[] = [
   {
     key: 'center',
-    label: 'Center force',
+    label: 'Gaya pusat',
     min: 0,
     max: 0.25,
     step: 0.01,
@@ -161,7 +161,7 @@ const FORCE_SLIDERS: {
   },
   {
     key: 'charge',
-    label: 'Repel force',
+    label: 'Gaya tolak',
     min: -400,
     max: -10,
     step: 5,
@@ -169,7 +169,7 @@ const FORCE_SLIDERS: {
   },
   {
     key: 'linkStr',
-    label: 'Link force',
+    label: 'Gaya link',
     min: 0.05,
     max: 1,
     step: 0.05,
@@ -177,7 +177,7 @@ const FORCE_SLIDERS: {
   },
   {
     key: 'linkDist',
-    label: 'Link distance',
+    label: 'Jarak link',
     min: 20,
     max: 200,
     step: 2,
@@ -185,7 +185,7 @@ const FORCE_SLIDERS: {
   },
   {
     key: 'collide',
-    label: 'Collision',
+    label: 'Tumbukan',
     min: 0,
     max: 1,
     step: 0.05,
@@ -203,7 +203,7 @@ const DISPLAY_SLIDERS: {
 }[] = [
   {
     key: 'textFade',
-    label: 'Text fade multiplier',
+    label: 'Fade teks',
     min: 0.4,
     max: 2.5,
     step: 0.05,
@@ -211,7 +211,7 @@ const DISPLAY_SLIDERS: {
   },
   {
     key: 'nodeSize',
-    label: 'Node size multiplier',
+    label: 'Ukuran node',
     min: 0.25,
     max: 2,
     step: 0.05,
@@ -219,7 +219,7 @@ const DISPLAY_SLIDERS: {
   },
   {
     key: 'lineThickness',
-    label: 'Link thickness',
+    label: 'Ketebalan link',
     min: 0.25,
     max: 3,
     step: 0.05,
@@ -399,9 +399,9 @@ export const GraphFiltersPanel: React.FC<GraphFiltersPanelProps> = ({
       aria-label="Graph filters"
     >
       {/* ─── Filters (Obsidian: search + toggles) ─── */}
-      <Section title="Filters" defaultOpen>
+      <Section title="Filter" defaultOpen>
         <div className="graph-settings-row">
-          <label htmlFor="graph-spotlight">Search</label>
+          <label htmlFor="graph-spotlight">Cari</label>
           <input
             id="graph-spotlight"
             type="search"
@@ -418,7 +418,7 @@ export const GraphFiltersPanel: React.FC<GraphFiltersPanelProps> = ({
           />
         </div>
         <div className="graph-settings-row">
-          <label>Mode search</label>
+          <label>Mode cari</label>
           <div className="graph-filter-seg" role="group" aria-label="Search mode">
             {(
               [
@@ -456,8 +456,8 @@ export const GraphFiltersPanel: React.FC<GraphFiltersPanelProps> = ({
               persistDisplayToggles(showLabels, showTagEdges, showLegend, e.target.checked)
             }}
           />
-          Existing files only
-          {ghostCount > 0 ? <span className="graph-filter-hint"> · {ghostCount} ghost</span> : null}
+          Hanya file yang ada
+          {ghostCount > 0 ? <span className="graph-filter-hint"> · {ghostCount} hantu</span> : null}
         </label>
         <label className="graph-check">
           <input
@@ -478,7 +478,7 @@ export const GraphFiltersPanel: React.FC<GraphFiltersPanelProps> = ({
               })
             }}
           />
-          Tags
+          Tag
           {tagCount > 0 ? <span className="graph-filter-hint"> · {tagCount}</span> : null}
         </label>
         <label className="graph-check">
@@ -500,13 +500,13 @@ export const GraphFiltersPanel: React.FC<GraphFiltersPanelProps> = ({
               })
             }}
           />
-          Attachments
+          Lampiran
           {attachmentCount > 0 ? (
             <span className="graph-filter-hint"> · {attachmentCount}</span>
           ) : null}
         </label>
         <p className="graph-filter-hint">
-          Tags = diamond #tag · Attachments = file non-md · Ghost = hollow.
+          Tag = belah ketupat #tag · Lampiran = file non-md · Hantu = kosong.
         </p>
 
         <div className="graph-settings-row">
@@ -645,7 +645,7 @@ export const GraphFiltersPanel: React.FC<GraphFiltersPanelProps> = ({
 
       {/* ─── Groups (Obsidian: color groups by query) ─── */}
       <Section
-        title="Groups"
+        title="Grup"
         defaultOpen
         badge={colorGroups.length > 0 ? String(colorGroups.length) : undefined}
       >
@@ -700,7 +700,7 @@ export const GraphFiltersPanel: React.FC<GraphFiltersPanelProps> = ({
             disabled={!groupQuery.trim()}
             onClick={addGroup}
           >
-            + Group
+            + Grup
           </button>
         </div>
         <div className="graph-group-swatches">
@@ -717,12 +717,12 @@ export const GraphFiltersPanel: React.FC<GraphFiltersPanelProps> = ({
           ))}
         </div>
         <p className="graph-filter-hint">
-          Query: tag:, path:, file:, type: · spasi = AND · -negasi · grup pertama yang match menang.
+          Query: tag:, path:, file:, type: · spasi = AND · -negasi · grup pertama yang cocok menang.
         </p>
       </Section>
 
       {/* ─── Display (Obsidian: arrows, text fade, node size, line thickness) ─── */}
-      <Section title="Display" defaultOpen>
+      <Section title="Tampilan" defaultOpen>
         {DISPLAY_SLIDERS.map((s) => (
           <label key={s.key} className="graph-filter-range">
             <span>
@@ -763,7 +763,7 @@ export const GraphFiltersPanel: React.FC<GraphFiltersPanelProps> = ({
             checked={displayOpts.arrows}
             onChange={(e) => onDisplayOptsCommit({ ...displayOpts, arrows: e.target.checked })}
           />
-          Arrows
+          Panah
         </label>
         <label className="graph-check">
           <input
@@ -774,7 +774,7 @@ export const GraphFiltersPanel: React.FC<GraphFiltersPanelProps> = ({
               persistDisplayToggles(e.target.checked, showTagEdges, showLegend)
             }}
           />
-          Text
+          Teks
         </label>
         <label className="graph-check">
           <input
@@ -785,7 +785,7 @@ export const GraphFiltersPanel: React.FC<GraphFiltersPanelProps> = ({
               persistDisplayToggles(showLabels, e.target.checked, showLegend)
             }}
           />
-          Tags as links (co-tag edges)
+          Tag sebagai link (co-tag)
         </label>
         <label className="graph-check">
           <input
@@ -796,17 +796,17 @@ export const GraphFiltersPanel: React.FC<GraphFiltersPanelProps> = ({
               persistDisplayToggles(showLabels, showTagEdges, e.target.checked)
             }}
           />
-          Legend
+          Legenda
         </label>
 
         <div className="graph-settings-row">
-          <label>Node color</label>
+          <label>Warna node</label>
           <div className="graph-filter-seg" role="group" aria-label="Color by">
             {(
               [
                 ['default', 'Default'],
                 ['folder', 'Folder'],
-                ['type', 'Type']
+                ['type', 'Tipe']
               ] as const
             ).map(([id, lab]) => (
               <button
@@ -821,13 +821,13 @@ export const GraphFiltersPanel: React.FC<GraphFiltersPanelProps> = ({
             ))}
           </div>
           <p className="graph-filter-hint">
-            Default = mono Obsidian; Color groups override. Folder/Type = extension.
+            Default = mono Obsidian; grup warna menimpa. Folder/Tipe = ekstensi.
           </p>
         </div>
       </Section>
 
       {/* ─── Forces ─── */}
-      <Section title="Forces" defaultOpen>
+      <Section title="Gaya" defaultOpen>
         <div className="graph-settings-row">
           <label>Preset</label>
           <div className="graph-filter-seg" role="group" aria-label="Force presets">
@@ -869,7 +869,7 @@ export const GraphFiltersPanel: React.FC<GraphFiltersPanelProps> = ({
               })
             }}
           />
-          Animate
+          Animasi
         </label>
         {FORCE_SLIDERS.map((s) => (
           <label key={s.key} className="graph-filter-range">
@@ -911,17 +911,17 @@ export const GraphFiltersPanel: React.FC<GraphFiltersPanelProps> = ({
             onClick={onForcesReset}
             title="Reset force defaults"
           >
-            Reset forces
+            Reset gaya
           </button>
         </div>
         <p className="graph-filter-hint">
-          Like Obsidian Forces. Drag = live layout; release = save. Reset / Default preset restores
-          built-in values.
+          Seperti gaya Obsidian. Seret = tata letak langsung; lepas = simpan. Reset / preset Default
+          mengembalikan nilai bawaan.
         </p>
       </Section>
 
       {/* ─── Explore (path + focus) ─── */}
-      <Section title="Explore">
+      <Section title="Jelajah">
         <p className="graph-filter-hint">
           Path: Shift+klik dua node · Focus: Alt+klik node · atau pilih di bawah.
         </p>
@@ -964,7 +964,7 @@ export const GraphFiltersPanel: React.FC<GraphFiltersPanelProps> = ({
             onClick={onFindPath}
             disabled={!pathFromId || !pathToId}
           >
-            Find path
+            Cari path
           </button>
           <button
             type="button"
@@ -972,12 +972,12 @@ export const GraphFiltersPanel: React.FC<GraphFiltersPanelProps> = ({
             onClick={onClearPath}
             disabled={!hasPath && !pathFromId}
           >
-            Clear path
+            Hapus path
           </button>
         </div>
         {pathStatus && <p className="graph-filter-status">{pathStatus}</p>}
 
-        <div className="graph-settings-row" style={{ marginTop: 8 }}>
+        <div className="graph-settings-row graph-settings-row--spaced">
           <label>Focus tetangga</label>
           <div className="graph-filter-seg" role="group" aria-label="Focus depth">
             {([1, 2, 3, 4, 5] as const).map((d) => (
@@ -996,7 +996,7 @@ export const GraphFiltersPanel: React.FC<GraphFiltersPanelProps> = ({
         </div>
         <div className="graph-filter-actions">
           <button type="button" className="local-graph-chip" onClick={onFocusNeighbors}>
-            Focus path-from / hover
+            Fokus node hover
           </button>
           <button
             type="button"
@@ -1004,15 +1004,15 @@ export const GraphFiltersPanel: React.FC<GraphFiltersPanelProps> = ({
             onClick={onClearFocus}
             disabled={!hasFocus}
           >
-            Clear focus
+            Hapus fokus
           </button>
         </div>
       </Section>
 
       {/* ─── Layout (pin + persist) ─── */}
-      <Section title="Layout">
+      <Section title="Tata letak">
         <p className="graph-filter-hint">
-          Pin: drag node · unpin: double-click · {pinnedCount} pinned · vault file{' '}
+          Pin: seret node · lepas pin: klik dua kali · {pinnedCount} terpin · file vault{' '}
           {layoutNodeCount > 0 ? `${layoutNodeCount} pos` : 'kosong'}
         </p>
         <div className="graph-filter-actions">
@@ -1022,15 +1022,15 @@ export const GraphFiltersPanel: React.FC<GraphFiltersPanelProps> = ({
             onClick={onSaveLayout}
             title="Simpan posisi ke vault"
           >
-            Save layout
+            Simpan layout
           </button>
           <button
             type="button"
             className="local-graph-chip"
             onClick={onReheat}
-            title="Lepas pin & re-layout"
+            title="Lepas pin & susun ulang"
           >
-            Re-layout
+            Susun ulang
           </button>
           <button
             type="button"
@@ -1038,14 +1038,14 @@ export const GraphFiltersPanel: React.FC<GraphFiltersPanelProps> = ({
             onClick={onClearLayout}
             title="Hapus file layout di vault"
           >
-            Clear file
+            Hapus file
           </button>
         </div>
         {layoutStatus && <p className="graph-filter-status">{layoutStatus}</p>}
       </Section>
 
       {/* ─── Views & Export ─── */}
-      <Section title="Views & Export">
+      <Section title="View & Ekspor">
         <div className="graph-settings-row">
           <label htmlFor="graph-view-name">Simpan view saat ini</label>
           <div className="graph-filter-save-row">
@@ -1069,9 +1069,13 @@ export const GraphFiltersPanel: React.FC<GraphFiltersPanelProps> = ({
                 setViewName('')
               }}
             >
-              Save
+              Simpan
             </button>
           </div>
+          <p className="graph-filter-microcopy">
+            Menyimpan snapshot filter & tampilan saat ini ke vault — muat ulang kapan saja dari
+            daftar di bawah.
+          </p>
         </div>
         {savedViews.length > 0 ? (
           <ul className="graph-views-list">
@@ -1098,7 +1102,7 @@ export const GraphFiltersPanel: React.FC<GraphFiltersPanelProps> = ({
             ))}
           </ul>
         ) : (
-          <p className="graph-filter-hint">Belum ada saved view di vault.</p>
+          <p className="graph-filter-hint">Belum ada view tersimpan di vault.</p>
         )}
         <div className="graph-filter-actions">
           <button
@@ -1107,14 +1111,14 @@ export const GraphFiltersPanel: React.FC<GraphFiltersPanelProps> = ({
             onClick={onExportPng}
             title="Export PNG"
           >
-            Export PNG
+            Ekspor PNG
           </button>
         </div>
         {viewsStatus && <p className="graph-filter-status">{viewsStatus}</p>}
       </Section>
 
       {/* ─── Performance ─── */}
-      <Section title="Performance">
+      <Section title="Performa">
         <div className="graph-filter-seg" role="group" aria-label="Performance mode">
           {(
             [
@@ -1134,15 +1138,15 @@ export const GraphFiltersPanel: React.FC<GraphFiltersPanelProps> = ({
             </button>
           ))}
         </div>
-        <p className="graph-filter-hint">LOD: {lodLabel} · frustum cull + label thinning</p>
+        <p className="graph-filter-hint">LOD: {lodLabel} · frustum cull + penipisan label</p>
       </Section>
 
       <p className="graph-filter-hint graph-filter-footer">
-        Menampilkan <strong>{visibleNodes}</strong> / {totalNodes} notes · wikilink default
+        Menampilkan <strong>{visibleNodes}</strong> / {totalNodes} catatan · wikilink default
       </p>
       <p className="graph-filter-hint">
-        Keys: Esc clear · F fit · R layout · S save · E PNG · P panel · / search · Ctrl+klik select
-        · Ctrl+A · Ctrl+C copy [[links]] · O open
+        Tombol: Esc hapus · F sesuaikan · R tata letak · S simpan · E PNG · P panel · / cari ·
+        Ctrl+klik pilih · Ctrl+A · Ctrl+C salin [[link]] · O buka
       </p>
     </div>
   )

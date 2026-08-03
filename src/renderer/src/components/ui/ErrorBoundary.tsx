@@ -26,11 +26,12 @@ export class ErrorBoundary extends React.Component<
       const label = this.props.label || 'WorkspaceGraph'
       return (
         <div
+          className="error-boundary"
           style={{
             padding: 24,
-            fontFamily: "Inter, 'Segoe UI Variable', 'Segoe UI', system-ui, sans-serif",
-            color: '#e8e8ec',
-            background: '#1a1a1e',
+            fontFamily: 'var(--font-sans)',
+            color: 'var(--text-primary)',
+            background: 'var(--bg-app)',
             height: '100%',
             overflow: 'auto',
             boxSizing: 'border-box'
@@ -42,13 +43,14 @@ export class ErrorBoundary extends React.Component<
           </p>
           <pre
             style={{
-              background: '#111',
+              background: 'var(--bg-input)',
               padding: 12,
               borderRadius: 8,
               fontSize: 12,
               whiteSpace: 'pre-wrap',
               wordBreak: 'break-word',
-              border: '1px solid #333'
+              border: '1px solid var(--border-default)',
+              color: 'var(--text-secondary)'
             }}
           >
             {this.state.error.message}
@@ -58,28 +60,14 @@ export class ErrorBoundary extends React.Component<
           <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
             <button
               type="button"
-              style={{
-                padding: '8px 14px',
-                borderRadius: 8,
-                border: '1px solid #555',
-                background: '#2a2a30',
-                color: '#fff',
-                cursor: 'pointer'
-              }}
+              className="btn btn-surface btn-sm"
               onClick={() => this.setState({ error: null })}
             >
               Coba lagi
             </button>
             <button
               type="button"
-              style={{
-                padding: '8px 14px',
-                borderRadius: 8,
-                border: '1px solid #555',
-                background: '#2a2a30',
-                color: '#fff',
-                cursor: 'pointer'
-              }}
+              className="btn btn-ghost btn-sm"
               onClick={() => window.location.reload()}
             >
               Reload

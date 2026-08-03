@@ -11,6 +11,7 @@ import { ChatPanel } from '../chat/ChatPanel'
 import { SearchModal } from '../search/SearchModal'
 import { SettingsView } from '../settings/SettingsView'
 import { TemplatePicker } from '../systems/TemplatePicker'
+import { CommandPalette } from '../ui/CommandPalette'
 import { Icon } from '../ui/Icons'
 import { ErrorBoundary } from '../ui/ErrorBoundary'
 import { bootTheme, subscribeThemePreferenceChange } from '../../utils/theme'
@@ -48,6 +49,15 @@ export const AppShell: React.FC = () => {
   const activeTabId = useEditorStore((s) => s.activeTabId)
   const [isSearchOpen, setIsSearchOpen] = useState(false)
   const [isTemplateOpen, setIsTemplateOpen] = useState(false)
+  const [isPaletteOpen, setIsPaletteOpen] = useState(false)
+  const [paletteMode, setPaletteMode] = useState<'commands' | 'shortcuts'>('commands')
+  const [splitGraph, setSplitGraph] = useState(() => {
+    try {
+      return localStorage.getItem('wg.splitGraph') === '1'
+    } catch {
+      return false
+    }
+  })
 
   // Apply light/dark theme as early as possible (localStorage then settings.json)
   useEffect(() => {
@@ -121,20 +131,62 @@ date: ${today}
   // Open search from empty-editor CTA etc.
   useEffect(() => {
     const openSearch = () => setIsSearchOpen(true)
+    const openPalette = () => {
+      setPaletteMode('commands')
+      setIsPaletteOpen(true)
+    }
+    const openTemplate = () => setIsTemplateOpen(true)
+    const newNote = () => void createNewNote()
+    const newDaily = () => void createDailyNote()
+    const toggleSplit = () => {
+      setSplitGraph((v) => {
+        const next = !v
+        try {
+          localStorage.setItem('wg.splitGraph', next ? '1' : '0')
+        } catch {
+          /* ignore */
+        }
+        return next
+      })
+    }
     window.addEventListener('wg:open-search', openSearch)
-    return () => window.removeEventListener('wg:open-search', openSearch)
-  }, [])
+    window.addEventListener('wg:open-palette', openPalette)
+    window.addEventListener('wg:open-template', openTemplate)
+    window.addEventListener('wg:new-note', newNote)
+    window.addEventListener('wg:new-daily', newDaily)
+    window.addEventListener('wg:toggle-split', toggleSplit)
+    return () => {
+      window.removeEventListener('wg:open-search', openSearch)
+      window.removeEventListener('wg:open-palette', openPalette)
+      window.removeEventListener('wg:open-template', openTemplate)
+      window.removeEventListener('wg:new-note', newNote)
+      window.removeEventListener('wg:new-daily', newDaily)
+      window.removeEventListener('wg:toggle-split', toggleSplit)
+    }
+  }, [createNewNote, createDailyNote])
 
   // Keyboard shortcuts (Obsidian-like)
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       const mod = e.ctrlKey || e.metaKey
       if (!mod) return
+      // Don't fire global shortcuts behind the open command palette
+      if (isPaletteOpen) return
       const key = e.key.toLowerCase()
 
-      if (key === 'k' || key === 'p') {
+      if (key === 'k') {
         e.preventDefault()
         setIsSearchOpen((prev) => !prev)
+      }
+      if (key === 'p') {
+        e.preventDefault()
+        setPaletteMode('commands')
+        setIsPaletteOpen(true)
+      }
+      if (key === '?' && e.shiftKey) {
+        e.preventDefault()
+        setPaletteMode('shortcuts')
+        setIsPaletteOpen(true)
       }
       if (key === 'b') {
         e.preventDefault()
@@ -176,7 +228,8 @@ date: ${today}
     isOpen,
     activeTabId,
     flushSave,
-    setActiveView
+    setActiveView,
+    isPaletteOpen
   ])
 
   return (
@@ -210,22 +263,43 @@ date: ${today}
                 type="button"
                 className={`btn btn-ghost btn-sm btn-icon ${showSidebar ? 'active' : ''}`}
                 onClick={toggleSidebar}
-                data-tooltip="Toggle Sidebar"
+                data-tooltip="Sembunyikan/Tampilkan sidebar"
                 aria-label="Toggle sidebar"
               >
                 <Icon name="sidebar" size={14} />
               </button>
-              <button
-                type="button"
-                className={`btn btn-ghost btn-sm btn-icon ${showAIChat ? 'active' : ''}`}
-                onClick={toggleAIChat}
-                data-tooltip="Toggle AI Panel"
-                aria-label="Toggle AI panel"
-              >
-                <Icon name="panelRight" size={14} />
-              </button>
-            </div>
-          )}
+            <button
+              type="button"
+              className={`btn btn-ghost btn-sm btn-icon ${showAIChat ? 'active' : ''}`}
+              onClick={toggleAIChat}
+              data-tooltip="Sembunyikan/Tampilkan panel AI"
+              aria-label="Toggle AI panel"
+            >
+              <Icon name="panelRight" size={14} />
+            </button>
+            <button
+              type="button"
+              className={`btn btn-ghost btn-sm btn-icon ${splitGraph ? 'active' : ''}`}
+              onClick={() => window.dispatchEvent(new Event('wg:toggle-split'))}
+              data-tooltip="Split editor + graph"
+              aria-label="Split editor dan graph"
+            >
+              <Icon name="split" size={14} />
+            </button>
+            <button
+              type="button"
+              className="btn btn-ghost btn-sm btn-icon"
+              onClick={() => {
+                setPaletteMode('commands')
+                setIsPaletteOpen(true)
+              }}
+              data-tooltip="Command palette (Ctrl+P)"
+              aria-label="Command palette"
+            >
+              <Icon name="command" size={14} />
+            </button>
+          </div>
+        )}
         </div>
       </header>
 
@@ -237,6 +311,19 @@ date: ${today}
             <WelcomeScreen />
           ) : activeView === 'dashboard' ? (
             <DashboardView onOpenSearch={() => setIsSearchOpen(true)} />
+          ) : activeView === 'editor' && splitGraph ? (
+            <div className="split-view">
+              <div className="split-pane split-pane--editor">
+                <ErrorBoundary label="Editor">
+                  <MarkdownEditor />
+                </ErrorBoundary>
+              </div>
+              <div className="split-pane split-pane--graph">
+                <ErrorBoundary label="Graph">
+                  <GraphCanvas />
+                </ErrorBoundary>
+              </div>
+            </div>
           ) : activeView === 'editor' ? (
             <ErrorBoundary label="Editor">
               <MarkdownEditor />
@@ -259,6 +346,11 @@ date: ${today}
 
       <SearchModal isOpen={isSearchOpen} onClose={() => setIsSearchOpen(false)} />
       <TemplatePicker open={isTemplateOpen} onClose={() => setIsTemplateOpen(false)} />
+      <CommandPalette
+        isOpen={isPaletteOpen}
+        onClose={() => setIsPaletteOpen(false)}
+        initialMode={paletteMode}
+      />
     </div>
   )
 }

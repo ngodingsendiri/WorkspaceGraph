@@ -47,7 +47,8 @@ export const useWorkspaceStore = create<WorkspaceStore>((set) => ({
   recentWorkspaces: [],
   activeView: 'welcome',
   showSidebar: true,
-  showAIChat: true,
+  // F-14: default closed so focus sessions start on the workspace, not the chat panel
+  showAIChat: false,
   lastError: null,
 
   clearError: () => set({ lastError: null }),

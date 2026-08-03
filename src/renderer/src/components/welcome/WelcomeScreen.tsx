@@ -1,6 +1,7 @@
 import React, { useState } from 'react'
 import { useWorkspaceStore } from '../../store/workspaceStore'
 import { Icon } from '../ui/Icons'
+import { promptDialog } from '../ui/Dialog'
 
 export const WelcomeScreen: React.FC = () => {
   const {
@@ -38,7 +39,12 @@ export const WelcomeScreen: React.FC = () => {
     try {
       const parent = await window.api.openFolder()
       if (!parent) return
-      const name = window.prompt('Nama workspace baru:', 'MyWorkspace')
+      const name = await promptDialog({
+        title: 'Workspace baru',
+        message: 'Nama workspace baru:',
+        initialValue: 'MyWorkspace',
+        placeholder: 'Nama workspace'
+      })
       if (!name?.trim()) return
       const state = await window.api.createWorkspace(parent, name.trim())
       if (state?.rootPath) {
@@ -75,7 +81,7 @@ export const WelcomeScreen: React.FC = () => {
         <div className="welcome-actions" role="group" aria-label="Vault actions">
           <button type="button" className="welcome-action-card" onClick={handleOpenFolder}>
             <Icon name="openFolder" size={28} strokeWidth={1.5} />
-            <h3>Open Vault</h3>
+            <h3>Buka Vault</h3>
             <p>Buka folder Markdown (Obsidian-compatible)</p>
           </button>
 
@@ -94,7 +100,7 @@ export const WelcomeScreen: React.FC = () => {
 
         {recentWorkspaces.length > 0 && (
           <div className="welcome-recent">
-            <div className="section-title">Recent</div>
+            <div className="section-title">Terbaru</div>
             <div className="flex flex-col gap-1">
               {recentWorkspaces.map((p) => (
                 <button

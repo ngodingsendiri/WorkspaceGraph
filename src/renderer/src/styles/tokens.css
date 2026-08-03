@@ -48,8 +48,9 @@
   --font-text: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI Variable', 'Segoe UI',
     Roboto, Helvetica, Arial, sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji';
   --font-editor: var(--font-text);
-  /* Mono hanya fallback UI lain; body note tidak pakai mono */
-  --font-monospace: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  /* Mono asli untuk code/kbd/pre — body note tetap Inter (user: semua penulisan Inter) */
+  --font-monospace: 'JetBrains Mono', 'Cascadia Code', Consolas, 'SF Mono', ui-monospace,
+    Menlo, Monaco, 'Courier New', monospace;
   /* Satu level lebih kecil dari default Obsidian 16px — body + heading */
   --note-font-size: 15px;
   --note-line-height: 1.55;
@@ -166,6 +167,7 @@
   --z-base: 1;
   --z-sidebar: 10;
   --z-panel: 20;
+  --z-dropdown: 40;
   --z-modal: 100;
   --z-overlay: 90;
   --z-tooltip: 200;

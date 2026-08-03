@@ -51,6 +51,10 @@ export type IconName =
   | 'zoomOut'
   | 'fitScreen'
   | 'psychology'
+  | 'info'
+  | 'sync'
+  | 'split'
+  | 'command'
 
 /**
  * App icon key → Material Symbols ligature
@@ -69,6 +73,8 @@ export const MATERIAL_ICON: Record<IconName, string> = {
   chevronRight: 'chevron_right',
   sidebar: 'view_sidebar',
   panelRight: 'vertical_split',
+  split: 'view_column',
+  command: 'keyboard_command_key',
   trash: 'delete',
   save: 'save',
   copy: 'content_copy',
@@ -99,7 +105,9 @@ export const MATERIAL_ICON: Record<IconName, string> = {
   zoomIn: 'zoom_in',
   zoomOut: 'zoom_out',
   fitScreen: 'fit_screen',
-  psychology: 'psychology'
+  psychology: 'psychology',
+  info: 'info',
+  sync: 'sync'
 }
 
 export interface IconProps {

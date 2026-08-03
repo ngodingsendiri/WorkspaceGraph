@@ -19,6 +19,7 @@ export const SearchModal: React.FC<{ isOpen: boolean; onClose: () => void }> = (
   const [query, setQuery] = useState('')
   const [results, setResults] = useState<SearchResultItem[]>([])
   const [selectedIndex, setSelectedIndex] = useState(0)
+  const [searching, setSearching] = useState(false)
   const openTab = useEditorStore((s) => s.openTab)
   const setActiveView = useWorkspaceStore((s) => s.setActiveView)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -49,6 +50,7 @@ export const SearchModal: React.FC<{ isOpen: boolean; onClose: () => void }> = (
     if (!isOpen) return
     let cancelled = false
     const fetchResults = async () => {
+      setSearching(true)
       try {
         if (!query.trim()) {
           const recent = await window.api.getRecentNotes(12)
@@ -59,6 +61,8 @@ export const SearchModal: React.FC<{ isOpen: boolean; onClose: () => void }> = (
         }
       } catch {
         if (!cancelled) setResults([])
+      } finally {
+        if (!cancelled) setSearching(false)
       }
     }
     const t = setTimeout(fetchResults, 80)
@@ -97,11 +101,17 @@ export const SearchModal: React.FC<{ isOpen: boolean; onClose: () => void }> = (
       <div className="search-modal" onClick={(e) => e.stopPropagation()}>
         <div className="search-input-wrap">
           <Icon name="search" size={18} style={{ color: 'var(--text-muted)' }} />
+          {searching && <span className="search-spinner" aria-label="Mencari…" />}
           <input
             ref={inputRef}
             className="search-input"
-            placeholder="Search · #tag · orphan:true · backlink:Title · path:… (Esc)"
+            placeholder="Cari · #tag · orphan:true · backlink:Judul · path:… (Esc)"
             value={query}
+            role="combobox"
+            aria-expanded={results.length > 0}
+            aria-controls="search-results-list"
+            aria-activedescendant={results[selectedIndex] ? `search-opt-${selectedIndex}` : undefined}
+            aria-label="Pencarian catatan"
             onChange={(e) => {
               setQuery(e.target.value)
               setSelectedIndex(0)
@@ -111,12 +121,12 @@ export const SearchModal: React.FC<{ isOpen: boolean; onClose: () => void }> = (
           />
         </div>
 
-        <div className="search-results">
+        <div id="search-results-list" className="search-results" role="listbox" aria-label="Hasil pencarian">
           {results.length === 0 ? (
             <div
               style={{ padding: 'var(--space-6)', textAlign: 'center', color: 'var(--text-muted)' }}
             >
-              {query.trim() ? 'No matches found.' : 'No recent notes yet.'}
+              {query.trim() ? 'Tidak ada hasil.' : 'Belum ada catatan terbaru.'}
             </div>
           ) : (
             results.map((item, idx) => (
@@ -125,6 +135,7 @@ export const SearchModal: React.FC<{ isOpen: boolean; onClose: () => void }> = (
                 ref={(el) => {
                   itemRefs.current[idx] = el
                 }}
+                id={`search-opt-${idx}`}
                 role="option"
                 aria-selected={idx === selectedIndex}
                 className={`search-result-item ${idx === selectedIndex ? 'selected' : ''}`}
