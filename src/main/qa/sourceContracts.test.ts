@@ -327,7 +327,8 @@ describe('Renderer wiring', () => {
     expect(has(local, 'isCenter', 'centerStroke')).toBe(true)
     expect(has(local, "setActiveView('graph')", 'setFocusedNode')).toBe(true)
     expect(has(local, '1, 2, 3, 4, 5', 'localDepth:', 'updateGraphSettings')).toBe(true)
-    expect(has(local, 'forcesRef', 'charge', '0.78')).toBe(true)
+    // Force scaling lives in graphShared (scaleLocalForces); local delegates
+    expect(has(local, 'forcesRef', 'charge', 'scaleLocalForces', 'applyForceLayout')).toBe(true)
     // LocalGraphView is exported from LocalGraphCanvas.tsx (no separate file)
     expect(local.includes('export const LocalGraphView')).toBe(true)
     const editor = read('src/renderer/src/components/editor/MarkdownEditor.tsx')
@@ -337,6 +338,8 @@ describe('Renderer wiring', () => {
     const shared = read('src/renderer/src/components/graph/graphShared.ts')
     expect(has(shared, 'chargeFor', 'linkDistanceFor', 'SpatialHash2D', 'edgeDrawBudget', 'FORCE_PRESETS')).toBe(true)
     expect(has(shared, 'css(', 'getPropertyValue', 'readPalette')).toBe(true)
+    // Local mini-canvas scaling + radius also shared (single source of truth)
+    expect(has(shared, 'scaleLocalForces', '0.78', 'localRadius', 'applyForceLayout')).toBe(true)
   })
   it('graphCanvas2D owns edge budget logic', () => {
     const c2d = read('src/renderer/src/components/graph/graphCanvas2D.ts')

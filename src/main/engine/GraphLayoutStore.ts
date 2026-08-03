@@ -130,11 +130,11 @@ export function normalizeCamera(v: unknown): GraphCamera | null {
 /** Defaults aligned with Obsidian Graph force + display model (renderer graphShared). */
 export const DEFAULT_GRAPH_SETTINGS: GraphSettings = {
   forces: {
-    center: 0.045,
-    charge: -125,
-    linkDist: 52,
-    linkStr: 0.58,
-    collide: 0.68
+    center: 0.06,
+    charge: -110,
+    linkDist: 54,
+    linkStr: 0.6,
+    collide: 0.72
   },
   display: {
     showLabels: true,
@@ -159,6 +159,36 @@ export const DEFAULT_GRAPH_SETTINGS: GraphSettings = {
     searchMode: 'spotlight'
   },
   groups: []
+}
+
+/**
+ * Force defaults before the Obsidian circular-layout tuning (2026-08).
+ * Stored settings whose `graph.forces` still carry these exact values mean
+ * "user never customized forces" → we migrate them to the tuned defaults at
+ * read time so the layout improvement lands for existing installs too.
+ */
+export const LEGACY_DEFAULT_FORCES: GraphForceSettings = {
+  center: 0.045,
+  charge: -125,
+  linkDist: 52,
+  linkStr: 0.58,
+  collide: 0.68
+}
+
+/**
+ * True when stored forces exactly match the pre-tuning defaults (untouched).
+ * Assumes persisted `graph.forces` is the complete 5-field object (mergeGraphSettings
+ * always emits all fields on save, so partial stored objects don't occur in practice).
+ */
+export function isLegacyDefaultForces(f: Partial<GraphForceSettings> | null | undefined): boolean {
+  if (!f) return false
+  return (
+    f.center === LEGACY_DEFAULT_FORCES.center &&
+    f.charge === LEGACY_DEFAULT_FORCES.charge &&
+    f.linkDist === LEGACY_DEFAULT_FORCES.linkDist &&
+    f.linkStr === LEGACY_DEFAULT_FORCES.linkStr &&
+    f.collide === LEGACY_DEFAULT_FORCES.collide
+  )
 }
 
 function clamp(n: number, min: number, max: number): number {
@@ -385,7 +415,12 @@ export function readGraphSettingsFromAppSettings(
 ): GraphSettings {
   const g = settings?.graph
   if (g && typeof g === 'object') {
-    return mergeGraphSettings(g as Partial<GraphSettings>)
+    const partial = g as Partial<GraphSettings>
+    // Migration: pre-tuning force defaults mean "untouched" → adopt tuned defaults
+    if (isLegacyDefaultForces(partial.forces)) {
+      return mergeGraphSettings({ ...partial, forces: undefined })
+    }
+    return mergeGraphSettings(partial)
   }
   return mergeGraphSettings(null)
 }
@@ -479,7 +514,10 @@ function sanitizeSnapshot(raw: Partial<GraphViewSnapshot> | null | undefined): G
     showAttachments: s.showAttachments ?? DEFAULT_VIEW_SNAPSHOT.showAttachments,
     animateForces: s.animateForces ?? DEFAULT_VIEW_SNAPSHOT.animateForces
   }
-  const forces = mergeGraphSettings({ forces: s.forces }).forces
+  // Migration: snapshots saved with pre-tuning defaults adopt the tuned ones
+  const forces = isLegacyDefaultForces(s.forces)
+    ? mergeGraphSettings({}).forces
+    : mergeGraphSettings({ forces: s.forces }).forces
   return {
     orphanMode: normalizeOrphanMode(s.orphanMode, DEFAULT_VIEW_SNAPSHOT.orphanMode),
     hubMode: normalizeHubMode(s.hubMode, DEFAULT_VIEW_SNAPSHOT.hubMode),

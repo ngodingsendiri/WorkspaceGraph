@@ -231,7 +231,7 @@ export interface GraphStore {
 
 /** Fallback when settings not yet loaded — keep in sync with graphShared / GraphLayoutStore. */
 const emptySettingsHint: GraphSettings = {
-  forces: { center: 0.045, charge: -125, linkDist: 52, linkStr: 0.58, collide: 0.68 },
+  forces: { center: 0.06, charge: -110, linkDist: 54, linkStr: 0.6, collide: 0.72 },
   display: {
     showLabels: true,
     showTagEdges: false,

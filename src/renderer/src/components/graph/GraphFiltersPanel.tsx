@@ -13,6 +13,7 @@ import type {
   GraphSearchMode
 } from '../../store/graphStore'
 import { Icon } from '../ui/Icons'
+import { FORCE_PRESETS } from './graphShared'
 
 export type OrphanMode = 'all' | 'hide' | 'only'
 export type HubMode = 'all' | 'dim' | 'hide'
@@ -139,6 +140,27 @@ function modesPatch(
   searchMode: GraphSearchMode = 'spotlight'
 ): Partial<GraphSettings['filters']> {
   return { orphanMode, hubMode, searchMode }
+}
+
+/**
+ * Which named preset (if any) exactly matches the current force values.
+ * Used to highlight the active preset chip; null when user tweaked sliders.
+ */
+function activePresetKey(forces: GraphForceSettings): string | null {
+  const eps = 0.001
+  for (const [key, p] of Object.entries(FORCE_PRESETS)) {
+    const f = p.forces
+    if (
+      Math.abs(f.center - forces.center) < eps &&
+      Math.abs(f.charge - forces.charge) < eps &&
+      Math.abs(f.linkDist - forces.linkDist) < eps &&
+      Math.abs(f.linkStr - forces.linkStr) < eps &&
+      Math.abs(f.collide - forces.collide) < eps
+    ) {
+      return key
+    }
+  }
+  return null
 }
 
 /** Labels match Obsidian Graph settings copy where possible */
@@ -345,6 +367,8 @@ export const GraphFiltersPanel: React.FC<GraphFiltersPanelProps> = ({
   onColorGroupsChange,
   onPersist
 }) => {
+  // Highlight the named preset chip whose values match the current forces
+  const activeKey = activePresetKey(forces)
   const [viewName, setViewName] = useState('')
   const [groupQuery, setGroupQuery] = useState('')
   const [groupColor, setGroupColor] = useState(GROUP_COLOR_SWATCHES[5])
@@ -831,21 +855,16 @@ export const GraphFiltersPanel: React.FC<GraphFiltersPanelProps> = ({
         <div className="graph-settings-row">
           <label>Preset</label>
           <div className="graph-filter-seg" role="group" aria-label="Force presets">
-            {(
-              [
-                ['default', 'Default'],
-                ['compact', 'Compact'],
-                ['relaxed', 'Relaxed'],
-                ['clustered', 'Cluster']
-              ] as const
-            ).map(([id, lab]) => (
+            {Object.entries(FORCE_PRESETS).map(([id, preset]) => (
               <button
                 key={id}
                 type="button"
-                className="local-graph-chip"
+                className={`local-graph-chip ${activeKey === id ? 'active' : ''}`}
+                aria-pressed={activeKey === id}
+                title={preset.label}
                 onClick={() => onForcePreset?.(id)}
               >
-                {lab}
+                {preset.label}
               </button>
             ))}
           </div>
@@ -915,8 +934,8 @@ export const GraphFiltersPanel: React.FC<GraphFiltersPanelProps> = ({
           </button>
         </div>
         <p className="graph-filter-hint">
-          Seperti gaya Obsidian. Seret = tata letak langsung; lepas = simpan. Reset / preset Default
-          mengembalikan nilai bawaan.
+          Preset Default = pola melingkar Obsidian (Repel 45 · Link 45 · Jarak 75 · Pusat 20). Seret
+          slider = tata letak langsung; lepas = simpan. Reset gaya = nilai bawaan.
         </p>
       </Section>
 

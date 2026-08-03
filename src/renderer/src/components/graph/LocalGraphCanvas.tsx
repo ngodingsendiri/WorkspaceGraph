@@ -11,9 +11,9 @@ import { Icon } from '../ui/Icons'
 import { DEFAULT_FORCE_SETTINGS } from './graphShared'
 import type { SimNode, SimLink } from './graphTypes'
 import {
-  chargeFor,
-  linkDistanceFor,
-  nodeRadius,
+  applyForceLayout,
+  localRadius,
+  scaleLocalForces,
   OBSIDIAN_SIM,
   OBSIDIAN_VISUAL,
   resolveObsidianNodeFill,
@@ -62,11 +62,6 @@ function readLocalPalette(): LocalPalette {
       default: v.nodeDefault
     }
   }
-}
-
-function localRadius(d: SimNode): number {
-  if (d.isCenter) return Math.max(7, Math.min(12, nodeRadius(d.degree, 1.15)))
-  return Math.max(4, Math.min(9, nodeRadius(d.degree, 0.95)))
 }
 
 export const LocalGraphCanvas: React.FC = () => {
@@ -549,56 +544,34 @@ export const LocalGraphCanvas: React.FC = () => {
           centerTitle: simNodes.find((n) => n.isCenter)?.title || activeTabTitle || ''
         })
 
-        // Global force prefs scaled for mini local canvas (Obsidian local feel)
-        const f = forcesRef.current
-        const linkDist = Math.max(36, Math.min(110, f.linkDist * 0.82))
-        const centerStr = Math.min(0.15, Math.max(0.04, f.center * 1.15))
-        const linkStr = Math.min(0.9, Math.max(0.2, f.linkStr))
-        const collideStr = Math.min(1, Math.max(0.2, f.collide))
-        const baseCharge = Math.max(-180, Math.min(-28, f.charge * 0.78))
+        // Global force prefs scaled for mini local canvas (Obsidian local feel).
+        // Physics wiring delegated to shared applyForceLayout (graphShared) so the
+        // local graph uses the SAME presets, tag-edge damping, and softened hub
+        // charge as the global graph — only the dials are scaled for a smaller
+        // canvas (tighter links, stronger center, gentler charge).
+        const miniForces = scaleLocalForces(forcesRef.current)
 
         simRef.current?.stop()
         hasFittedRef.current = false
         const sim = d3
           .forceSimulation<SimNode>(simNodes)
-          .force(
-            'link',
-            d3
-              .forceLink<SimNode, SimLink>(simLinks)
-              .id((d) => d.id)
-              .distance((l) => {
-                const s = l.source as SimNode
-                const t = l.target as SimNode
-                const sd = typeof s === 'object' ? s.degree || 0 : 0
-                const td = typeof t === 'object' ? t.degree || 0 : 0
-                return linkDistanceFor(sd, td, linkDist)
-              })
-              .strength(linkStr)
-          )
-          .force(
-            'charge',
-            d3
-              .forceManyBody<SimNode>()
-              .strength((d) => chargeFor(d.degree || 0, baseCharge, simNodes.length > 40))
-              .distanceMax(Math.max(140, linkDist * 3))
-              .theta(0.9)
-          )
-          .force('center', d3.forceCenter(width / 2, height / 2).strength(centerStr))
-          .force('x', d3.forceX(width / 2).strength(centerStr * 0.55))
-          .force('y', d3.forceY(height / 2).strength(centerStr * 0.55))
-          .force(
-            'collide',
-            d3
-              .forceCollide<SimNode>()
-              .radius((d) => localRadius(d) + 6)
-              .strength(collideStr)
-              .iterations(2)
-          )
+          .force('link', d3.forceLink<SimNode, SimLink>(simLinks).id((d) => d.id))
           // Mini-canvas: slightly snappier than global (local focus, fewer nodes)
           .velocityDecay(OBSIDIAN_SIM.velocityDecay)
           .alphaDecay(Math.min(0.05, OBSIDIAN_SIM.alphaDecay + 0.012))
           .alphaMin(0.012)
           .alpha(0.65)
+
+        applyForceLayout(sim as d3.Simulation<SimNode, undefined>, miniForces, {
+          width,
+          height,
+          large: simNodes.length > 40,
+          radiusFn: localRadius,
+          // Mini canvas: shorter charge range than global's 280px default
+          chargeRange: Math.max(140, miniForces.linkDist * 3),
+          // Keep the tight +6px pad of the local look
+          collidePad: 6
+        })
 
         simRef.current = sim
         let tick = 0

@@ -26,8 +26,7 @@ import {
   labelDrawBudget,
   resolveLod,
   nodeRadius,
-  linkDistanceFor,
-  chargeFor,
+  applyForceLayout,
   edgeKey,
   smooth01,
   lerp,
@@ -127,9 +126,8 @@ function lodLabel(lod: LodLevel, n: number, mode: GraphPerfMode): string {
 
 /**
  * Apply Obsidian-like force settings onto a live d3 simulation.
- * - Link distance grows slightly with endpoint degree (cluster breathing)
- * - Charge scales with degree (hubs push neighbors away)
- * - Soft center + mild xy so graph stays readable without hard collapse
+ * Delegates to the shared applyForceLayout (graphShared) so Global and Local
+ * graphs use identical physics / presets / softened hub charge.
  */
 function applyForces(
   sim: d3.Simulation<SimNode, undefined>,
@@ -139,43 +137,7 @@ function applyForces(
   large: boolean,
   sizeMul = 1
 ): void {
-  const link = sim.force('link') as d3.ForceLink<SimNode, SimLink> | null
-  if (link) {
-    link
-      .distance((l) => {
-        const s = l.source as SimNode
-        const t = l.target as SimNode
-        const sd = typeof s === 'object' && s ? s.degree || 0 : 0
-        const td = typeof t === 'object' && t ? t.degree || 0 : 0
-        return linkDistanceFor(sd, td, forces.linkDist)
-      })
-      .strength((l) => {
-        // Tag edges weaker so they don't dominate layout
-        const typ = (l as SimLink).type
-        return typ === 'tag' ? forces.linkStr * 0.35 : forces.linkStr
-      })
-  }
-  sim.force(
-    'charge',
-    d3
-      .forceManyBody<SimNode>()
-      .strength((d) => chargeFor(d.degree || 0, forces.charge, large))
-      .distanceMax(large ? 220 : Math.max(280, forces.linkDist * 5))
-      .theta(large ? 0.92 : 0.9)
-  )
-  // Obsidian: weak centering so clusters form organically, not a hard ball at midpoint
-  sim.force('center', d3.forceCenter(width / 2, height / 2).strength(forces.center))
-  const soft = Math.min(0.055, forces.center * 0.45)
-  sim.force('x', d3.forceX(width / 2).strength(soft))
-  sim.force('y', d3.forceY(height / 2).strength(soft))
-  sim.force(
-    'collide',
-    d3
-      .forceCollide<SimNode>()
-      .radius((d) => radius(d) * sizeMul + (large ? 4 : 6))
-      .strength(forces.collide)
-      .iterations(large ? 1 : 2)
-  )
+  applyForceLayout(sim, forces, { width, height, large, sizeMul })
 }
 
 /**

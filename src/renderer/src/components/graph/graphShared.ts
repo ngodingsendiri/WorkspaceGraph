@@ -10,19 +10,25 @@
  * - Soft center, many-body repel, link spring; optional Animate breathe
  * - Tech: we use Canvas/SVG + d3-force (Obsidian uses WebGL) — same feel, not same GPU stack
  */
+import * as d3 from 'd3'
 import type { GraphForceSettings, GraphPerfMode } from '../../store/graphStore'
-import type { Palette } from './graphTypes'
+import type { Palette, SimNode, SimLink } from './graphTypes'
 
 /**
  * Obsidian-like default forces (d3 units, not Obsidian UI 0–1 sliders).
- * Goal: soft center, clear link springs, room to breathe, settle without freeze.
+ * Tuned for Obsidian's signature circular-cloud look:
+ * - Moderate center pull so the whole graph reads as one round cloud (not a star/snake)
+ * - Moderate charge so hubs stay inside their clusters instead of blowing them apart
+ * - Link springs + collision keep cluster rings readable
+ * Reference (Obsidian Graph View defaults): Repel 45, Link force 45,
+ * Link distance 75, Center force 20 (all 0–100 UI sliders → d3 units below).
  */
 export const DEFAULT_FORCE_SETTINGS: GraphForceSettings = {
-  center: 0.045,
-  charge: -125,
-  linkDist: 52,
-  linkStr: 0.58,
-  collide: 0.68
+  center: 0.06,
+  charge: -110,
+  linkDist: 54,
+  linkStr: 0.6,
+  collide: 0.72
 }
 
 /**
@@ -134,7 +140,14 @@ export function resolveObsidianNodeFill(opts: {
   return theme.nodeDefault
 }
 
-/** Obsidian-like force presets (name → settings) */
+/**
+ * Obsidian-like force presets (name → settings).
+ * Each preset keeps the circular-cloud DNA but shifts one dial:
+ * - default  : balanced circular cloud (Obsidian defaults)
+ * - compact  : tight ball — strong center + weak repel for dense vaults
+ * - relaxed  : airy spread — strong repel + long soft links for exploration
+ * - clustered: distinct community blobs — strong links bind clusters, charge separates them
+ */
 export const FORCE_PRESETS: Record<string, { label: string; forces: GraphForceSettings }> = {
   default: {
     label: 'Default',
@@ -142,15 +155,15 @@ export const FORCE_PRESETS: Record<string, { label: string; forces: GraphForceSe
   },
   compact: {
     label: 'Compact',
-    forces: { center: 0.08, charge: -70, linkDist: 38, linkStr: 0.7, collide: 0.8 }
+    forces: { center: 0.1, charge: -60, linkDist: 36, linkStr: 0.8, collide: 0.88 }
   },
   relaxed: {
     label: 'Relaxed',
-    forces: { center: 0.03, charge: -165, linkDist: 85, linkStr: 0.35, collide: 0.5 }
+    forces: { center: 0.035, charge: -170, linkDist: 92, linkStr: 0.3, collide: 0.4 }
   },
   clustered: {
-    label: 'Clustered',
-    forces: { center: 0.02, charge: -200, linkDist: 48, linkStr: 0.72, collide: 0.6 }
+    label: 'Cluster',
+    forces: { center: 0.04, charge: -165, linkDist: 48, linkStr: 0.75, collide: 0.6 }
   }
 }
 
@@ -197,12 +210,89 @@ export function linkDistanceFor(sourceDegree: number, targetDegree: number, base
   return base + boost * 0.35
 }
 
-/** Many-body charge strength — hubs repel slightly more so they don't sit on top of leaves. */
+/**
+ * Many-body charge strength — hubs get a *mild* boost so they don't sit on top of leaves,
+ * but stay inside their cluster. Too strong a boost blows the graph into a spider shape;
+ * Obsidian's hubs sit at the middle of their circular clusters.
+ */
 export function chargeFor(degree: number, baseCharge: number, large: boolean): number {
-  const hubBoost = 1 + Math.min(0.55, Math.sqrt(Math.max(0, degree)) * 0.08)
+  const hubBoost = 1 + Math.min(0.3, Math.sqrt(Math.max(0, degree)) * 0.05)
   let c = baseCharge * hubBoost
   if (large) c = Math.max(c * 0.6, -280)
   return c
+}
+
+/**
+ * Apply Obsidian-like force settings onto a live d3 simulation.
+ * Single source of truth for BOTH Global (GraphCanvas) and Local (LocalGraphCanvas)
+ * graphs so presets / hub-charge tuning never drift apart.
+ *
+ * - Link distance grows slightly with endpoint degree (cluster breathing)
+ * - Tag edges spring weaker so they don't dominate layout
+ * - Charge scales with degree (hubs push neighbors away, softened boost)
+ * - Soft center + mild xy so the graph reads as one round cloud, not a ball or snake
+ */
+export interface ForceLayoutOpts {
+  width: number
+  height: number
+  /** Large graph (>~80 nodes global / >40 local): shorter range, fewer iterations */
+  large: boolean
+  /** Node size display knob multiplier (global nodeSize); local keeps 1 */
+  sizeMul?: number
+  /** Node radius fn — global uses radius(); local uses its smaller localRadius() */
+  radiusFn?: (d: SimNode) => number
+  /** Charge distanceMax override for mini local canvas (defaults to global ranges) */
+  chargeRange?: number
+  /** Collide pad override (defaults to large ? 4 : 6) */
+  collidePad?: number
+}
+
+export function applyForceLayout(
+  sim: d3.Simulation<SimNode, undefined>,
+  forces: GraphForceSettings,
+  opts: ForceLayoutOpts
+): void {
+  const { width, height, large, sizeMul = 1 } = opts
+  const radiusFn = opts.radiusFn ?? radius
+
+  const link = sim.force('link') as d3.ForceLink<SimNode, SimLink> | null
+  if (link) {
+    link
+      .distance((l) => {
+        const s = l.source as SimNode
+        const t = l.target as SimNode
+        const sd = typeof s === 'object' && s ? s.degree || 0 : 0
+        const td = typeof t === 'object' && t ? t.degree || 0 : 0
+        return linkDistanceFor(sd, td, forces.linkDist)
+      })
+      .strength((l) => {
+        // Tag edges weaker so they don't dominate layout
+        const typ = (l as SimLink).type
+        return typ === 'tag' ? forces.linkStr * 0.35 : forces.linkStr
+      })
+  }
+  sim.force(
+    'charge',
+    d3
+      .forceManyBody<SimNode>()
+      .strength((d) => chargeFor(d.degree || 0, forces.charge, large))
+      .distanceMax(opts.chargeRange ?? (large ? 220 : Math.max(280, forces.linkDist * 5)))
+      .theta(large ? 0.92 : 0.9)
+  )
+  // Obsidian: soft centering so the graph reads as one round cloud, not a hard ball
+  // or a stretched snake. x/y strength tracks center so presets behave consistently.
+  sim.force('center', d3.forceCenter(width / 2, height / 2).strength(forces.center))
+  const soft = Math.min(0.06, forces.center * 0.5)
+  sim.force('x', d3.forceX(width / 2).strength(soft))
+  sim.force('y', d3.forceY(height / 2).strength(soft))
+  sim.force(
+    'collide',
+    d3
+      .forceCollide<SimNode>()
+      .radius((d) => radiusFn(d) * sizeMul + (opts.collidePad ?? (large ? 4 : 6)))
+      .strength(forces.collide)
+      .iterations(large ? 1 : 2)
+  )
 }
 
 export function edgeKey(a: string, b: string): string {
@@ -672,6 +762,26 @@ export function readPalette(): Palette {
 /** Node radius wrapper (reads degree from SimNode-like object) */
 export function radius(d: { degree?: number }, scale = 1, hubDim = false): number {
   return nodeRadius(d.degree ?? 0, scale, hubDim)
+}
+
+/** Local graph node radius — smaller nodes, center node slightly larger (Obsidian local). */
+export function localRadius(d: SimNode): number {
+  if (d.isCenter) return Math.max(7, Math.min(12, nodeRadius(d.degree, 1.15)))
+  return Math.max(4, Math.min(9, nodeRadius(d.degree, 0.95)))
+}
+
+/**
+ * Mini-canvas force scaling (LocalGraphCanvas): tighter links, stronger center,
+ * gentler charge than the global graph, all clamped to sane dial ranges.
+ */
+export function scaleLocalForces(f: GraphForceSettings): GraphForceSettings {
+  return {
+    center: Math.min(0.15, Math.max(0.04, f.center * 1.15)),
+    charge: Math.max(-180, Math.min(-28, f.charge * 0.78)),
+    linkDist: Math.max(36, Math.min(110, f.linkDist * 0.82)),
+    linkStr: Math.min(0.9, Math.max(0.2, f.linkStr)),
+    collide: Math.min(1, Math.max(0.2, f.collide))
+  }
 }
 
 /** Extract string id from d3 node/link (handles string | SimNode) */

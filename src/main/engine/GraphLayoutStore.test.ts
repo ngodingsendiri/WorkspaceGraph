@@ -4,7 +4,10 @@ import path from 'path'
 import { tmpdir } from 'os'
 import {
   DEFAULT_GRAPH_SETTINGS,
+  LEGACY_DEFAULT_FORCES,
+  isLegacyDefaultForces,
   mergeGraphSettings,
+  readGraphSettingsFromAppSettings,
   loadGraphLayout,
   saveGraphLayout,
   normalizeCamera,
@@ -91,6 +94,53 @@ describe('GraphLayoutStore', () => {
       expect(mThr.filters.orphanMode).toBe('hide')
       expect(mThr.filters.hubMode).toBe('hide')
       expect(mThr.filters.hubDegreeThreshold).toBe(22)
+    })
+  })
+
+  describe('legacy force defaults migration', () => {
+    it('detects pre-tuning default forces as untouched', () => {
+      expect(isLegacyDefaultForces(LEGACY_DEFAULT_FORCES)).toBe(true)
+      expect(isLegacyDefaultForces({ ...LEGACY_DEFAULT_FORCES, charge: -90 })).toBe(false)
+      expect(isLegacyDefaultForces(null)).toBe(false)
+      expect(isLegacyDefaultForces(undefined)).toBe(false)
+      // Tuned defaults are NOT legacy
+      expect(isLegacyDefaultForces(DEFAULT_GRAPH_SETTINGS.forces)).toBe(false)
+    })
+
+    it('migrates stored legacy force defaults to tuned defaults on read', () => {
+      const merged = readGraphSettingsFromAppSettings({
+        graph: {
+          forces: { ...LEGACY_DEFAULT_FORCES },
+          display: { showTagEdges: true }
+        }
+      })
+      expect(merged.forces).toEqual(DEFAULT_GRAPH_SETTINGS.forces)
+      // Non-force settings still honored
+      expect(merged.display.showTagEdges).toBe(true)
+    })
+
+    it('keeps customized forces untouched', () => {
+      const merged = readGraphSettingsFromAppSettings({
+        graph: { forces: { ...LEGACY_DEFAULT_FORCES, charge: -80 } }
+      })
+      expect(merged.forces.charge).toBe(-80)
+      expect(merged.forces.center).toBe(LEGACY_DEFAULT_FORCES.center)
+    })
+
+    it('migrates legacy forces inside saved view snapshots', () => {
+      const v = upsertGraphView(tmpVault, {
+        name: 'legacy view',
+        snapshot: { forces: { ...LEGACY_DEFAULT_FORCES } }
+      })
+      expect(v.view?.snapshot.forces).toEqual(DEFAULT_GRAPH_SETTINGS.forces)
+    })
+
+    it('keeps explicit view forces', () => {
+      const v = upsertGraphView(tmpVault, {
+        name: 'custom view',
+        snapshot: { forces: { ...LEGACY_DEFAULT_FORCES, linkDist: 120 } }
+      })
+      expect(v.view?.snapshot.forces.linkDist).toBe(120)
     })
   })
 
