@@ -674,8 +674,11 @@ export const LocalGraphCanvas: React.FC = () => {
       const mx = e.clientX - rect.left
       const my = e.clientY - rect.top
       const t = transformRef.current
-      const factor = e.deltaY < 0 ? 1.1 : 1 / 1.1
-      const nextK = Math.max(0.08, Math.min(6, t.k * factor))
+      // Proportional wheel zoom: scale by real scroll distance (not fixed 1.1
+      // jumps) — consistent with GraphCanvas so trackpads zoom smoothly.
+      const dy =
+        e.deltaMode === 1 ? e.deltaY * 16 : e.deltaMode === 2 ? e.deltaY * 120 : e.deltaY
+      const nextK = Math.max(0.08, Math.min(6, t.k * Math.exp(-dy * 0.0012)))
       const x = mx - ((mx - t.x) * nextK) / t.k
       const y = my - ((my - t.y) * nextK) / t.k
       transformRef.current = d3.zoomIdentity.translate(x, y).scale(nextK)

@@ -1601,6 +1601,11 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
       schedulePaint()
     })
 
+    // Declared BEFORE kick — kick() closes over them and is called synchronously
+    // below (TDZ crash if declared after: "Cannot access 'kickRafs' before init").
+    const kickRafs: number[] = []
+    let resizeRaf = 0
+
     const kick = (why: string, opts?: { allowFit?: boolean }) => {
       syncCanvasSize()
       const fNodes = filteredNodesRef.current
@@ -1677,8 +1682,6 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
     const timers = delays.map((ms) => setTimeout(() => kick(`graph-enter-${ms}`), ms))
 
     let ro: ResizeObserver | null = null
-    const kickRafs: number[] = []
-    let resizeRaf = 0
     const wrap = wrapRef.current
     if (wrap && typeof ResizeObserver !== 'undefined') {
       // Resize: re-paint; coalesce per frame — window drag fires RO on every tick
@@ -2549,7 +2552,10 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
           if (d.isTag || d.type === 'tag') {
             setSearchQuery((d.title || '').replace(/^#/, ''))
             setSearchMode('filter')
-          } else if (d.path && !d.isGhost && d.type !== 'ghost') {
+          } else if (d.isAttachment && d.path && window.api?.openFileExternal) {
+            // Attachments (image/pdf) open with OS default app, not the editor
+            void window.api.openFileExternal(d.path)
+          } else if (d.path && !d.isGhost && !d.isAttachment && d.type !== 'ghost') {
             void openTabRef.current(d.path)
             setActiveViewRef.current('editor')
           }
@@ -3574,7 +3580,9 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
         if (ids.length === 0) return
         e.preventDefault()
         const first = nodesRef.current.find((n) => n.id === ids[0])
-        if (first?.path) {
+        if (first?.isAttachment && first.path && window.api?.openFileExternal) {
+          void window.api.openFileExternal(first.path)
+        } else if (first?.path && !first.isGhost && !first.isAttachment) {
           void openTab(first.path)
           setActiveView('editor')
         }
@@ -4299,12 +4307,16 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
             <button
               type="button"
               onClick={() => {
-                void openTab(ctxMenu.node.path)
-                setActiveView('editor')
+                if (ctxMenu.node.isAttachment && window.api?.openFileExternal) {
+                  void window.api.openFileExternal(ctxMenu.node.path)
+                } else if (!ctxMenu.node.isAttachment) {
+                  void openTab(ctxMenu.node.path)
+                  setActiveView('editor')
+                }
                 setCtxMenu(null)
               }}
             >
-              Open
+              {ctxMenu.node.isAttachment ? 'Buka dengan app' : 'Open'}
             </button>
           )}
           {ctxMenu.node.title && (

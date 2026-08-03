@@ -764,6 +764,7 @@ export class GraphEngine {
       | 'isGhost'
       | 'isTag'
       | 'isAttachment'
+      | 'path'
     >[]
     edges: GraphEdge[]
     nodeCount: number
@@ -777,6 +778,7 @@ export class GraphEngine {
       title: n.title,
       type: n.type,
       relativePath: n.relativePath,
+      path: n.path,
       tags: n.tags,
       degree: n.degree,
       x: n.x,
