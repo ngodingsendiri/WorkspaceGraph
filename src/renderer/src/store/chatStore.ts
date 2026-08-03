@@ -66,6 +66,10 @@ export interface ChatStore {
   rejectProposal: (id: string) => Promise<void>
   saveCurrentChat: () => Promise<void>
   loadChat: (id: string) => Promise<void>
+  /** Delete a saved conversation file (keeps current session untouched unless same id). */
+  deleteChat: (id: string) => Promise<{ ok: boolean; error?: string }>
+  /** Re-send the last user message after an error (retry). */
+  retryLastMessage: (activeFilePath?: string) => Promise<void>
   ensureConversationId: () => Promise<string>
   /** Scaffold AI Memory/ then run bootstrap agent prompt */
   learnWorkspace: (
@@ -82,6 +86,36 @@ function mergeProposals(
   for (const p of existing || []) map.set(p.id, p)
   for (const p of incoming || []) map.set(p.id, p)
   return Array.from(map.values())
+}
+
+/**
+ * Bound the conversation history sent to the model — unlimited growth would
+ * blow the context window and bill. Keep the last N user/assistant turns and
+ * always include the current prompt. ~6 turns ≈ 12 messages ≈ safe for 8k ctx.
+ */
+const HISTORY_MAX_TURNS = 8
+const HISTORY_MAX_CHARS = 60_000
+
+export function buildHistoryWindow(
+  messages: ChatMessage[],
+  currentUser: { role: 'user'; content: string }
+): { role: 'user' | 'assistant'; content: string }[] {
+  const all: ChatMessage[] = [...messages, currentUser as ChatMessage]
+  const trimmed = all.slice(-(HISTORY_MAX_TURNS * 2))
+  const out: { role: 'user' | 'assistant'; content: string }[] = []
+  let totalChars = 0
+  // Always keep the newest user prompt even if total budget is tight
+  for (let i = trimmed.length - 1; i >= 0; i--) {
+    const m = trimmed[i]
+    if (m.role !== 'user' && m.role !== 'assistant') continue
+    const content = typeof m.content === 'string' ? m.content.trim() : ''
+    if (!content) continue
+    const isCurrent = i === trimmed.length - 1
+    if (!isCurrent && totalChars + content.length > HISTORY_MAX_CHARS) continue
+    totalChars += content.length
+    out.unshift({ role: m.role as 'user' | 'assistant', content })
+  }
+  return out
 }
 
 export const useChatStore = create<ChatStore>((set, get) => ({
@@ -178,10 +212,10 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     })
 
     const { selectedModelId, activeProviderId, useContext, agentRole, enableTools } = get()
-    const historyForApi = [...prior, userMsg]
-      .filter((m) => m.role === 'user' || m.role === 'assistant')
-      .filter((m) => m.content.trim().length > 0)
-      .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content }))
+    const historyForApi = buildHistoryWindow(prior, {
+      role: 'user',
+      content: text
+    })
 
     const requestPayload = {
       model: selectedModelId,
@@ -390,5 +424,28 @@ Mulai: list_dir "" lalu read_note "AI Memory/00 Index.md".`
       })),
       agentRole: (conv.agentRole as AgentRole) || get().agentRole
     })
+  },
+
+  deleteChat: async (id: string) => {
+    try {
+      const res = await window.api.deleteChat(id)
+      if (res?.ok && get().conversationId === id) {
+        set({ conversationId: null, activeStreamId: null })
+      }
+      return { ok: Boolean(res?.ok), error: res?.error }
+    } catch (err) {
+      const error = err instanceof Error ? err.message : String(err)
+      return { ok: false, error }
+    }
+  },
+
+  retryLastMessage: async (activeFilePath?: string) => {
+    if (get().isGenerating) return
+    const lastUser = [...get().messages].reverse().find((m) => m.role === 'user')
+    if (!lastUser || !lastUser.content.trim()) return
+    // Drop the failed assistant reply so the retry starts from the same prompt
+    const idx = get().messages.findIndex((m) => m.id === lastUser.id)
+    if (idx >= 0) set({ messages: get().messages.slice(0, idx + 1) })
+    await get().sendMessage(lastUser.content, activeFilePath)
   }
 }))

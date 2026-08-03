@@ -104,6 +104,25 @@ export function loadConversation(id: string): StoredConversation | null {
   }
 }
 
+export function deleteConversation(id: string): { ok: boolean; error?: string } {
+  const dir = chatsDir()
+  if (!dir) return { ok: false, error: 'No workspace open' }
+  const clean = safeConversationId(id)
+  if (!clean) return { ok: false, error: 'Invalid conversation id' }
+  const filePath = path.join(dir, `${clean}.json`)
+  const rel = path.relative(path.resolve(dir), path.resolve(filePath))
+  if (rel.startsWith('..') || path.isAbsolute(rel)) {
+    return { ok: false, error: 'Invalid conversation path' }
+  }
+  try {
+    if (!fs.existsSync(filePath)) return { ok: true } // idempotent
+    fs.unlinkSync(filePath)
+    return { ok: true }
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) }
+  }
+}
+
 export function newConversationId(): string {
   const d = new Date()
   const pad = (n: number) => String(n).padStart(2, '0')

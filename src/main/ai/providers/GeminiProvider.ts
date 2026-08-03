@@ -136,7 +136,11 @@ export class GeminiProvider extends BaseProvider {
     }
   }
 
-  async streamMessage(request: AIRequest, onChunk: (chunk: AIStreamChunk) => void): Promise<void> {
+  async streamMessage(
+    request: AIRequest,
+    onChunk: (chunk: AIStreamChunk) => void,
+    signal?: AbortSignal
+  ): Promise<void> {
     const client = this.getClient()
     const model = request.model || this.defaultModel
     const contents = this.buildContents(request)
@@ -158,6 +162,7 @@ export class GeminiProvider extends BaseProvider {
         config
       })
       for await (const chunk of responseStream) {
+        if (signal?.aborted) break
         if (chunk.text) {
           onChunk({ content: chunk.text, done: false, model: useModel })
         }
@@ -168,6 +173,7 @@ export class GeminiProvider extends BaseProvider {
     try {
       await runStream(model)
     } catch (err) {
+      if (signal?.aborted) return
       const formatted = GeminiProvider.formatError(err)
       const isQuota = /429|quota|rate.?limit|RESOURCE_EXHAUSTED/i.test(formatted)
       const isPro = /pro/i.test(model)
@@ -183,6 +189,7 @@ export class GeminiProvider extends BaseProvider {
           await runStream(fallback)
           return
         } catch (err2) {
+          if (signal?.aborted) return
           const msg2 = GeminiProvider.formatError(err2)
           onChunk({ content: '', done: true, model: fallback, error: `Gemini: ${msg2}` })
           return

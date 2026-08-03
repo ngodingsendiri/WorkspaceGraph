@@ -376,7 +376,7 @@ export class EmbeddingEngine {
     this.index = []
     this.indexedPaths.clear()
     this.currentDb = null
-    this.state = this.worker || (this as any)._fallbackEmbedder ? 'idle' : 'idle'
+    this.state = 'idle'
     console.log('[EmbeddingEngine] Index cleared')
   }
 

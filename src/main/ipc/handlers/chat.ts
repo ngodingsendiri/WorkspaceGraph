@@ -3,6 +3,7 @@ import {
   saveConversation,
   listConversations,
   loadConversation,
+  deleteConversation,
   newConversationId,
   type StoredConversation
 } from '../../ai/ConversationStore'
@@ -22,6 +23,10 @@ export function registerChatHandlers(): void {
 
   ipcMain.handle('chat:load', async (_, id: string) => {
     return loadConversation(id)
+  })
+
+  ipcMain.handle('chat:delete', async (_, id: string) => {
+    return deleteConversation(id)
   })
 
   ipcMain.handle('chat:newId', async () => {

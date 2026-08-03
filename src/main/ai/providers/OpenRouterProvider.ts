@@ -95,7 +95,11 @@ export class OpenRouterProvider extends BaseProvider {
     }
   }
 
-  async streamMessage(request: AIRequest, onChunk: (chunk: AIStreamChunk) => void): Promise<void> {
+  async streamMessage(
+    request: AIRequest,
+    onChunk: (chunk: AIStreamChunk) => void,
+    signal?: AbortSignal
+  ): Promise<void> {
     const client = this.getClient()
     const model = request.model || this.defaultModel
 
@@ -108,13 +112,16 @@ export class OpenRouterProvider extends BaseProvider {
     }
 
     try {
-      const stream = await client.chat.completions.create({
-        model,
-        messages,
-        temperature: request.temperature,
-        stream: true,
-        ...(request.maxTokens ? { max_tokens: request.maxTokens } : {})
-      })
+      const stream = await client.chat.completions.create(
+        {
+          model,
+          messages,
+          temperature: request.temperature,
+          stream: true,
+          ...(request.maxTokens ? { max_tokens: request.maxTokens } : {})
+        },
+        { signal }
+      )
 
       for await (const chunk of stream) {
         const text = chunk.choices[0]?.delta?.content || ''
@@ -124,6 +131,7 @@ export class OpenRouterProvider extends BaseProvider {
       }
       onChunk({ content: '', done: true, model })
     } catch (err) {
+      if (signal?.aborted) return
       const msg = err instanceof Error ? err.message : String(err)
       onChunk({ content: '', done: true, model, error: `OpenRouter: ${msg}` })
     }

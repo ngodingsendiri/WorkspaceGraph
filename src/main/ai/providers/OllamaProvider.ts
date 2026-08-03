@@ -81,7 +81,11 @@ export class OllamaProvider extends BaseProvider {
     }
   }
 
-  async streamMessage(request: AIRequest, onChunk: (chunk: AIStreamChunk) => void): Promise<void> {
+  async streamMessage(
+    request: AIRequest,
+    onChunk: (chunk: AIStreamChunk) => void,
+    signal?: AbortSignal
+  ): Promise<void> {
     const model = request.model || this.defaultModel
 
     const messages = request.messages.map((m) => ({
@@ -99,7 +103,8 @@ export class OllamaProvider extends BaseProvider {
         model,
         messages,
         stream: true
-      })
+      }),
+      signal
     })
 
     try {
@@ -140,6 +145,7 @@ export class OllamaProvider extends BaseProvider {
       }
       onChunk({ content: '', done: true, model })
     } catch (err) {
+      if (signal?.aborted) return
       const msg = err instanceof Error ? err.message : String(err)
       onChunk({
         content: '',

@@ -23,6 +23,12 @@ export const SettingsView: React.FC = () => {
     memoryCount: number
     sqlite: { count: number; path: string | null; lastRebuild: string | null; open: boolean }
   } | null>(null)
+  const [embeddingStatus, setEmbeddingStatus] = useState<{
+    state: 'idle' | 'loading_model' | 'indexing' | 'ready'
+    totalChunks: number
+    indexedFiles: number
+    modelReady: boolean
+  } | null>(null)
   const [rebuilding, setRebuilding] = useState(false)
   const [permissions, setPermissions] = useState({
     aiAccess: true,
@@ -104,6 +110,7 @@ export const SettingsView: React.FC = () => {
         setPermissions((p) => ({ ...p, ...settings.permissions }))
       }
       setIndexStats(await window.api.getSearchStats())
+      setEmbeddingStatus(await window.api.getEmbeddingStatus())
       setSecStatus(await window.api.getSecurityStatus())
       setAutomation(await window.api.getAutomation())
       setPlugins(await window.api.listPlugins())
@@ -425,6 +432,53 @@ export const SettingsView: React.FC = () => {
               </div>
               <div style={{ fontSize: 11, color: 'var(--text-muted)', wordBreak: 'break-all' }}>
                 {indexStats?.sqlite.path || '—'}
+              </div>
+            </div>
+
+            <div
+              style={{
+                background: 'var(--bg-surface)',
+                borderRadius: 6,
+                padding: 16,
+                marginBottom: 16,
+                fontSize: 'var(--text-sm)'
+              }}
+            >
+              <div
+                style={{
+                  fontWeight: 600,
+                  fontSize: 'var(--text-sm)',
+                  marginBottom: 6,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8
+                }}
+              >
+                Embedding (semantic memory)
+                {embeddingStatus && (
+                  <span
+                    className={`badge ${
+                      embeddingStatus.state === 'ready' ? 'badge-success' : 'badge-warning'
+                    }`}
+                  >
+                    {embeddingStatus.state}
+                  </span>
+                )}
+              </div>
+              <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+                Model:{' '}
+                <strong
+                  style={{
+                    color: embeddingStatus?.modelReady ? 'var(--color-success)' : 'var(--text-muted)'
+                  }}
+                >
+                  {embeddingStatus?.modelReady ? 'ready' : 'not loaded'}
+                </strong>{' '}
+                · {embeddingStatus?.totalChunks ?? 0} chunks ·{' '}
+                {embeddingStatus?.indexedFiles ?? 0} files
+              </div>
+              <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                Dipakai Context AI (semantic recall) saat vault terbuka.
               </div>
             </div>
             <button

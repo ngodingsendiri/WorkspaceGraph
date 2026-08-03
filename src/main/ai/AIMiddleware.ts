@@ -43,6 +43,8 @@ export class AIMiddleware {
   private activeProviderId: string = 'grok'
   private contextEngine: ContextEngine
   private abortFlags = new Map<string, boolean>()
+  /** Real HTTP cancellation — abort() stops the provider stream, not just UI. */
+  private abortControllers = new Map<string, AbortController>()
 
   constructor() {
     this.contextEngine = new ContextEngine(workspaceEngine, searchEngine)
@@ -139,6 +141,7 @@ export class AIMiddleware {
 
   cancelStream(requestId: string): void {
     this.abortFlags.set(requestId, true)
+    this.abortControllers.get(requestId)?.abort()
   }
 
   isCancelled(requestId?: string): boolean {
@@ -148,6 +151,7 @@ export class AIMiddleware {
 
   clearCancel(requestId: string): void {
     this.abortFlags.delete(requestId)
+    this.abortControllers.delete(requestId)
   }
 
   async getAllProvidersStatus(): Promise<ProviderStatus[]> {
@@ -349,7 +353,35 @@ export class AIMiddleware {
     requestId?: string
   ): Promise<void> {
     if (requestId) this.clearCancel(requestId)
+    const controller = requestId ? new AbortController() : undefined
+    if (controller && requestId) this.abortControllers.set(requestId, controller)
+    const signal = controller?.signal
+    try {
+      await this.runStreamInner(
+        request,
+        onChunk,
+        activeFilePath,
+        useContext,
+        agentRole,
+        enableTools,
+        requestId,
+        signal
+      )
+    } finally {
+      if (requestId) this.abortControllers.delete(requestId)
+    }
+  }
 
+  private async runStreamInner(
+    request: AIRequest,
+    onChunk: (chunk: StreamEvent) => void,
+    activeFilePath: string | undefined,
+    useContext: boolean,
+    agentRole: AgentRole,
+    enableTools: boolean,
+    requestId: string | undefined,
+    signal: AbortSignal | undefined
+  ): Promise<void> {
     let provider: BaseProvider
     try {
       provider = this.getActiveProvider()
@@ -455,7 +487,7 @@ export class AIMiddleware {
           citations: lastCitations,
           round
         })
-      })
+      }, signal)
 
       // Soft-cancel: provider may still finish network; stop loop cleanly with marker
       if (requestId && this.isCancelled(requestId)) {

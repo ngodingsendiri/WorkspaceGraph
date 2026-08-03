@@ -258,20 +258,28 @@ export class GrokProvider extends BaseProvider {
     }
   }
 
-  async streamMessage(request: AIRequest, onChunk: (chunk: AIStreamChunk) => void): Promise<void> {
+  async streamMessage(
+    request: AIRequest,
+    onChunk: (chunk: AIStreamChunk) => void,
+    signal?: AbortSignal
+  ): Promise<void> {
     await this.ensureSession()
     const model = request.model || this.defaultModel
 
     const runChatStream = async (): Promise<void> => {
       const messages = this.toChatMessages(request)
-      const stream = await this.getClient().chat.completions.create({
-        model,
-        messages,
-        temperature: request.temperature,
-        stream: true,
-        ...(request.maxTokens ? { max_tokens: request.maxTokens } : {})
-      })
+      const stream = await this.getClient().chat.completions.create(
+        {
+          model,
+          messages,
+          temperature: request.temperature,
+          stream: true,
+          ...(request.maxTokens ? { max_tokens: request.maxTokens } : {})
+        },
+        { signal }
+      )
       for await (const chunk of stream) {
+        if (signal?.aborted) return
         const text = chunk.choices[0]?.delta?.content || ''
         if (text) onChunk({ content: text, done: false, model })
       }
@@ -299,6 +307,7 @@ export class GrokProvider extends BaseProvider {
           stream: true
         })
         for await (const event of stream) {
+          if (signal?.aborted) return
           if (event?.type === 'response.output_text.delta' && event.delta) {
             onChunk({ content: String(event.delta), done: false, model })
           } else {
@@ -317,6 +326,7 @@ export class GrokProvider extends BaseProvider {
 
       await runChatStream()
     } catch (err) {
+      if (signal?.aborted) return
       // Fallback: refresh session + chat on official API
       try {
         this.lastCliRefreshMs = 0

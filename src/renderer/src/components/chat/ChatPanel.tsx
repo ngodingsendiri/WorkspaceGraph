@@ -8,6 +8,53 @@ import { usePanelWidth } from '../../hooks/usePanelWidth'
 
 type ChatListItem = { id: string; title?: string; updatedAt?: string }
 
+/**
+ * Render a completed assistant message as markdown via markdown:render (escaped in
+ * main). Streaming messages render as plain pre-wrapped text to avoid IPC churn per
+ * chunk. Results cached by content so history re-renders are cheap.
+ */
+const mdCache = new Map<string, string>()
+function ChatMessageBody({
+  content,
+  streaming
+}: {
+  content: string
+  streaming: boolean
+}): React.ReactElement {
+  const [html, setHtml] = useState<string | null>(() =>
+    mdCache.get(content) !== undefined ? (mdCache.get(content) as string) : null
+  )
+
+  useEffect(() => {
+    if (streaming || !content) return
+    const cached = mdCache.get(content)
+    if (cached !== undefined) {
+      setHtml(cached)
+      return
+    }
+    let cancelled = false
+    window.api
+      .renderMarkdown(content)
+      .then((h) => {
+        if (cancelled) return
+        mdCache.set(content, h)
+        setHtml(h)
+      })
+      .catch(() => {
+        if (!cancelled) setHtml(null)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [content, streaming])
+
+  if (streaming || !html) {
+    return <div className="chat-msg-plain">{content}</div>
+  }
+  // markdown:render escapes raw HTML — safe to inject
+  return <div className="chat-msg-md md-content" dangerouslySetInnerHTML={{ __html: html }} />
+}
+
 export const ChatPanel: React.FC = () => {
   const { width: chatWidth, onHandleMouseDown: chatResize, resizing } = usePanelWidth(
     'wg.chatWidth',
@@ -41,6 +88,8 @@ export const ChatPanel: React.FC = () => {
     rejectProposal,
     saveCurrentChat,
     loadChat,
+    deleteChat,
+    retryLastMessage,
     learnWorkspace
   } = useChatStore()
 
@@ -236,6 +285,26 @@ export const ChatPanel: React.FC = () => {
     await loadChat(id)
     setShowHistory(false)
     stickToBottom.current = true
+  }
+
+  const handleDeleteChat = async (id: string) => {
+    if (isGenerating) return
+    const res = await deleteChat(id)
+    if (res.ok) {
+      setApplyOk(true)
+      setApplyMsg('Chat terhapus')
+    } else {
+      setApplyOk(false)
+      setApplyMsg(res.error || 'Gagal menghapus chat')
+    }
+    setTimeout(() => setApplyMsg(''), 3000)
+    void refreshHistory()
+  }
+
+  const handleRetry = () => {
+    if (isGenerating) return
+    stickToBottom.current = true
+    void retryLastMessage(activeTab?.path)
   }
 
   const openProposals = pendingProposals.filter(
@@ -434,24 +503,34 @@ export const ChatPanel: React.FC = () => {
             <div className="chat-history-empty">Belum ada chat tersimpan.</div>
           ) : (
             history.map((h) => (
-              <button
-                key={h.id}
-                type="button"
-                className="chat-history-item"
-                onClick={() => void handleLoadChat(h.id)}
-              >
-                <span className="truncate">{h.title || h.id}</span>
-                {h.updatedAt && (
-                  <span className="chat-history-meta">
-                    {new Date(h.updatedAt).toLocaleString(undefined, {
-                      month: 'short',
-                      day: 'numeric',
-                      hour: '2-digit',
-                      minute: '2-digit'
-                    })}
-                  </span>
-                )}
-              </button>
+              <div key={h.id} className="chat-history-item">
+                <button
+                  type="button"
+                  className="chat-history-load"
+                  onClick={() => void handleLoadChat(h.id)}
+                >
+                  <span className="truncate">{h.title || h.id}</span>
+                  {h.updatedAt && (
+                    <span className="chat-history-meta">
+                      {new Date(h.updatedAt).toLocaleString(undefined, {
+                        month: 'short',
+                        day: 'numeric',
+                        hour: '2-digit',
+                        minute: '2-digit'
+                      })}
+                    </span>
+                  )}
+                </button>
+                <button
+                  type="button"
+                  className="chat-history-del"
+                  aria-label="Hapus chat"
+                  title="Hapus chat tersimpan"
+                  onClick={() => void handleDeleteChat(h.id)}
+                >
+                  <Icon name="trash" size={12} />
+                </button>
+              </div>
             ))
           )}
         </div>
@@ -545,6 +624,8 @@ export const ChatPanel: React.FC = () => {
               msg.content?.includes('**Error:**') ||
               msg.content?.startsWith('Error:') ||
               msg.content?.includes('*(cancelled)*')
+            const streamingThis =
+              isGenerating && msg.role === 'assistant' && msg.id === messages[messages.length - 1]?.id
             return (
               <div key={msg.id} className={`chat-message ${msg.role}`}>
                 <div className="message-role">
@@ -552,14 +633,15 @@ export const ChatPanel: React.FC = () => {
                   {msg.toolStatus ? ` · ${msg.toolStatus}` : ''}
                 </div>
                 <div className={`message-bubble ${isErr ? 'is-error' : ''}`}>
-                  {msg.content ||
-                    (isGenerating && msg.role === 'assistant' ? (
-                      <span className="chat-thinking">
-                        <span className="chat-spinner" /> working…
-                      </span>
-                    ) : (
-                      ''
-                    ))}
+                  {msg.content ? (
+                    <ChatMessageBody content={msg.content} streaming={streamingThis} />
+                  ) : streamingThis ? (
+                    <span className="chat-thinking">
+                      <span className="chat-spinner" /> working…
+                    </span>
+                  ) : (
+                    ''
+                  )}
 
                   {msg.citations && msg.citations.length > 0 && (
                     <div className="chat-citations">
@@ -587,6 +669,16 @@ export const ChatPanel: React.FC = () => {
                       >
                         {copyFlash === msg.id ? 'Copied' : 'Copy'}
                       </button>
+                      {isErr && (
+                        <button
+                          type="button"
+                          className="btn btn-surface btn-sm"
+                          onClick={() => void handleRetry()}
+                          title="Kirim ulang pertanyaan terakhir"
+                        >
+                          <Icon name="sync" size={12} /> Retry
+                        </button>
+                      )}
                       {activeTab && (
                         <button
                           type="button"

@@ -266,6 +266,7 @@ export interface API {
   listChats: () => Promise<any[]>
   loadChat: (id: string) => Promise<any | null>
   newChatId: () => Promise<string>
+  deleteChat: (id: string) => Promise<{ ok: boolean; error?: string }>
 
   listTemplates: () => Promise<
     {

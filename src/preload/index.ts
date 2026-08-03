@@ -176,6 +176,7 @@ const api = {
   saveChat: (conv: unknown) => ipcRenderer.invoke('chat:save', conv),
   listChats: () => ipcRenderer.invoke('chat:list'),
   loadChat: (id: string) => ipcRenderer.invoke('chat:load', id),
+  deleteChat: (id: string) => ipcRenderer.invoke('chat:delete', id),
   newChatId: () => ipcRenderer.invoke('chat:newId'),
 
   // Templates + domain (Phase 4)

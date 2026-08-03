@@ -88,7 +88,7 @@ describe('IPC surface (whole src/main/ipc dir)', () => {
     }
   })
   it('chat persist + tools IPC', () => {
-    expect(has(ipc, 'chat:save', 'chat:load', 'enableTools')).toBe(true)
+    expect(has(ipc, 'chat:save', 'chat:load', 'chat:delete', 'enableTools')).toBe(true)
   })
   it('platform IPC (automation/plugins/security/health)', () => {
     expect(has(ipc, 'automation:get', 'plugins:list', 'security:status', 'api:health')).toBe(true)

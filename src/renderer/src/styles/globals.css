@@ -2289,20 +2289,52 @@ html:not([data-theme]) {
   padding: 8px 4px;
 }
 .chat-history-item {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  width: 100%;
+  border-radius: 6px;
+}
+.chat-history-item:hover {
+  background: var(--bg-hover);
+}
+.chat-history-load {
   all: unset;
   box-sizing: border-box;
+  flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 2px;
-  width: 100%;
   padding: 7px 8px;
   border-radius: 6px;
   cursor: pointer;
   font-size: 12px;
   color: var(--text-primary);
+  text-align: left;
 }
-.chat-history-item:hover {
-  background: var(--bg-hover);
+.chat-history-load:hover {
+  color: var(--color-primary);
+}
+.chat-history-del {
+  all: unset;
+  box-sizing: border-box;
+  flex-shrink: 0;
+  width: 22px;
+  height: 22px;
+  margin-right: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: all var(--duration-fast);
+}
+.chat-history-del:hover {
+  color: var(--color-error);
+  background: var(--color-error-subtle);
 }
 .chat-history-meta {
   font-size: 10px;
@@ -2512,6 +2544,28 @@ html:not([data-theme]) {
 }
 .chat-citation-chip:hover {
   border-color: var(--color-primary);
+}
+
+/* Assistant content: streaming plain-text vs rendered markdown (via markdown:render) */
+.chat-msg-plain {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.chat-msg-md {
+  font-size: 13px;
+  line-height: 1.55;
+  max-width: 100%;
+  white-space: normal;
+  word-break: break-word;
+}
+.chat-msg-md > :first-child {
+  margin-top: 0;
+}
+.chat-msg-md > :last-child {
+  margin-bottom: 0;
+}
+.chat-msg-md pre {
+  max-width: 100%;
 }
 
 .chat-msg-actions {

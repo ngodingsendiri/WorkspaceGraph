@@ -79,7 +79,11 @@ export class ClaudeProvider extends BaseProvider {
     }
   }
 
-  async streamMessage(request: AIRequest, onChunk: (chunk: AIStreamChunk) => void): Promise<void> {
+  async streamMessage(
+    request: AIRequest,
+    onChunk: (chunk: AIStreamChunk) => void,
+    signal?: AbortSignal
+  ): Promise<void> {
     const client = this.getClient()
     const model = request.model || this.defaultModel
 
@@ -94,13 +98,16 @@ export class ClaudeProvider extends BaseProvider {
       if (messages.length === 0) {
         throw new Error('No messages to send')
       }
-      const stream = await client.messages.stream({
-        model,
-        max_tokens: request.maxTokens || 4096,
-        system: request.systemPrompt,
-        messages,
-        temperature: request.temperature
-      })
+      const stream = client.messages.stream(
+        {
+          model,
+          max_tokens: request.maxTokens || 4096,
+          system: request.systemPrompt,
+          messages,
+          temperature: request.temperature
+        },
+        { signal }
+      )
 
       for await (const event of stream) {
         if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
@@ -109,6 +116,7 @@ export class ClaudeProvider extends BaseProvider {
       }
       onChunk({ content: '', done: true, model })
     } catch (err) {
+      if (signal?.aborted) return
       const msg = err instanceof Error ? err.message : String(err)
       onChunk({ content: '', done: true, model, error: `Claude: ${msg}` })
     }

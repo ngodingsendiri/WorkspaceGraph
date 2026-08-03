@@ -83,7 +83,15 @@ export abstract class BaseProvider {
   abstract healthCheck(): Promise<boolean>
   abstract listModels(): Promise<ModelInfo[]>
   abstract sendMessage(request: AIRequest): Promise<AIResponse>
-  abstract streamMessage(request: AIRequest, onChunk: (chunk: AIStreamChunk) => void): Promise<void>
+  /**
+   * Stream chunks. Optional AbortSignal lets the caller stop the HTTP request
+   * for real (cancel button must not keep burning tokens).
+   */
+  abstract streamMessage(
+    request: AIRequest,
+    onChunk: (chunk: AIStreamChunk) => void,
+    signal?: AbortSignal
+  ): Promise<void>
 
   isConfigured(): boolean {
     // Ollama needs no API key — "configured" means base URL set (default localhost)

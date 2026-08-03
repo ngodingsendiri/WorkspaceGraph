@@ -184,9 +184,17 @@ export function parseToolActions(text: string): ToolAction[] {
   })
 }
 
-/** Strip tool fences from display text */
+/**
+ * Strip tool fences from display text — removes wg-action AND generic json /
+ * javascript fences that carry tool calls so raw JSON never leaks into the
+ * transcript or the next round's assistant message.
+ */
 export function stripToolActions(text: string): string {
-  return text.replace(/```wg-action\s*[\s\S]*?```/gi, '').trim()
+  const cleaned = text
+    .replace(/```wg-action\s*[\s\S]*?```/gi, '')
+    // json/javascript fences that contain a tool call (best-effort, keeps prose JSON)
+    .replace(/```(?:json|javascript)\s*\{[\s\S]*?\}```/gi, '')
+  return cleaned.trim()
 }
 
 function resolvePath(input: string): string | null {
