@@ -3,7 +3,8 @@ import { useWorkspaceStore } from '../../store/workspaceStore'
 import { useEditorStore } from '../../store/editorStore'
 import { useGraphStore } from '../../store/graphStore'
 import { TemplatePicker } from '../systems/TemplatePicker'
-import { Icon } from '../ui/Icons'
+import { Icon, type IconName } from '../ui/Icons'
+import { toast } from '../ui/Toast'
 
 const SkeletonRows: React.FC<{ count?: number }> = ({ count = 4 }) => (
   <div className="dash-skeleton">
@@ -11,6 +12,25 @@ const SkeletonRows: React.FC<{ count?: number }> = ({ count = 4 }) => (
     {Array.from({ length: count }).map((_, i) => (
       <div key={i} className="dash-skeleton-row" />
     ))}
+  </div>
+)
+
+const SectionHead: React.FC<{ icon: IconName; title: string; count?: number }> = ({
+  icon,
+  title,
+  count
+}) => (
+  <div className="dash-section-head">
+    <Icon name={icon} size={13} />
+    <span>{title}</span>
+    {typeof count === 'number' && count > 0 && <span className="dash-section-count">{count}</span>}
+  </div>
+)
+
+const EmptyState: React.FC<{ text: string }> = ({ text }) => (
+  <div className="dash-empty">
+    <Icon name="info" size={13} />
+    <span>{text}</span>
   </div>
 )
 
@@ -77,15 +97,27 @@ export const DashboardView: React.FC<{ onOpenSearch: () => void }> = ({ onOpenSe
   }
 
   const handleCreateDailyNote = async () => {
-    const res = await window.api.createFromTemplate({
-      templateId: 'builtin-daily',
-      title: new Date().toISOString().split('T')[0]
-    })
-    if (res.ok && res.path) {
-      await openNote(res.path)
-    } else if (rootPath) {
-      // fallback
-      const today = new Date().toISOString().split('T')[0]
+    const today = new Date().toISOString().split('T')[0]
+    try {
+      const res = await window.api.createFromTemplate({
+        templateId: 'builtin-daily',
+        title: today
+      })
+      // Created or already exists today → open the note (exists returns ok:false + path)
+      if (res.ok && res.path) {
+        await openNote(res.path)
+        return
+      }
+      if (res.path) {
+        await openNote(res.path)
+        return
+      }
+    } catch (err) {
+      console.error('Daily note via template failed:', err)
+    }
+    // Fallback: manual creation (works even if template seeding failed)
+    if (!rootPath) return
+    try {
       const sep = rootPath.includes('\\') ? '\\' : '/'
       const filePath = `${rootPath}${sep}Daily${sep}${today}.md`
       await window.api.createFile(
@@ -93,6 +125,8 @@ export const DashboardView: React.FC<{ onOpenSearch: () => void }> = ({ onOpenSe
         `---\ntitle: ${today}\ntype: daily\ndate: ${today}\n---\n\n# ${today}\n\n## Focus\n\n- [ ] \n`
       )
       await openNote(filePath)
+    } catch (err) {
+      toast(err instanceof Error ? err.message : String(err), { variant: 'error' })
     }
   }
 
@@ -185,7 +219,7 @@ export const DashboardView: React.FC<{ onOpenSearch: () => void }> = ({ onOpenSe
       value: orphanNodes.length,
       color: orphanNodes.length > 0 ? 'var(--color-warning)' : 'var(--text-muted)',
       onClick: orphanNodes.length > 0 ? handleOrphanClick : undefined,
-      hint: 'Buka Graph · orphans only'
+      hint: 'Buka Graph · hanya orphan'
     },
     {
       label: 'Graph',
@@ -211,6 +245,9 @@ export const DashboardView: React.FC<{ onOpenSearch: () => void }> = ({ onOpenSe
     </div>
   )
 
+  const openTasks = (domain?.tasks.filter((t) => t.status !== 'done' && t.status !== 'completed') ||
+    []) as DomainOverview['tasks']
+
   return (
     <div className="dashboard-view">
       <div className="dash-head">
@@ -224,7 +261,7 @@ export const DashboardView: React.FC<{ onOpenSearch: () => void }> = ({ onOpenSe
           <button className="btn btn-primary btn-sm" onClick={() => setTplOpen(true)}>
             + Dari template
           </button>
-          <button className="btn btn-surface btn-sm" onClick={handleCreateDailyNote}>
+          <button className="btn btn-surface btn-sm" onClick={() => void handleCreateDailyNote()}>
             + Daily
           </button>
           <button className="btn btn-ghost btn-sm" onClick={onOpenSearch}>
@@ -241,11 +278,10 @@ export const DashboardView: React.FC<{ onOpenSearch: () => void }> = ({ onOpenSe
             className={`dash-metric ${m.onClick ? 'clickable' : ''}`}
             onClick={m.onClick}
             title={m.hint}
+            style={{ '--metric-color': m.color } as React.CSSProperties}
           >
             <span className="dash-metric-label">{m.label}</span>
-            <span className="dash-metric-value" style={{ color: m.color }}>
-              {m.value}
-            </span>
+            <span className="dash-metric-value">{m.value}</span>
           </button>
         ))}
       </div>
@@ -253,29 +289,30 @@ export const DashboardView: React.FC<{ onOpenSearch: () => void }> = ({ onOpenSe
       <div className="dash-grid">
         {/* Open tasks + checkboxes */}
         <section className="dash-section">
-          <div className="section-title" style={{ padding: '0 0 var(--space-2) 0' }}>
-            Tugas terbuka
-          </div>
+          <SectionHead
+            icon="check"
+            title="Tugas terbuka"
+            count={domain?.counts.openTasks}
+          />
           {loading ? (
             <SkeletonRows count={4} />
           ) : (
             <>
-              {(domain?.tasks.filter(
-                (t) => t.status !== 'done' && t.status !== 'completed'
-              ) || [])
-                .slice(0, 6)
-                .map((t) =>
-                  listItem(t.title, t.relativePath, () => openNote(t.path), t.priority || t.status)
-                )}
+              {openTasks.slice(0, 6).map((t) =>
+                listItem(t.title, t.relativePath, () => openNote(t.path), t.priority || t.status)
+              )}
               {(!domain || domain.tasks.length === 0) && (
-                <div className="dash-empty">Belum ada catatan tugas. Buat lewat template Task.</div>
+                <EmptyState text="Belum ada catatan tugas. Buat lewat template Task." />
               )}
             </>
           )}
 
-          <div className="section-title" style={{ padding: 'var(--space-4) 0 var(--space-2) 0' }}>
-            Checklist terbuka
-          </div>
+          <div style={{ height: 'var(--space-3)' }} />
+          <SectionHead
+            icon="checkCircle"
+            title="Checklist terbuka"
+            count={domain?.openCheckboxes.length}
+          />
           {(domain?.openCheckboxes || [])
             .slice(0, 8)
             .map((c) => listItem(c.text, c.noteTitle, () => openNote(c.notePath)))}
@@ -283,9 +320,7 @@ export const DashboardView: React.FC<{ onOpenSearch: () => void }> = ({ onOpenSe
 
         {/* Projects + People */}
         <section className="dash-section">
-          <div className="section-title" style={{ padding: '0 0 var(--space-2) 0' }}>
-            Proyek
-          </div>
+          <SectionHead icon="folder" title="Proyek" count={domain?.projects.length} />
           {loading ? (
             <SkeletonRows count={3} />
           ) : (
@@ -294,14 +329,13 @@ export const DashboardView: React.FC<{ onOpenSearch: () => void }> = ({ onOpenSe
                 .slice(0, 8)
                 .map((p) => listItem(p.title, p.relativePath, () => openNote(p.path), p.status))}
               {(!domain || domain.projects.length === 0) && (
-                <div className="dash-empty">Belum ada proyek. Buat dari template.</div>
+                <EmptyState text="Belum ada proyek. Buat dari template." />
               )}
             </>
           )}
 
-          <div className="section-title" style={{ padding: 'var(--space-4) 0 var(--space-2) 0' }}>
-            Orang
-          </div>
+          <div style={{ height: 'var(--space-3)' }} />
+          <SectionHead icon="people" title="Orang" count={domain?.people.length} />
           {loading ? (
             <SkeletonRows count={3} />
           ) : (
@@ -310,17 +344,15 @@ export const DashboardView: React.FC<{ onOpenSearch: () => void }> = ({ onOpenSe
                 .slice(0, 8)
                 .map((p) => listItem(p.title, p.relativePath, () => openNote(p.path)))}
               {(!domain || domain.people.length === 0) && (
-                <div className="dash-empty">Belum ada catatan orang. Link rekan via [[Nama]].</div>
+                <EmptyState text="Belum ada catatan orang. Link rekan via [[Nama]]." />
               )}
             </>
           )}
         </section>
 
-        {/* Recent + tags */}
+        {/* Recent + tags + orphans */}
         <section className="dash-section">
-          <div className="section-title" style={{ padding: '0 0 var(--space-2) 0' }}>
-            Terbaru
-          </div>
+          <SectionHead icon="history" title="Terbaru" count={recentNotes.length} />
           {loading ? (
             <SkeletonRows count={4} />
           ) : (
@@ -344,9 +376,8 @@ export const DashboardView: React.FC<{ onOpenSearch: () => void }> = ({ onOpenSe
             ))
           )}
 
-          <div className="section-title" style={{ padding: 'var(--space-4) 0 var(--space-2) 0' }}>
-            Tag
-          </div>
+          <div style={{ height: 'var(--space-3)' }} />
+          <SectionHead icon="tag" title="Tag" count={tags.length} />
           <div className="flex flex-wrap gap-2">
             {loading ? (
               <SkeletonRows count={2} />
@@ -365,35 +396,33 @@ export const DashboardView: React.FC<{ onOpenSearch: () => void }> = ({ onOpenSe
           </div>
 
           <div
-            className="section-title"
-            style={{
-              padding: 'var(--space-4) 0 var(--space-2) 0',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'space-between',
-              gap: 8
-            }}
+            className="dash-section-head"
+            style={{ justifyContent: 'space-between', paddingTop: 'var(--space-4)' }}
           >
-            <span>Catatan orphan</span>
+            <span className="flex gap-2 items-center">
+              <Icon name="graph" size={13} />
+              Catatan orphan
+            </span>
             {orphanNodes.length > 0 && (
-              <button
-                type="button"
-                className="btn btn-ghost btn-sm btn-tiny"
-                onClick={handleOrphanClick}
-                title="Buka Graph · hanya orphan"
-              >
-                Graph
-              </button>
+              <span className="flex gap-2 items-center">
+                <span className="dash-section-count">{orphanNodes.length}</span>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm btn-tiny"
+                  onClick={handleOrphanClick}
+                  title="Buka Graph · hanya orphan"
+                >
+                  Graph
+                </button>
+              </span>
             )}
           </div>
           {orphanNodes.length === 0 ? (
-            <div className="dash-empty">Tidak ada orphan — semua catatan terhubung.</div>
+            <EmptyState text="Tidak ada orphan — semua catatan terhubung." />
           ) : (
             orphanNodes
               .slice(0, 8)
-              .map((n) =>
-                listItem(n.title, n.relativePath || n.type, () => openNote(n.path), '0 links')
-              )
+              .map((n) => listItem(n.title, n.relativePath || n.type, () => openNote(n.path), '0 link'))
           )}
           {orphanNodes.length > 8 && (
             <button

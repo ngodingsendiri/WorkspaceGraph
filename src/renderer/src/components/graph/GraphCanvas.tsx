@@ -178,7 +178,20 @@ function applyForces(
   )
 }
 
-export const GraphCanvas: React.FC = () => {
+/**
+ * Obsidian-like opening layout: golden-angle spiral around the center.
+ * First render looks organized (ring/cluster feel) instead of a random blob;
+ * the force simulation then refines it. (Obsidian opens graphs circularly.)
+ */
+function spiralSeed(i: number, n: number, w: number, h: number): { x: number; y: number } {
+  if (n <= 0) return { x: w / 2, y: h / 2 }
+  const golden = Math.PI * (3 - Math.sqrt(5)) // ~2.39996 rad
+  const r = Math.min(w, h) * 0.44 * Math.sqrt(i / n)
+  const theta = i * golden
+  return { x: w / 2 + Math.cos(theta) * r, y: h / 2 + Math.sin(theta) * r }
+}
+
+export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false }) => {
   const {
     nodes,
     edges,
@@ -1554,7 +1567,9 @@ export const GraphCanvas: React.FC = () => {
    * Auto-fit at most once if no camera — never steal after user pan (BUG-2).
    */
   useEffect(() => {
-    if (activeView !== 'graph') return
+    // Embedded (split view) mounts the canvas while activeView is 'editor' —
+    // still run the seed/paint pipeline, just never steal global keys
+    if (activeView !== 'graph' && !embedded) return
 
     // Fresh visit: allow vault restore; clear "user moved camera" for this enter
     userCameraTouchedRef.current = false
@@ -1598,15 +1613,16 @@ export const GraphCanvas: React.FC = () => {
         nodesRef.current = fNodes.map((n, i) => {
           const layout = liveLayout[n.id]
           const c = posCache.current.get(n.id)
-          const col = i % 12
-          const row = Math.floor(i / 12)
+          // Circular opening (Obsidian feel): golden-angle spiral fallback when
+          // no vault layout / cache exists — organized, not a random grid blob.
+          const seed = spiralSeed(i, fNodes.length, w, h)
           return {
             ...n,
             title: n.title || n.relativePath || n.id,
             tags: safeTags(n),
             degree: typeof n.degree === 'number' ? n.degree : 0,
-            x: c?.x ?? layout?.x ?? w * 0.2 + col * 48,
-            y: c?.y ?? layout?.y ?? h * 0.2 + row * 40,
+            x: c?.x ?? layout?.x ?? seed.x,
+            y: c?.y ?? layout?.y ?? seed.y,
             fx: layout?.pinned ? layout.x : null,
             fy: layout?.pinned ? layout.y : null,
             pinned: Boolean(layout?.pinned)
@@ -1662,24 +1678,34 @@ export const GraphCanvas: React.FC = () => {
 
     let ro: ResizeObserver | null = null
     const kickRafs: number[] = []
+    let resizeRaf = 0
     const wrap = wrapRef.current
     if (wrap && typeof ResizeObserver !== 'undefined') {
-      // Resize: re-paint; fit only if never fitted and user hasn't panned
-      ro = new ResizeObserver(() => kick('resize'))
+      // Resize: re-paint; coalesce per frame — window drag fires RO on every tick
+      ro = new ResizeObserver(() => {
+        if (resizeRaf) return
+        resizeRaf = requestAnimationFrame(() => {
+          resizeRaf = 0
+          // allowFit:false — no per-frame camera re-fit while dragging the
+          // window (fit happens once after the resize settles, see onResize)
+          kick('resize', { allowFit: false })
+        })
+      })
       ro.observe(wrap)
     }
 
     return () => {
       for (const t of timers) clearTimeout(t)
       for (const r of kickRafs) cancelAnimationFrame(r)
+      if (resizeRaf) cancelAnimationFrame(resizeRaf)
       ro?.disconnect()
       if (wheelDebounceRef.current) {
         clearTimeout(wheelDebounceRef.current)
         wheelDebounceRef.current = null
       }
     }
-    // ONLY activeView — any other dep re-ran this and reset camera/pan mid-session
-  }, [activeView])
+    // ONLY activeView/embedded — any other dep re-ran this and reset camera/pan mid-session
+  }, [activeView, embedded])
 
   // If toolbar already shows node count but SVG frame empty → force paint (user blank case)
   useEffect(() => {
@@ -1918,21 +1944,14 @@ export const GraphCanvas: React.FC = () => {
       const prevById = new Map(nodesRef.current.map((n) => [n.id, n]))
       const prevCount = nodesRef.current.length
 
-      const simNodes: SimNode[] = filteredNodes.map((n) => {
+      const simNodes: SimNode[] = filteredNodes.map((n, i) => {
         const prev = prevById.get(n.id)
         const c = posCache.current.get(n.id)
         const layout = layoutNodes[n.id]
-        // Prefer live sim → cache → vault layout → mild random near center
-        const x =
-          prev?.x ??
-          c?.x ??
-          layout?.x ??
-          width / 2 + (Math.random() - 0.5) * Math.min(120, 40 + filteredNodes.length)
-        const y =
-          prev?.y ??
-          c?.y ??
-          layout?.y ??
-          height / 2 + (Math.random() - 0.5) * Math.min(120, 40 + filteredNodes.length)
+        // Prefer live sim → cache → vault layout → golden-spiral (Obsidian-like)
+        const seed = spiralSeed(i, filteredNodes.length, width, height)
+        const x = prev?.x ?? c?.x ?? layout?.x ?? seed.x
+        const y = prev?.y ?? c?.y ?? layout?.y ?? seed.y
         const pinned =
           prev?.fx != null || c?.fx != null || Boolean(layout?.pinned) || Boolean(prev?.pinned)
         const fx = pinned ? (prev?.fx ?? c?.fx ?? layout?.x ?? x) : null
@@ -2772,8 +2791,11 @@ export const GraphCanvas: React.FC = () => {
       const my = e.clientY - rect.top
       const t = transformRef.current
       const k0 = t.k || 1
-      const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12
-      const nextK = Math.max(0.08, Math.min(6, k0 * factor))
+      // Proportional wheel zoom: scale by real scroll distance (not fixed 1.12
+      // jumps) so trackpads and fast flicks zoom smoothly without stutter.
+      const dy =
+        e.deltaMode === 1 ? e.deltaY * 16 : e.deltaMode === 2 ? e.deltaY * 120 : e.deltaY
+      const nextK = Math.max(0.08, Math.min(6, k0 * Math.exp(-dy * 0.0012)))
       const x = mx - ((mx - t.x) * nextK) / k0
       const y = my - ((my - t.y) * nextK) / k0
       // Show Canvas 2D for smooth wheel zoom (bypass React SVG reconciliation)
@@ -2957,11 +2979,15 @@ export const GraphCanvas: React.FC = () => {
     if (!el) return
     let t: ReturnType<typeof setTimeout> | null = null
     const onResize = () => {
+      // Cheap path: resize buffer + repaint immediately so the canvas tracks the drag
+      syncCanvasSize()
+      schedulePaint()
+      // Expensive path (re-apply forces + auto-fit) only after the resize settles,
+      // otherwise dragging the window re-runs the d3 simulation every tick (jank)
       if (t) clearTimeout(t)
       t = setTimeout(() => {
         const sized = syncCanvasSize()
         if (!sized.ready) {
-          schedulePaint()
           return
         }
         const { w, h } = sized
@@ -2999,7 +3025,7 @@ export const GraphCanvas: React.FC = () => {
           ensureGraphVisibleRef.current('resize')
         }
         schedulePaint()
-      }, 50)
+      }, 250)
     }
     const ro = new ResizeObserver(onResize)
     ro.observe(el)
@@ -3117,8 +3143,11 @@ export const GraphCanvas: React.FC = () => {
       setForces(next)
       void updateGraphSettings({ forces: next })
       setLayoutStatus('Forces disimpan')
+      // Visible reheat: releasing a force slider should reshape the graph now
+      simRef.current?.alpha(0.55).restart()
+      schedulePaint()
     },
-    [updateGraphSettings]
+    [updateGraphSettings, schedulePaint]
   )
 
   const handleForcesReset = useCallback(() => {
@@ -3404,32 +3433,27 @@ export const GraphCanvas: React.FC = () => {
     const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')
     const fileName = `workspacegraph-${stamp}.png`
 
-    /** Electron-safe download: append <a> to body (bare click often no-ops). */
+    /** Electron can't reliably trigger <a download> with data URLs — use the
+     * native save dialog via IPC (dialog.showSaveDialog + fs.writeFile). */
     const downloadDataUrl = (url: string, note: string) => {
-      try {
-        const a = document.createElement('a')
-        a.href = url
-        a.download = fileName
-        a.rel = 'noopener'
-        a.style.display = 'none'
-        document.body.appendChild(a)
-        a.click()
-        window.setTimeout(() => {
-          try {
-            a.remove()
-          } catch {
-            /* ignore */
+      void window.api
+        .saveGraphPng(url, fileName)
+        .then((res) => {
+          if (!res?.ok) {
+            const why = res?.canceled ? 'dibatalkan' : res?.error || 'unknown'
+            flashAction(`PNG gagal — ${why}`)
+            setViewsStatus(`Export PNG ${why}`)
+            return
           }
-          if (url.startsWith('blob:')) URL.revokeObjectURL(url)
-        }, 1500)
-        const msg = `PNG OK · ${stats.nodes} nodes${note}`
-        setViewsStatus(msg)
-        flashAction(msg)
-      } catch (err) {
-        console.error(err)
-        flashAction('PNG gagal unduh')
-        setViewsStatus('Export PNG gagal unduh')
-      }
+          const msg = `PNG OK · ${stats.nodes} nodes${note}${res.path ? ' → ' + res.path : ''}`
+          setViewsStatus(msg)
+          flashAction(msg)
+        })
+        .catch((err) => {
+          console.error(err)
+          flashAction('PNG gagal unduh')
+          setViewsStatus('Export PNG gagal unduh')
+        })
     }
 
     const tryCanvasDownload = (note: string) => {
@@ -3988,10 +4012,8 @@ export const GraphCanvas: React.FC = () => {
             <svg
               ref={svgRef}
               className="graph-svg"
-              viewBox={`0 0 ${svgFrame.w} ${svgFrame.h}`}
               width={svgFrame.w}
               height={svgFrame.h}
-              preserveAspectRatio="none"
             >
               <g
                 className="g-world"

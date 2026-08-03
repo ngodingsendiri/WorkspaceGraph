@@ -477,7 +477,7 @@ export const MarkdownEditor: React.FC = () => {
 
           <button
             type="button"
-            className={`btn btn-ghost btn-sm btn-icon ${showInspector ? 'active' : ''}`}
+            className={`btn btn-ghost btn-sm btn-icon inspector-toggle ${showInspector ? 'active' : ''}`}
             onClick={toggleInspector}
             data-tooltip={showInspector ? 'Sembunyikan inspector' : 'Inspector'}
             aria-pressed={showInspector}

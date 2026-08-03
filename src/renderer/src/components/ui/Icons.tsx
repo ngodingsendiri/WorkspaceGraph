@@ -55,6 +55,8 @@ export type IconName =
   | 'sync'
   | 'split'
   | 'command'
+  | 'people'
+  | 'history'
 
 /**
  * App icon key → Material Symbols ligature
@@ -75,6 +77,8 @@ export const MATERIAL_ICON: Record<IconName, string> = {
   panelRight: 'vertical_split',
   split: 'view_column',
   command: 'keyboard_command_key',
+  people: 'group',
+  history: 'history',
   trash: 'delete',
   save: 'save',
   copy: 'content_copy',

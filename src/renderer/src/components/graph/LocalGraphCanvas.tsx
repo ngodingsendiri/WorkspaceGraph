@@ -810,7 +810,10 @@ export const LocalGraphCanvas: React.FC = () => {
     if (!el) return
     let t: ReturnType<typeof setTimeout> | null = null
     const ro = new ResizeObserver(() => {
+      // Cheap: repaint immediately so the dock tracks the drag smoothly
+      schedulePaint()
       if (t) clearTimeout(t)
+      // Heavy (re-center + restart sim) only after the resize settles
       t = setTimeout(() => {
         const sim = simRef.current
         const w = el.clientWidth
@@ -825,7 +828,7 @@ export const LocalGraphCanvas: React.FC = () => {
           sim.alpha(0.08).restart()
         }
         schedulePaint()
-      }, 80)
+      }, 160)
     })
     ro.observe(el)
     return () => {

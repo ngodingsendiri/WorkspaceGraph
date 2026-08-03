@@ -129,6 +129,12 @@ export interface API {
     groups: Array<{ id: string; query: string; color: string }>
   }>
   saveGraphSettings: (partial: Record<string, unknown>) => Promise<any>
+  saveGraphPng: (dataUrl: string, defaultName: string) => Promise<{
+    ok: boolean
+    path?: string
+    canceled?: boolean
+    error?: string
+  }>
   listGraphViews: () => Promise<{
     version: number
     vaultPath?: string

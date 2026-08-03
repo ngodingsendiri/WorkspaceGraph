@@ -68,6 +68,27 @@ export const AppShell: React.FC = () => {
     })
   }, [])
 
+  // Smooth window drag-resize: freeze CSS transitions/animations while the
+  // window is being resized so the UI tracks the drag without trailing effects
+  useEffect(() => {
+    let t: number | undefined
+    const onResize = (): void => {
+      document.body.classList.add('wg-window-resizing')
+      if (t) window.clearTimeout(t)
+      // Keep the freeze active until graph re-fit (250ms) and LocalGraph
+      // re-center (160ms) both settle, so transitions don't pop mid-settle
+      t = window.setTimeout(() => {
+        document.body.classList.remove('wg-window-resizing')
+      }, 300)
+    }
+    window.addEventListener('resize', onResize)
+    return () => {
+      window.removeEventListener('resize', onResize)
+      if (t) window.clearTimeout(t)
+      document.body.classList.remove('wg-window-resizing')
+    }
+  }, [])
+
   useEffect(() => {
     void fetchState()
     if (!window.api?.onWorkspaceUpdated) {
@@ -279,7 +300,7 @@ date: ${today}
             </button>
             <button
               type="button"
-              className={`btn btn-ghost btn-sm btn-icon ${splitGraph ? 'active' : ''}`}
+              className={`btn btn-ghost btn-sm btn-icon titlebar-extra ${splitGraph ? 'active' : ''}`}
               onClick={() => window.dispatchEvent(new Event('wg:toggle-split'))}
               data-tooltip="Split editor + graph"
               aria-label="Split editor dan graph"
@@ -320,7 +341,7 @@ date: ${today}
               </div>
               <div className="split-pane split-pane--graph">
                 <ErrorBoundary label="Graph">
-                  <GraphCanvas />
+                  <GraphCanvas embedded />
                 </ErrorBoundary>
               </div>
             </div>

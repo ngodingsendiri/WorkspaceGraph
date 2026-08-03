@@ -59,6 +59,9 @@ const api = {
     cameraOnly?: boolean
   }) => ipcRenderer.invoke('graph:saveLayout', payload),
   getGraphSettings: () => ipcRenderer.invoke('graph:getSettings'),
+  /** Save PNG (base64 data URL) via native save dialog in main process */
+  saveGraphPng: (dataUrl: string, defaultName: string) =>
+    ipcRenderer.invoke('graph:savePng', { dataUrl, defaultName }),
   saveGraphSettings: (partial: Record<string, unknown>) =>
     ipcRenderer.invoke('graph:saveSettings', partial),
   listGraphViews: () => ipcRenderer.invoke('graph:listViews'),

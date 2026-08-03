@@ -1,4 +1,6 @@
-import { ipcMain } from 'electron'
+import { app, dialog, ipcMain } from 'electron'
+import fs from 'fs'
+import path from 'path'
 import { workspaceEngine } from '../../engine/WorkspaceEngine'
 import { graphEngine } from '../../engine/GraphEngine'
 import {
@@ -117,6 +119,38 @@ export function registerGraphHandlers(): void {
         },
         { replaceAll: payload?.replaceAll, cameraOnly: payload?.cameraOnly }
       )
+    }
+  )
+
+  /**
+   * Save PNG (base64 data URL) via native save dialog — renderer <a download>
+   * with data: URLs is unreliable in Electron (silent no-op without will-download).
+   */
+  ipcMain.handle(
+    'graph:savePng',
+    async (
+      _,
+      { dataUrl, defaultName }: { dataUrl: string; defaultName: string }
+    ) => {
+      try {
+        if (typeof dataUrl !== 'string' || !dataUrl.startsWith('data:image/png;base64,')) {
+          return { ok: false, error: 'Invalid PNG data' }
+        }
+        const b64 = dataUrl.slice('data:image/png;base64,'.length)
+        const buf = Buffer.from(b64, 'base64')
+        if (buf.length === 0) return { ok: false, error: 'Empty PNG' }
+        const root = workspaceEngine.getState().rootPath
+        const res = await dialog.showSaveDialog({
+          title: 'Export graph as PNG',
+          defaultPath: path.join(root || app.getPath('pictures'), defaultName),
+          filters: [{ name: 'PNG image', extensions: ['png'] }]
+        })
+        if (res.canceled || !res.filePath) return { ok: false, canceled: true }
+        fs.writeFileSync(res.filePath, buf)
+        return { ok: true, path: res.filePath }
+      } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) }
+      }
     }
   )
 

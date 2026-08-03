@@ -166,6 +166,7 @@ html:not([data-theme]) {
 }
 
 .flex { display: flex; }
+.flex-wrap { flex-wrap: wrap; }
 .flex-col { flex-direction: column; }
 .items-center { align-items: center; }
 .justify-center { justify-content: center; }
@@ -368,7 +369,9 @@ html:not([data-theme]) {
    Sidebar
    ================================================ */
 .sidebar {
-  /* F-4: --sidebar-w set inline while dragging; falls back to the design token */
+  /* F-4: --sidebar-w set inline while dragging; falls back to the design token.
+     No width transition — during window drag the vw cap changes per frame and a
+     150ms transition makes the panel visibly trail (feels laggy). */
   width: var(--sidebar-w, var(--sidebar-width));
   min-width: var(--sidebar-w, var(--sidebar-width));
   background: var(--bg-surface);
@@ -377,7 +380,6 @@ html:not([data-theme]) {
   flex-direction: column;
   overflow: hidden;
   flex-shrink: 0;
-  transition: width var(--duration-normal) var(--ease-default);
 }
 
 .sidebar.collapsed {
@@ -3556,6 +3558,11 @@ button {
   height: 100%;
   overflow-y: auto;
   background: var(--bg-app);
+  /* Elastic: konten memenuhi lebar sampai 1280px, lalu center sendiri.
+     Di monitor lebar kartu/section tidak pernah "kelebaran" dari isinya. */
+  width: 100%;
+  max-width: 1280px;
+  margin: 0 auto;
 }
 .dash-head {
   display: flex;
@@ -3575,37 +3582,52 @@ button {
   margin-top: 4px;
   font-family: var(--font-mono);
 }
+/* Per-card metric grid — elastic: cards always fill the row evenly (1fr),
+   grow/shrink smoothly with the window, and only wrap when truly tight */
 .dash-metrics {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 140px), 1fr));
+  gap: var(--space-3);
   margin-bottom: var(--space-6);
-  border: 1px solid var(--border-subtle);
-  border-radius: var(--radius-md);
-  overflow: hidden;
-  background: var(--bg-surface);
 }
 .dash-metric {
-  flex: 1 1 110px;
-  min-width: 110px;
+  position: relative;
+  overflow: hidden;
   display: flex;
   flex-direction: column;
-  gap: 2px;
-  padding: var(--space-3) var(--space-4);
-  background: none;
-  border: none;
-  border-right: 1px solid var(--border-subtle);
+  gap: 3px;
+  padding: var(--space-3) var(--space-4) var(--space-3) calc(var(--space-4) + 2px);
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
   cursor: default;
   text-align: left;
-  transition: background var(--duration-fast);
+  transition:
+    border-color var(--duration-fast) var(--ease-default),
+    transform var(--duration-fast) var(--ease-default),
+    box-shadow var(--duration-fast) var(--ease-default);
 }
-.dash-metric:last-child {
-  border-right: none;
+/* Accent bar in the metric color (--metric-color set inline per card) */
+.dash-metric::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  background: var(--metric-color, var(--color-primary));
+  opacity: 0.9;
 }
 .dash-metric.clickable {
   cursor: pointer;
 }
 .dash-metric.clickable:hover {
-  background: var(--bg-hover);
+  border-color: var(--metric-color, var(--color-primary));
+  transform: translateY(-1px);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.14);
+}
+[data-theme='light'] .dash-metric.clickable:hover {
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.1);
 }
 .dash-metric-label {
   font-size: 10px;
@@ -3614,18 +3636,54 @@ button {
   letter-spacing: 0.05em;
 }
 .dash-metric-value {
-  font-size: var(--text-xl);
+  /* Elastic: angka membesar/mengecil halus mengikuti lebar jendela
+     (~18px di jendela kecil → 22px di jendela lebar) */
+  font-size: clamp(1rem, 0.7vw + 0.9rem, 1.375rem);
   font-weight: 700;
   font-variant-numeric: tabular-nums;
   white-space: nowrap;
+  color: var(--metric-color, var(--text-primary));
+  line-height: 1.15;
+  transition: color var(--duration-fast) var(--ease-default);
 }
 .dash-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: var(--space-6);
+  /* Elastic: 3 kolom saat lega, menyusut mulus, lalu bertumpuk saat sempit */
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 300px), 1fr));
+  gap: clamp(var(--space-4), 2vw, var(--space-8));
+  align-items: start;
 }
 .dash-section {
   min-width: 0;
+  /* Section yang menyendiri saat wrap (2 kolom) tidak boleh melebar penuh */
+  max-width: 460px;
+  justify-self: center;
+}
+.dash-section-head {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0 0 var(--space-2) 0;
+  font-size: 10px;
+  font-weight: var(--weight-semibold);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-secondary);
+}
+.dash-section-head .wg-icon {
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+.dash-section-count {
+  margin-left: auto;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-muted);
+  background: var(--bg-hover);
+  border-radius: 999px;
+  padding: 1px 8px;
+  flex-shrink: 0;
 }
 .dash-list-item {
   display: flex;
@@ -3640,9 +3698,13 @@ button {
 .dash-list-item:hover {
   background: var(--bg-hover);
 }
+.dash-list-item:hover .dash-list-title {
+  color: var(--color-primary);
+}
 .dash-list-title {
   font-size: var(--text-sm);
   font-weight: 500;
+  transition: color var(--duration-fast);
 }
 .dash-list-sub {
   font-size: 10px;
@@ -3650,7 +3712,11 @@ button {
 }
 .dash-list-badge {
   font-size: 10px;
+  font-weight: 500;
   color: var(--text-muted);
+  background: var(--bg-hover);
+  border-radius: 999px;
+  padding: 1px 8px;
   flex-shrink: 0;
   margin-left: 8px;
 }
@@ -3658,16 +3724,28 @@ button {
   font-size: var(--text-xs);
   color: var(--text-muted);
   padding: 8px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
+.dash-empty .wg-icon {
+  opacity: 0.6;
+  flex-shrink: 0;
+}
+/* Tag chips: pill shape, ellipsis so long tags can't pierce the edge */
 .dash-tag {
   font-size: var(--text-xs);
   background: var(--bg-surface);
-  padding: 3px 8px;
-  border-radius: var(--radius-sm);
+  padding: 3px 10px;
+  border-radius: 999px;
   cursor: pointer;
   border: 1px solid var(--border-subtle);
   color: var(--text-secondary);
   transition: all var(--duration-fast);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .dash-tag:hover {
   border-color: var(--color-primary);
@@ -3865,6 +3943,16 @@ button {
 }
 .status-embed.is-busy .wg-icon {
   animation: spin 1s linear infinite;
+}
+
+/* ================================================
+   Smooth window resize (R-1): freeze transitions while dragging
+   ================================================ */
+body.wg-window-resizing *,
+body.wg-window-resizing *::before,
+body.wg-window-resizing *::after {
+  transition: none !important;
+  animation: none !important;
 }
 
 /* ================================================
@@ -4171,4 +4259,91 @@ body.wg-resizing * {
   margin-top: 2px;
   font-size: 10px;
   color: var(--text-muted);
+}
+
+/* ================================================
+   Responsive: window resize — keep panels from stacking (R-1)
+   Breakpoints: 1180 (side panels cap) / 1200 (editor) / 1080 (chrome) / 900 (stack)
+   ================================================ */
+/* Side panels cap at viewport fractions so main content keeps real width */
+@media (max-width: 1180px) {
+  .sidebar {
+    width: min(var(--sidebar-w, var(--sidebar-width)), 36vw);
+    min-width: min(var(--sidebar-w, var(--sidebar-width)), 36vw);
+  }
+  .chat-panel {
+    width: min(var(--chat-w, clamp(300px, 30vw, 420px)), 44vw);
+    min-width: min(var(--chat-w, 280px), 40vw);
+    max-width: min(var(--chat-w, min(480px, 42vw)), 44vw);
+  }
+}
+
+/* Editor: stack preview under source instead of side-by-side; drop inspector */
+@media (max-width: 1200px) {
+  .editor-split-pane.with-preview {
+    grid-template-columns: 1fr;
+    grid-template-rows: 1fr 1fr;
+  }
+  .editor-inspector,
+  .editor-toolbar .inspector-toggle {
+    display: none;
+  }
+}
+
+/* Chrome: drop less-critical controls before they collide */
+@media (max-width: 1080px) {
+  .app-titlebar-actions .titlebar-extra {
+    display: none;
+  }
+  .editor-toolbar .format-menu-wrap,
+  .editor-toolbar .mode-chip {
+    display: none;
+  }
+  .editor-toolbar {
+    padding: 6px var(--space-2);
+  }
+  .settings-nav {
+    width: 170px;
+  }
+}
+
+/* Narrow: stack settings, split view, and dashboard head */
+@media (max-width: 900px) {
+  .dash-head {
+    flex-wrap: wrap;
+  }
+  .split-view {
+    flex-direction: column;
+  }
+  .split-pane--graph {
+    border-left: none;
+    border-top: 1px solid var(--border-subtle);
+  }
+  .settings-container {
+    flex-direction: column;
+  }
+  .settings-nav {
+    width: 100%;
+    border-right: none;
+    border-bottom: 1px solid var(--border-subtle);
+    display: flex;
+    gap: 2px;
+    overflow-x: auto;
+    padding: var(--space-2);
+    flex-shrink: 0;
+  }
+  .settings-nav .section-title {
+    display: none;
+  }
+  .settings-nav .nav-item {
+    width: auto;
+    flex-shrink: 0;
+  }
+  .settings-content {
+    padding: var(--space-4);
+  }
+  .welcome-inner {
+    max-width: 100%;
+    padding: 0 var(--space-4);
+  }
 }
