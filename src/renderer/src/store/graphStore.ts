@@ -109,15 +109,6 @@ export interface GraphCamera {
   k: number
 }
 
-export interface LocalGraphData {
-  centerId: string
-  depth: number
-  nodes: GraphNodeData[]
-  edges: GraphEdgeData[]
-  nodeCount: number
-  edgeCount: number
-}
-
 /** Phase 5 saved view snapshot (mirrors main GraphViewSnapshot) */
 export type GraphPerfMode = 'auto' | 'quality' | 'speed'
 
@@ -186,11 +177,6 @@ export interface GraphStore {
 
   fetchGraph: () => Promise<void>
   fetchGraphMeta: () => Promise<void>
-  fetchLocalGraph: (
-    nodeIdOrPath: string,
-    depth?: number,
-    includeTagEdges?: boolean
-  ) => Promise<LocalGraphData | null>
   /** Phase 4: shortest path highlight data */
   findPath: (
     fromIdOrPath: string,
@@ -371,20 +357,6 @@ export const useGraphStore = create<GraphStore>((set, get) => ({
       })
     } catch (err) {
       console.error('Failed to fetch graph meta:', err)
-    }
-  },
-
-  fetchLocalGraph: async (nodeIdOrPath, depth, includeTagEdges) => {
-    try {
-      const data = await window.api.getLocalGraph({
-        nodeIdOrPath,
-        depth,
-        includeTagEdges
-      })
-      return data as LocalGraphData | null
-    } catch (err) {
-      console.error('Failed to fetch local graph:', err)
-      return null
     }
   },
 

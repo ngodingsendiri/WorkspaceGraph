@@ -354,7 +354,7 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
   const ensureGraphVisibleRef = useRef<(reason?: string) => boolean>(() => false)
 
   /**
-   * Size canvas like LocalGraphCanvas (proven visible on same machine).
+   * Size canvas like the proven editor dock pattern (visible on same machine).
    * Prefer wrap client box; fallback main-content / window. Never paint 0×0.
    */
   const syncCanvasSize = useCallback((): { w: number; h: number; ready: boolean } => {
@@ -362,7 +362,7 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
     const wrap = wrapRef.current
     if (!canvas || !wrap) return { w: 0, h: 0, ready: false }
 
-    // Same formula as LocalGraphCanvas — clientWidth first (not only getBoundingClientRect)
+    // Same proven sizing formula — clientWidth first (not only getBoundingClientRect)
     let w = Math.floor(Math.max(wrap.clientWidth, canvas.clientWidth, 0))
     let h = Math.floor(Math.max(wrap.clientHeight, canvas.clientHeight, 0))
     if (w < 32 || h < 32) {
@@ -3972,7 +3972,7 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
         />
       )}
 
-      {/* Stage mirrors local-graph-body: relative flex child; canvas fills it (LocalGraph path) */}
+      {/* Stage = relative flex child; canvas fills it (proven pattern) */}
       <div className="graph-stage" ref={wrapRef}>
         {/* Off-screen buffer for PNG export fallback */}
         <canvas ref={canvasRef} className="graph-canvas graph-canvas--export" aria-hidden="true" />

@@ -1,5 +1,5 @@
 /**
- * Shared types for GraphCanvas and LocalGraphCanvas.
+ * Shared types for GraphCanvas.
  * Extracted to avoid duplication and enable testing.
  */
 import type { GraphNodeData, GraphPerfMode } from '../../store/graphStore'

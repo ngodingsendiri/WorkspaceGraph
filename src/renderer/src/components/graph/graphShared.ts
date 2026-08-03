@@ -1,7 +1,7 @@
 /**
  * Shared graph view helpers — force defaults, LOD, radius, Obsidian palette.
  * Design authority: Obsidian Graph (force-directed, organic clusters).
- * Used by GraphCanvas + LocalGraphCanvas to avoid drift.
+ * Used by GraphCanvas to avoid drift.
  *
  * Obsidian model (what we match):
  * - Single default node tint; color groups override (optional type/folder modes)
@@ -224,8 +224,8 @@ export function chargeFor(degree: number, baseCharge: number, large: boolean): n
 
 /**
  * Apply Obsidian-like force settings onto a live d3 simulation.
- * Single source of truth for BOTH Global (GraphCanvas) and Local (LocalGraphCanvas)
- * graphs so presets / hub-charge tuning never drift apart.
+ * Single source of truth for the Global graph (GraphCanvas) so presets /
+ * hub-charge tuning never drift.
  *
  * - Link distance grows slightly with endpoint degree (cluster breathing)
  * - Tag edges spring weaker so they don't dominate layout
@@ -239,9 +239,9 @@ export interface ForceLayoutOpts {
   large: boolean
   /** Node size display knob multiplier (global nodeSize); local keeps 1 */
   sizeMul?: number
-  /** Node radius fn — global uses radius(); local uses its smaller localRadius() */
+  /** Node radius fn — global uses radius() (kept for custom canvases) */
   radiusFn?: (d: SimNode) => number
-  /** Charge distanceMax override for mini local canvas (defaults to global ranges) */
+  /** Charge distanceMax override for tight canvases (defaults to global ranges) */
   chargeRange?: number
   /** Collide pad override (defaults to large ? 4 : 6) */
   collidePad?: number
@@ -705,7 +705,7 @@ export class SpatialHash2D<T extends { x?: number | null; y?: number | null; id:
   }
 }
 
-// ─── Shared utility functions (used by GraphCanvas + LocalGraphCanvas) ──────
+// ─── Shared utility functions (used by GraphCanvas) ────────────
 
 /** Read CSS custom property from document root */
 export function css(name: string, fb: string): string {
@@ -762,26 +762,6 @@ export function readPalette(): Palette {
 /** Node radius wrapper (reads degree from SimNode-like object) */
 export function radius(d: { degree?: number }, scale = 1, hubDim = false): number {
   return nodeRadius(d.degree ?? 0, scale, hubDim)
-}
-
-/** Local graph node radius — smaller nodes, center node slightly larger (Obsidian local). */
-export function localRadius(d: SimNode): number {
-  if (d.isCenter) return Math.max(7, Math.min(12, nodeRadius(d.degree, 1.15)))
-  return Math.max(4, Math.min(9, nodeRadius(d.degree, 0.95)))
-}
-
-/**
- * Mini-canvas force scaling (LocalGraphCanvas): tighter links, stronger center,
- * gentler charge than the global graph, all clamped to sane dial ranges.
- */
-export function scaleLocalForces(f: GraphForceSettings): GraphForceSettings {
-  return {
-    center: Math.min(0.15, Math.max(0.04, f.center * 1.15)),
-    charge: Math.max(-180, Math.min(-28, f.charge * 0.78)),
-    linkDist: Math.max(36, Math.min(110, f.linkDist * 0.82)),
-    linkStr: Math.min(0.9, Math.max(0.2, f.linkStr)),
-    collide: Math.min(1, Math.max(0.2, f.collide))
-  }
 }
 
 /** Extract string id from d3 node/link (handles string | SimNode) */

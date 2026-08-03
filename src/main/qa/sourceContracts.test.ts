@@ -289,7 +289,7 @@ describe('Renderer wiring', () => {
   it('graphStore state + filters', () => {
     const store = read('src/renderer/src/store/graphStore.ts')
     expect(hasAny(store, 'Array.isArray(data?.nodes)', 'rawNodes')).toBe(true)
-    expect(has(store, 'tags: Array.isArray', 'fetchLocalGraph', 'saveLayoutPositions', 'loadGraphSettings', 'orphanMode', 'hubMode')).toBe(true)
+    expect(has(store, 'tags: Array.isArray', 'saveLayoutPositions', 'loadGraphSettings', 'orphanMode', 'hubMode')).toBe(true)
     expect(has(store, 'GraphOpenIntent', 'setOpenIntent')).toBe(true)
     expect(has(store, 'savedViews', 'saveGraphView')).toBe(true)
     expect(has(store, 'findPath', 'fetchNeighborhood')).toBe(true)
@@ -320,26 +320,19 @@ describe('Renderer wiring', () => {
     expect(hasAny(gc, "e.key === '='", 'zoomBy(1.2)')).toBe(true)
     expect(has(gc, 'consumeOpenIntent', 'pendingIntentRef', 'settingsHydratedRef')).toBe(true)
   })
-  it('LocalGraphCanvas + LocalGraphView wiring', () => {
-    const local = read('src/renderer/src/components/graph/LocalGraphCanvas.tsx')
-    expect(has(local, 'getContext', 'forceSimulation', 'fetchLocalGraph')).toBe(true)
-    expect(has(local, 'setDepth', 'showLabels', 'collapsed')).toBe(true)
-    expect(has(local, 'isCenter', 'centerStroke')).toBe(true)
-    expect(has(local, "setActiveView('graph')", 'setFocusedNode')).toBe(true)
-    expect(has(local, '1, 2, 3, 4, 5', 'localDepth:', 'updateGraphSettings')).toBe(true)
-    // Force scaling lives in graphShared (scaleLocalForces); local delegates
-    expect(has(local, 'forcesRef', 'charge', 'scaleLocalForces', 'applyForceLayout')).toBe(true)
-    // LocalGraphView is exported from LocalGraphCanvas.tsx (no separate file)
-    expect(local.includes('export const LocalGraphView')).toBe(true)
+  it('editor has no local-graph dock (LocalGraphCanvas removed)', () => {
+    // F: local graph view no longer belongs in the editor — keep it gone
     const editor = read('src/renderer/src/components/editor/MarkdownEditor.tsx')
-    expect(hasAny(editor, 'LocalGraphView', 'LocalGraphCanvas')).toBe(true)
+    expect(editor).not.toContain('LocalGraphView')
+    expect(editor).not.toContain('LocalGraphCanvas')
+    expect(exists('src/renderer/src/components/graph/LocalGraphCanvas.tsx')).toBe(false)
   })
   it('graphShared utilities', () => {
     const shared = read('src/renderer/src/components/graph/graphShared.ts')
     expect(has(shared, 'chargeFor', 'linkDistanceFor', 'SpatialHash2D', 'edgeDrawBudget', 'FORCE_PRESETS')).toBe(true)
     expect(has(shared, 'css(', 'getPropertyValue', 'readPalette')).toBe(true)
-    // Local mini-canvas scaling + radius also shared (single source of truth)
-    expect(has(shared, 'scaleLocalForces', '0.78', 'localRadius', 'applyForceLayout')).toBe(true)
+    // Shared force layout is the single source of truth for the global graph
+    expect(has(shared, 'applyForceLayout')).toBe(true)
   })
   it('graphCanvas2D owns edge budget logic', () => {
     const c2d = read('src/renderer/src/components/graph/graphCanvas2D.ts')
@@ -415,9 +408,7 @@ describe('Design tokens / light theme', () => {
       ".graph-filter-range",
       ".graph-filter-actions",
       ".graph-filter-status",
-      ".graph-views-list",
-      ".local-graph",
-      ".local-graph-canvas"
+      ".graph-views-list"
     ]) {
       expect(globals).toContain(sel)
     }

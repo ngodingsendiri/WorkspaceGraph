@@ -8,7 +8,6 @@ import { tags as t } from '@lezer/highlight'
 import { useEditorStore, normPath } from '../../store/editorStore'
 import { useWorkspaceStore } from '../../store/workspaceStore'
 import { BacklinksPanel } from './BacklinksPanel'
-import { LocalGraphCanvas as LocalGraphView } from '../graph/LocalGraphCanvas'
 import { MergeDialog } from './MergeDialog'
 import { Icon } from '../ui/Icons'
 import { getActiveMode, subscribeThemePreferenceChange, type ThemeMode } from '../../utils/theme'
@@ -531,9 +530,6 @@ export const MarkdownEditor: React.FC = () => {
           </aside>
         )}
       </div>
-
-      {/* Obsidian-like local graph dock under the note */}
-      <LocalGraphView />
 
       {mergeDialog && mergeDialog.isOpen && (
         <MergeDialog

@@ -75,8 +75,8 @@ export const AppShell: React.FC = () => {
     const onResize = (): void => {
       document.body.classList.add('wg-window-resizing')
       if (t) window.clearTimeout(t)
-      // Keep the freeze active until graph re-fit (250ms) and LocalGraph
-      // re-center (160ms) both settle, so transitions don't pop mid-settle
+      // Keep the freeze active until graph re-fit settles (~300ms), so
+      // transitions don't pop mid-settle
       t = window.setTimeout(() => {
         document.body.classList.remove('wg-window-resizing')
       }, 300)
