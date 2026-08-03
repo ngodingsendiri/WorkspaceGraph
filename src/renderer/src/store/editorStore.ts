@@ -421,7 +421,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
             // Conflict detected - open merge dialog
             const tab = get().tabs.find((t) => t.id === tabId)
             if (!tab) return
-get().openMergeDialog({
+            get().openMergeDialog({
               filePath: tab.path,
               theirs: result.theirs,
               yours: snapshot,
@@ -432,15 +432,15 @@ get().openMergeDialog({
                 set((state) => ({
                   tabs: state.tabs.map((t) =>
                     t.id === tabId ? { ...t, content: resolvedContent, isDirty: true } : t
-                  ),
+                  )
                 }))
               },
               onClose: () => {
                 // User cancelled - keep tab dirty
                 set((state) => ({
-                  tabs: state.tabs.map((t) => (t.id === tabId ? { ...t, isDirty: true } : t)),
+                  tabs: state.tabs.map((t) => (t.id === tabId ? { ...t, isDirty: true } : t))
                 }))
-              },
+              }
             })
             return
           }
@@ -543,7 +543,7 @@ get().openMergeDialog({
     yours: '',
     base: '',
     onResolve: null as ((content: string) => void) | null,
-    onClose: null as (() => void) | null,
+    onClose: null as (() => void) | null
   },
 
   openMergeDialog: (params: {
@@ -562,8 +562,8 @@ get().openMergeDialog({
         yours: params.yours,
         base: params.base || '',
         onResolve: params.onResolve,
-        onClose: params.onClose,
-      },
+        onClose: params.onClose
+      }
     })
   },
 
@@ -571,7 +571,18 @@ get().openMergeDialog({
     set((state) => {
       if (!state.mergeDialog) return state
       if (state.mergeDialog.onClose) state.mergeDialog.onClose()
-      return { mergeDialog: { ...state.mergeDialog, isOpen: false, onResolve: null, onClose: null, filePath: '', theirs: '', yours: '', base: '' } }
+      return {
+        mergeDialog: {
+          ...state.mergeDialog,
+          isOpen: false,
+          onResolve: null,
+          onClose: null,
+          filePath: '',
+          theirs: '',
+          yours: '',
+          base: ''
+        }
+      }
     })
   },
 
@@ -579,7 +590,18 @@ get().openMergeDialog({
     set((state) => {
       if (!state.mergeDialog) return state
       if (state.mergeDialog.onResolve) state.mergeDialog.onResolve(content)
-      return { mergeDialog: { ...state.mergeDialog, isOpen: false, onResolve: null, onClose: null, filePath: '', theirs: '', yours: '', base: '' } }
+      return {
+        mergeDialog: {
+          ...state.mergeDialog,
+          isOpen: false,
+          onResolve: null,
+          onClose: null,
+          filePath: '',
+          theirs: '',
+          yours: '',
+          base: ''
+        }
+      }
     })
-  },
+  }
 }))

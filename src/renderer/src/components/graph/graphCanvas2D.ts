@@ -162,9 +162,12 @@ export function drawCanvas2DScene(dc: DrawContext, hot: HotSet): void {
     const tg = e.target as SimNode
     if (s.x == null || s.y == null || tg.x == null || tg.y == null) continue
     const ek = edgeKey(s.id, tg.id)
-    const forceEdge =
-      (pathE != null && pathE.has(ek)) || (focE != null && focE.has(ek))
-    if (!forceEdge && !inView(s.x, s.y, tx, ty, k, w, h, margin) && !inView(tg.x, tg.y, tx, ty, k, w, h, margin))
+    const forceEdge = (pathE != null && pathE.has(ek)) || (focE != null && focE.has(ek))
+    if (
+      !forceEdge &&
+      !inView(s.x, s.y, tx, ty, k, w, h, margin) &&
+      !inView(tg.x, tg.y, tx, ty, k, w, h, margin)
+    )
       continue
 
     const onPath = pathE != null && pathE.has(ek)
@@ -248,7 +251,14 @@ export function drawCanvas2DScene(dc: DrawContext, hot: HotSet): void {
     const onPath = pathN != null && pathN.has(n.id)
     const onFoc = focN != null && focN.has(n.id)
     const isSelected = sel != null && sel.has(n.id)
-    if (!onPath && !onFoc && !isSelected && n.id !== hover && n.id !== focusId && !inView(n.x, n.y, tx, ty, k, w, h, margin))
+    if (
+      !onPath &&
+      !onFoc &&
+      !isSelected &&
+      n.id !== hover &&
+      n.id !== focusId &&
+      !inView(n.x, n.y, tx, ty, k, w, h, margin)
+    )
       continue
 
     const isGhost = Boolean(n.isGhost || n.type === 'ghost')
@@ -277,8 +287,9 @@ export function drawCanvas2DScene(dc: DrawContext, hot: HotSet): void {
       pal.colors.default || '#7c6cf0'
     )
 
-    const dimHover =
-      Boolean(hotIds && !hotIds.has(n.id) && pathN == null && focN == null && !isSelected)
+    const dimHover = Boolean(
+      hotIds && !hotIds.has(n.id) && pathN == null && focN == null && !isSelected
+    )
     const dimPath = pathN != null && !onPath && !isSelected
     const dimFocus = pathN == null && focN != null && !onFoc && !isSelected
     const dimSearch =
@@ -404,7 +415,13 @@ export function drawCanvas2DScene(dc: DrawContext, hot: HotSet): void {
       const onPath = pathN != null && pathN.has(n.id)
       const onFoc = focN != null && focN.has(n.id)
       const isSel = sel != null && sel.has(n.id)
-      if (!onPath && !onFoc && n.id !== hover && !isSel && !inView(n.x, n.y, tx, ty, k, w, h, margin))
+      if (
+        !onPath &&
+        !onFoc &&
+        n.id !== hover &&
+        !isSel &&
+        !inView(n.x, n.y, tx, ty, k, w, h, margin)
+      )
         continue
 
       let zA = labelZoomAlpha(k, flags.textFade, n.degree)

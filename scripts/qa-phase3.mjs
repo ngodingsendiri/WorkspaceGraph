@@ -6,6 +6,7 @@ import fs from 'fs'
 import os from 'os'
 import { fileURLToPath, pathToFileURL } from 'url'
 import { createRequire } from 'module'
+import { readIpcSource } from './qa-ipc.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const root = path.join(__dirname, '..')
@@ -88,7 +89,7 @@ Then create a note.
   assert(mid.includes('enableTools') && mid.includes('MAX_TOOL_ROUNDS'), 'tool loop')
   assert(mid.includes('cancelStream') || mid.includes('abortFlags'), 'cancel stream')
 
-  const ipc = fs.readFileSync(path.join(root, 'src/main/ipc/index.ts'), 'utf8')
+  const ipc = readIpcSource()
   assert(ipc.includes('ai:applyProposal') && ipc.includes('ai:rejectProposal'), 'IPC proposals')
   assert(ipc.includes('chat:save') && ipc.includes('chat:load'), 'IPC chat persist')
   // Conversation id path-traversal guard (ConversationStore.safeConversationId)

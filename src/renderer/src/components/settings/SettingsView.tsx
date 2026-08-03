@@ -325,56 +325,66 @@ export const SettingsView: React.FC = () => {
                     ? `Key saved · ${p.models.length} models · klik Test`
                     : p.error || 'Not configured'
               return (
-            <div
-              key={p.id}
-              className={`provider-card ${isReady ? 'active' : ''}`}
-            >
-              <div className={`provider-dot ${isReady ? 'connected' : ''}`} />
-              <div style={{ flex: 1, minWidth: 120 }}>
-                <div style={{ fontWeight: 600, fontSize: 'var(--text-sm)' }}>{p.name}</div>
-                <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
-                  {statusText}
-                  {secStatus?.secrets?.[p.id] ? ` · key:${secStatus.secrets[p.id]}` : ''}
-                </div>
-              </div>
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                {p.id === 'ollama' ? (
-                  <input
-                    type="text"
-                    className="input"
-                    placeholder="http://localhost:11434"
-                    style={{ width: 260 }}
-                    value={baseUrls[p.id] || ''}
-                    onChange={(e) => setBaseUrls({ ...baseUrls, [p.id]: e.target.value })}
-                  />
-                ) : (
-                  <input
-                    type="password"
-                    className="input"
-                    placeholder={
-                      secStatus?.secrets?.[p.id] && secStatus.secrets[p.id] !== 'empty'
-                        ? '••••••  (saved)'
-                        : 'API Key'
-                    }
-                    style={{ width: 260 }}
-                    value={apiKeys[p.id] || ''}
-                    onChange={(e) => setApiKeys({ ...apiKeys, [p.id]: e.target.value })}
-                    autoComplete="off"
-                  />
-                )}
-                  <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
-                    <button className="btn btn-surface btn-sm" onClick={() => handleTest(p.id)}>
-                      Test
-                    </button>
-                    <button className="btn btn-surface btn-sm" onClick={() => void handleSetDefault(p.id)}>
-                      Set default
-                    </button>
-                    <button className="btn btn-primary btn-sm" onClick={() => handleSaveKey(p.id)}>
-                      Save
-                    </button>
+                <div key={p.id} className={`provider-card ${isReady ? 'active' : ''}`}>
+                  <div className={`provider-dot ${isReady ? 'connected' : ''}`} />
+                  <div style={{ flex: 1, minWidth: 120 }}>
+                    <div style={{ fontWeight: 600, fontSize: 'var(--text-sm)' }}>{p.name}</div>
+                    <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
+                      {statusText}
+                      {secStatus?.secrets?.[p.id] ? ` · key:${secStatus.secrets[p.id]}` : ''}
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    {p.id === 'ollama' ? (
+                      <input
+                        type="text"
+                        className="input"
+                        placeholder="http://localhost:11434"
+                        style={{ width: 260 }}
+                        value={baseUrls[p.id] || ''}
+                        onChange={(e) => setBaseUrls({ ...baseUrls, [p.id]: e.target.value })}
+                      />
+                    ) : (
+                      <input
+                        type="password"
+                        className="input"
+                        placeholder={
+                          secStatus?.secrets?.[p.id] && secStatus.secrets[p.id] !== 'empty'
+                            ? '••••••  (saved)'
+                            : 'API Key'
+                        }
+                        style={{ width: 260 }}
+                        value={apiKeys[p.id] || ''}
+                        onChange={(e) => setApiKeys({ ...apiKeys, [p.id]: e.target.value })}
+                        autoComplete="off"
+                      />
+                    )}
+                    <div
+                      style={{
+                        display: 'flex',
+                        gap: 6,
+                        justifyContent: 'flex-end',
+                        flexWrap: 'wrap'
+                      }}
+                    >
+                      <button className="btn btn-surface btn-sm" onClick={() => handleTest(p.id)}>
+                        Test
+                      </button>
+                      <button
+                        className="btn btn-surface btn-sm"
+                        onClick={() => void handleSetDefault(p.id)}
+                      >
+                        Set default
+                      </button>
+                      <button
+                        className="btn btn-primary btn-sm"
+                        onClick={() => handleSaveKey(p.id)}
+                      >
+                        Save
+                      </button>
+                    </div>
                   </div>
                 </div>
-              </div>
               )
             })}
             <p style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 12, lineHeight: 1.5 }}>

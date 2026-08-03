@@ -4,6 +4,7 @@
 import path from 'path'
 import fs from 'fs'
 import { fileURLToPath } from 'url'
+import { readIpcSource } from './qa-ipc.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const root = path.join(__dirname, '..')
@@ -62,7 +63,7 @@ async function main() {
   assert(de.includes('getOverview') && de.includes('parseCheckboxes'), 'domain overview')
   assert(de.includes("type === 'project'") && de.includes("type === 'task'"), 'project/task scan')
 
-  const ipc = fs.readFileSync(path.join(root, 'src/main/ipc/index.ts'), 'utf8')
+  const ipc = readIpcSource()
   assert(ipc.includes('template:list') && ipc.includes('template:createNote'), 'template IPC')
   assert(ipc.includes('domain:overview'), 'domain IPC')
   assert(ipc.includes('domainEngine.setParsedFiles'), 'domain on sync')

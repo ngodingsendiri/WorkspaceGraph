@@ -7,6 +7,7 @@ import path from 'path'
 import fs from 'fs'
 import os from 'os'
 import { fileURLToPath, pathToFileURL } from 'url'
+import { readIpcSource } from './qa-ipc.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const engDir = path.join(__dirname, '.tmp-engines')
@@ -224,9 +225,9 @@ Isolated note.
   const dailyEntry = md.parseFile(dailyPath, dailyRaw, root)
   search.addToIndex(dailyEntry)
 
-  // Source integrity checks (static)
+  // Source integrity checks (static) — read whole ipc dir (handlers are split across modules)
   const rootSrc = path.join(__dirname, '..', 'src')
-  const ipc = fs.readFileSync(path.join(rootSrc, 'main/ipc/index.ts'), 'utf8')
+  const ipc = readIpcSource()
   assert(ipc.includes('graph:getBacklinks'), 'IPC backlinks')
   assert(ipc.includes('markdown:render'), 'IPC render')
   assert(ipc.includes('attachFileWatcher'), 'IPC shared watcher attach')

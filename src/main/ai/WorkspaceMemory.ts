@@ -241,9 +241,7 @@ export interface EnsureMemoryResult {
 /**
  * Create AI Memory/ + seed notes if missing. Safe to call repeatedly.
  */
-export function ensureAiMemoryScaffold(
-  vaultRoot: string | null | undefined
-): EnsureMemoryResult {
+export function ensureAiMemoryScaffold(vaultRoot: string | null | undefined): EnsureMemoryResult {
   if (!vaultRoot) return { ok: false, created: [], existing: [], error: 'No workspace open' }
   try {
     const dir = memoryRoot(vaultRoot)

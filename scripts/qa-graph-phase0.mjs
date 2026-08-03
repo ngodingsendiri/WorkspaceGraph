@@ -7,6 +7,7 @@ import fs from 'fs'
 import os from 'os'
 import { fileURLToPath, pathToFileURL } from 'url'
 import { createRequire } from 'module'
+import { readIpcSource } from './qa-ipc.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const root = path.join(__dirname, '..')
@@ -186,7 +187,7 @@ ok(
 
 // ─── 3. Source wiring ───────────────────────────────────────────────
 console.log('\n═══ 3. IPC / preload wiring ═══')
-const ipc = fs.readFileSync(path.join(root, 'src/main/ipc/index.ts'), 'utf8')
+const ipc = readIpcSource()
 const pre = fs.readFileSync(path.join(root, 'src/preload/index.ts'), 'utf8')
 const preD = fs.readFileSync(path.join(root, 'src/preload/index.d.ts'), 'utf8')
 for (const h of [

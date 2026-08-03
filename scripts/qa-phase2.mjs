@@ -7,6 +7,7 @@ import fs from 'fs'
 import os from 'os'
 import { fileURLToPath, pathToFileURL } from 'url'
 import { createRequire } from 'module'
+import { readIpcSource } from './qa-ipc.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const root = path.join(__dirname, '..')
@@ -130,7 +131,7 @@ async function main() {
   fs.rmSync(tmp, { recursive: true, force: true })
 
   // --- Source wiring ---
-  const ipc = fs.readFileSync(path.join(root, 'src/main/ipc/index.ts'), 'utf8')
+  const ipc = readIpcSource()
   assert(ipc.includes('indexDatabase.open'), 'IPC opens index.db')
   assert(ipc.includes('search:rebuildIndex'), 'IPC rebuild index')
   assert(ipc.includes('search:getStats'), 'IPC index stats')

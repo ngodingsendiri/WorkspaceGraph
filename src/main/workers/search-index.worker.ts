@@ -14,12 +14,12 @@ function buildFuseIndex(entries: IndexEntry[]): void {
       { name: 'title', weight: 0.4 },
       { name: 'tags', weight: 0.2 },
       { name: 'content', weight: 0.3 },
-      { name: 'relativePath', weight: 0.1 },
+      { name: 'relativePath', weight: 0.1 }
     ],
     includeScore: true,
     includeMatches: true,
     threshold: 0.4,
-    ignoreLocation: true,
+    ignoreLocation: true
   })
   parentPort?.postMessage({ type: 'indexBuilt', size: entries.length } as WorkerResponse)
 }
@@ -54,7 +54,7 @@ function fuzzySearch(query: string, limit: number): SearchResult[] {
       tags: e.tags,
       preview,
       matchedField,
-      source: 'fuse',
+      source: 'fuse'
     })
     if (out.length >= limit) break
   }

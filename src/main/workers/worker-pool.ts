@@ -66,7 +66,10 @@ export interface SearchResult {
 
 class WorkerWrapper {
   private worker: Worker
-  private pending = new Map<number, { resolve: (v: WorkerResponse) => void; reject: (e: Error) => void }>()
+  private pending = new Map<
+    number,
+    { resolve: (v: WorkerResponse) => void; reject: (e: Error) => void }
+  >()
   private msgId = 0
   private initPromise: Promise<void>
 
@@ -109,7 +112,9 @@ class WorkerWrapper {
     this.pending.clear()
   }
 
-  async post<T extends WorkerResponse['type']>(msg: WorkerMessage): Promise<Extract<WorkerResponse, { type: T }>> {
+  async post<T extends WorkerResponse['type']>(
+    msg: WorkerMessage
+  ): Promise<Extract<WorkerResponse, { type: T }>> {
     await this.initPromise
     return new Promise((resolve, reject) => {
       this.pending.set(this.msgId++, { resolve: resolve as any, reject })
@@ -142,8 +147,18 @@ export async function getSearchIndexWorker(): Promise<WorkerWrapper> {
 
 export async function terminateAllWorkers(): Promise<void> {
   await Promise.all([
-    embeddingWorker?.terminate().then(() => { embeddingWorker = null }).catch(() => {}),
-    searchIndexWorker?.terminate().then(() => { searchIndexWorker = null }).catch(() => {}),
+    embeddingWorker
+      ?.terminate()
+      .then(() => {
+        embeddingWorker = null
+      })
+      .catch(() => {}),
+    searchIndexWorker
+      ?.terminate()
+      .then(() => {
+        searchIndexWorker = null
+      })
+      .catch(() => {})
   ])
 }
 

@@ -21,10 +21,7 @@ describe('GraphEngine', () => {
 
   describe('WikiLink resolution', () => {
     it('resolves exact title match', () => {
-      const notes = [
-        parseNote('/vault/A.md', '# A\n\n[[B]]'),
-        parseNote('/vault/B.md', '# B'),
-      ]
+      const notes = [parseNote('/vault/A.md', '# A\n\n[[B]]'), parseNote('/vault/B.md', '# B')]
       buildGraph(notes)
 
       const edges = graph.getGraphData().edges
@@ -35,7 +32,7 @@ describe('GraphEngine', () => {
     it('resolves unique basename', () => {
       const notes = [
         parseNote('/vault/Knowledge/A.md', '# A\n\n[[B]]'),
-        parseNote('/vault/Projects/B.md', '# B'),
+        parseNote('/vault/Projects/B.md', '# B')
       ]
       buildGraph(notes)
 
@@ -44,13 +41,11 @@ describe('GraphEngine', () => {
     })
 
     it('creates ghost node for unresolved link', () => {
-      const notes = [
-        parseNote('/vault/A.md', '# A\n\n[[NonExistent]]'),
-      ]
+      const notes = [parseNote('/vault/A.md', '# A\n\n[[NonExistent]]')]
       buildGraph(notes)
 
       const data = graph.getGraphData()
-      const ghostNodes = data.nodes.filter(n => n.isGhost)
+      const ghostNodes = data.nodes.filter((n) => n.isGhost)
       expect(ghostNodes.length).toBe(1)
       expect(ghostNodes[0].title).toBe('NonExistent')
     })
@@ -58,19 +53,19 @@ describe('GraphEngine', () => {
     it('preserves aliases in link resolution', () => {
       const notes = [
         parseNote('/vault/A.md', '# A\n\n[[B|Alias]]'),
-        parseNote('/vault/B.md', '# B'),
+        parseNote('/vault/B.md', '# B')
       ]
       buildGraph(notes)
 
       const data = graph.getGraphData()
-      const aNode = data.nodes.find(n => n.title === 'A')
+      const aNode = data.nodes.find((n) => n.title === 'A')
       expect(aNode).toBeDefined()
     })
 
     it('handles path suffix match', () => {
       const notes = [
         parseNote('/vault/A.md', '# A\n\n[[Folder/B]]'),
-        parseNote('/vault/Folder/B.md', '# B'),
+        parseNote('/vault/Folder/B.md', '# B')
       ]
       buildGraph(notes)
 
@@ -83,36 +78,34 @@ describe('GraphEngine', () => {
     it('creates tag nodes from frontmatter tags', () => {
       const notes = [
         parseNote('/vault/A.md', '---\ntags: [tag1, tag2]\n---\n# A'),
-        parseNote('/vault/B.md', '---\ntags: [tag1]\n---\n# B'),
+        parseNote('/vault/B.md', '---\ntags: [tag1]\n---\n# B')
       ]
       buildGraph(notes)
 
       const data = graph.getGraphData()
-      const tagNodes = data.nodes.filter(n => n.isTag)
+      const tagNodes = data.nodes.filter((n) => n.isTag)
       expect(tagNodes.length).toBe(2)
-      expect(tagNodes.map(n => n.title).sort()).toEqual(['#tag1', '#tag2'])
+      expect(tagNodes.map((n) => n.title).sort()).toEqual(['#tag1', '#tag2'])
     })
 
     it('creates edges from notes to tag nodes', () => {
       const notes = [
         parseNote('/vault/A.md', '---\ntags: [shared]\n---\n# A'),
-        parseNote('/vault/B.md', '---\ntags: [shared]\n---\n# B'),
+        parseNote('/vault/B.md', '---\ntags: [shared]\n---\n# B')
       ]
       buildGraph(notes)
 
       const edges = graph.getGraphData().edges
-      const tagEdges = edges.filter(e => e.type === 'tag')
+      const tagEdges = edges.filter((e) => e.type === 'tag')
       expect(tagEdges.length).toBe(2)
     })
 
     it('creates inline tag nodes from #tag in content', () => {
-      const notes = [
-        parseNote('/vault/A.md', '# A\n\nContent with #inline-tag'),
-      ]
+      const notes = [parseNote('/vault/A.md', '# A\n\nContent with #inline-tag')]
       buildGraph(notes)
 
       const data = graph.getGraphData()
-      expect(data.nodes.some(n => n.isTag && n.title === '#inline-tag')).toBe(true)
+      expect(data.nodes.some((n) => n.isTag && n.title === '#inline-tag')).toBe(true)
     })
   })
 
@@ -122,7 +115,7 @@ describe('GraphEngine', () => {
         parseNote('/vault/A.md', '# A\n\n[[B]]'),
         parseNote('/vault/B.md', '# B\n\n[[C]]'),
         parseNote('/vault/C.md', '# C\n\n[[D]]'),
-        parseNote('/vault/D.md', '# D'),
+        parseNote('/vault/D.md', '# D')
       ]
       buildGraph(notes)
 
@@ -136,7 +129,7 @@ describe('GraphEngine', () => {
         parseNote('/vault/A.md', '# A\n\n[[B]]'),
         parseNote('/vault/B.md', '# B\n\n[[C]]'),
         parseNote('/vault/C.md', '# C\n\n[[D]]'),
-        parseNote('/vault/D.md', '# D'),
+        parseNote('/vault/D.md', '# D')
       ]
       buildGraph(notes)
 
@@ -150,11 +143,11 @@ describe('GraphEngine', () => {
       const notes = [
         parseNote('/vault/A.md', '# A\n\n[[B]]'),
         parseNote('/vault/B.md', '# B'),
-        parseNote('/vault/C.md', '# C\n\n[[B]]'),
+        parseNote('/vault/C.md', '# C\n\n[[B]]')
       ]
       buildGraph(notes)
 
-      const bNode = graph.getGraphData().nodes.find(n => n.title === 'B')
+      const bNode = graph.getGraphData().nodes.find((n) => n.title === 'B')
       const backlinks = graph.getBacklinks(bNode!.id)
       expect(backlinks.nodes.length).toBe(2)
     })
@@ -163,11 +156,11 @@ describe('GraphEngine', () => {
       const notes = [
         parseNote('/vault/A.md', '# A\n\n[[B]]\n\n[[C]]'),
         parseNote('/vault/B.md', '# B'),
-        parseNote('/vault/C.md', '# C'),
+        parseNote('/vault/C.md', '# C')
       ]
       buildGraph(notes)
 
-      const aNode = graph.getGraphData().nodes.find(n => n.title === 'A')
+      const aNode = graph.getGraphData().nodes.find((n) => n.title === 'A')
       const outgoing = graph.getOutgoingLinks(aNode!.id)
       expect(outgoing.nodes.length).toBe(2)
     })
@@ -178,13 +171,13 @@ describe('GraphEngine', () => {
       const notes = [
         parseNote('/vault/A.md', '# A\n\n[[B]]'),
         parseNote('/vault/B.md', '# B'),
-        parseNote('/vault/C.md', '# C'), // no connections
+        parseNote('/vault/C.md', '# C') // no connections
       ]
       buildGraph(notes)
 
       const orphans = graph.getOrphanNodeIds()
       expect(orphans.length).toBe(1)
-      const cNode = graph.getGraphData().nodes.find(n => n.title === 'C')
+      const cNode = graph.getGraphData().nodes.find((n) => n.title === 'C')
       expect(orphans).toContain(cNode!.id)
     })
   })
@@ -195,13 +188,13 @@ describe('GraphEngine', () => {
         parseNote('/vault/Hub.md', '# Hub\n\n[[A]]\n[[B]]\n[[C]]'),
         parseNote('/vault/A.md', '# A\n\n[[Hub]]'),
         parseNote('/vault/B.md', '# B\n\n[[Hub]]'),
-        parseNote('/vault/C.md', '# C\n\n[[Hub]]'),
+        parseNote('/vault/C.md', '# C\n\n[[Hub]]')
       ]
       buildGraph(notes)
 
       const hubs = graph.getHubNodeIds(3)
       expect(hubs.length).toBe(1)
-      const hubNode = graph.getGraphData().nodes.find(n => n.title === 'Hub')
+      const hubNode = graph.getGraphData().nodes.find((n) => n.title === 'Hub')
       expect(hubs).toContain(hubNode!.id)
     })
   })
@@ -211,12 +204,12 @@ describe('GraphEngine', () => {
       const notes = [
         parseNote('/vault/A.md', '# A\n\n[[B]]'),
         parseNote('/vault/B.md', '# B\n\n[[C]]'),
-        parseNote('/vault/C.md', '# C'),
+        parseNote('/vault/C.md', '# C')
       ]
       buildGraph(notes)
 
-      const aNode = graph.getGraphData().nodes.find(n => n.title === 'A')
-      const cNode = graph.getGraphData().nodes.find(n => n.title === 'C')
+      const aNode = graph.getGraphData().nodes.find((n) => n.title === 'A')
+      const cNode = graph.getGraphData().nodes.find((n) => n.title === 'C')
       const path = graph.findShortestPath(aNode!.id, cNode!.id)
 
       expect(path).not.toBeNull()
@@ -225,14 +218,11 @@ describe('GraphEngine', () => {
     })
 
     it('returns null for disconnected nodes', () => {
-      const notes = [
-        parseNote('/vault/A.md', '# A'),
-        parseNote('/vault/B.md', '# B'),
-      ]
+      const notes = [parseNote('/vault/A.md', '# A'), parseNote('/vault/B.md', '# B')]
       buildGraph(notes)
 
-      const aNode = graph.getGraphData().nodes.find(n => n.title === 'A')
-      const bNode = graph.getGraphData().nodes.find(n => n.title === 'B')
+      const aNode = graph.getGraphData().nodes.find((n) => n.title === 'A')
+      const bNode = graph.getGraphData().nodes.find((n) => n.title === 'B')
       const path = graph.findShortestPath(aNode!.id, bNode!.id)
 
       expect(path).not.toBeNull()
@@ -251,20 +241,20 @@ describe('GraphEngine', () => {
         parseNote('/vault/Documents/F.md', '# F'),
         parseNote('/vault/People/G.md', '# G'),
         parseNote('/vault/SOP/H.md', '# H'),
-        parseNote('/vault/Other/I.md', '# I'),
+        parseNote('/vault/Other/I.md', '# I')
       ]
       buildGraph(notes)
 
       const data = graph.getGraphData()
-      expect(data.nodes.find(n => n.title === 'A')!.type).toBe('knowledge')
-      expect(data.nodes.find(n => n.title === 'B')!.type).toBe('project')
-      expect(data.nodes.find(n => n.title === 'C')!.type).toBe('task')
-      expect(data.nodes.find(n => n.title === 'D')!.type).toBe('daily')
-      expect(data.nodes.find(n => n.title === 'E')!.type).toBe('template')
-      expect(data.nodes.find(n => n.title === 'F')!.type).toBe('document')
-      expect(data.nodes.find(n => n.title === 'G')!.type).toBe('people')
-      expect(data.nodes.find(n => n.title === 'H')!.type).toBe('sop')
-      expect(data.nodes.find(n => n.title === 'I')!.type).toBe('other')
+      expect(data.nodes.find((n) => n.title === 'A')!.type).toBe('knowledge')
+      expect(data.nodes.find((n) => n.title === 'B')!.type).toBe('project')
+      expect(data.nodes.find((n) => n.title === 'C')!.type).toBe('task')
+      expect(data.nodes.find((n) => n.title === 'D')!.type).toBe('daily')
+      expect(data.nodes.find((n) => n.title === 'E')!.type).toBe('template')
+      expect(data.nodes.find((n) => n.title === 'F')!.type).toBe('document')
+      expect(data.nodes.find((n) => n.title === 'G')!.type).toBe('people')
+      expect(data.nodes.find((n) => n.title === 'H')!.type).toBe('sop')
+      expect(data.nodes.find((n) => n.title === 'I')!.type).toBe('other')
     })
   })
 
@@ -276,7 +266,7 @@ describe('GraphEngine', () => {
       const updated = parseNote('/vault/A.md', '# A Updated\n\nNew content')
       graph.updateNodeAndEdges(updated)
 
-      const node = graph.getGraphData().nodes.find(n => n.title === 'A Updated')
+      const node = graph.getGraphData().nodes.find((n) => n.title === 'A Updated')
       expect(node).toBeDefined()
     })
 
@@ -286,7 +276,7 @@ describe('GraphEngine', () => {
 
       graph.removeNode(notes[0].id)
       const data = graph.getGraphData()
-      expect(data.nodes.find(n => n.id === notes[0].id)).toBeUndefined()
+      expect(data.nodes.find((n) => n.id === notes[0].id)).toBeUndefined()
     })
   })
 
@@ -300,7 +290,7 @@ describe('GraphEngine', () => {
       ])
 
       const data = graph.getGraphData()
-      const attachNode = data.nodes.find(n => n.isAttachment)
+      const attachNode = data.nodes.find((n) => n.isAttachment)
       expect(attachNode).toBeDefined()
       expect(attachNode!.title).toBe('image.png')
     })
@@ -310,7 +300,7 @@ describe('GraphEngine', () => {
     it('filters by node type', () => {
       const notes = [
         parseNote('/vault/Knowledge/A.md', '# A'),
-        parseNote('/vault/Projects/B.md', '# B'),
+        parseNote('/vault/Projects/B.md', '# B')
       ]
       buildGraph(notes)
 
@@ -322,7 +312,7 @@ describe('GraphEngine', () => {
     it('filters by tag', () => {
       const notes = [
         parseNote('/vault/A.md', '---\ntags: [tag1]\n---\n# A'),
-        parseNote('/vault/B.md', '---\ntags: [tag2]\n---\n# B'),
+        parseNote('/vault/B.md', '---\ntags: [tag2]\n---\n# B')
       ]
       buildGraph(notes)
 

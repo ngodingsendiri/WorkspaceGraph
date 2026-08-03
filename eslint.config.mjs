@@ -40,7 +40,10 @@ export default defineConfig(
       '@typescript-eslint/explicit-module-boundary-types': 'warn',
       '@typescript-eslint/no-explicit-any': 'warn',
       '@typescript-eslint/no-require-imports': 'warn',
-      '@typescript-eslint/no-unused-vars': 'warn',
+      '@typescript-eslint/no-unused-vars': [
+        'warn',
+        { argsIgnorePattern: '^_', varsIgnorePattern: '^_', caughtErrorsIgnorePattern: '^_' }
+      ],
       '@typescript-eslint/ban-ts-comment': 'warn',
       'no-empty': 'warn',
       'react-hooks/set-state-in-effect': 'warn',

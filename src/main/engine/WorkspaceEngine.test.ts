@@ -43,7 +43,20 @@ describe('WorkspaceEngine', () => {
 
     it('creates standard folders on new workspace', () => {
       engine.openWorkspace(testDir)
-      const standard = ['Knowledge', 'Projects', 'Tasks', 'Daily', 'Templates', 'Documents', 'People', 'SOP', 'Prompt', 'Rules', 'Assets', 'Archive']
+      const standard = [
+        'Knowledge',
+        'Projects',
+        'Tasks',
+        'Daily',
+        'Templates',
+        'Documents',
+        'People',
+        'SOP',
+        'Prompt',
+        'Rules',
+        'Assets',
+        'Archive'
+      ]
       for (const folder of standard) {
         expect(fs.existsSync(path.join(testDir, folder))).toBe(true)
       }
@@ -187,30 +200,26 @@ describe('WorkspaceEngine', () => {
 
     it('does not update links when disabled', () => {
       fs.writeFileSync(path.join(testDir, 'A.md'), '# A\n\n[[A]]')
-      engine.renameFile(
-        path.join(testDir, 'A.md'),
-        path.join(testDir, 'B.md'),
-        { updateLinks: false }
-      )
+      engine.renameFile(path.join(testDir, 'A.md'), path.join(testDir, 'B.md'), {
+        updateLinks: false
+      })
 
       const content = fs.readFileSync(path.join(testDir, 'B.md'), 'utf-8')
       expect(content).toContain('[[A]]')
     })
 
     it('throws for non-existent source', () => {
-      expect(() => engine.renameFile(
-        path.join(testDir, 'None.md'),
-        path.join(testDir, 'New.md')
-      )).toThrow('does not exist')
+      expect(() =>
+        engine.renameFile(path.join(testDir, 'None.md'), path.join(testDir, 'New.md'))
+      ).toThrow('does not exist')
     })
 
     it('throws if target exists', () => {
       fs.writeFileSync(path.join(testDir, 'A.md'), '# A')
       fs.writeFileSync(path.join(testDir, 'B.md'), '# B')
-      expect(() => engine.renameFile(
-        path.join(testDir, 'A.md'),
-        path.join(testDir, 'B.md')
-      )).toThrow('Target already exists')
+      expect(() =>
+        engine.renameFile(path.join(testDir, 'A.md'), path.join(testDir, 'B.md'))
+      ).toThrow('Target already exists')
     })
   })
 
@@ -253,9 +262,9 @@ describe('WorkspaceEngine', () => {
 
       const paths = engine.getAllMarkdownPaths()
       // Workspace seeding now adds Templates/*.md — assert inclusion, not exact count
-      expect(paths.some(p => p.endsWith('A.md'))).toBe(true)
-      expect(paths.some(p => p.endsWith('B.md') || p.includes('sub/B.md'))).toBe(true)
-      expect(paths.some(p => p.includes('Templates'))).toBe(true)
+      expect(paths.some((p) => p.endsWith('A.md'))).toBe(true)
+      expect(paths.some((p) => p.endsWith('B.md') || p.includes('sub/B.md'))).toBe(true)
+      expect(paths.some((p) => p.includes('Templates'))).toBe(true)
     })
 
     it('ignores hidden folders and node_modules', () => {
@@ -266,9 +275,9 @@ describe('WorkspaceEngine', () => {
       fs.writeFileSync(path.join(testDir, 'node_modules', 'C.md'), '# C')
 
       const paths = engine.getAllMarkdownPaths()
-      expect(paths.some(p => p.endsWith('A.md'))).toBe(true)
-      expect(paths.some(p => p.includes('.hidden'))).toBe(false)
-      expect(paths.some(p => p.includes('node_modules'))).toBe(false)
+      expect(paths.some((p) => p.endsWith('A.md'))).toBe(true)
+      expect(paths.some((p) => p.includes('.hidden'))).toBe(false)
+      expect(paths.some((p) => p.includes('node_modules'))).toBe(false)
     })
   })
 
@@ -305,7 +314,7 @@ describe('WorkspaceEngine', () => {
     it('updates file list after external changes', () => {
       fs.writeFileSync(path.join(testDir, 'New.md'), '# New')
       const files = engine.refreshFiles()
-      expect(files.some(f => f.name === 'New.md')).toBe(true)
+      expect(files.some((f) => f.name === 'New.md')).toBe(true)
     })
   })
 })

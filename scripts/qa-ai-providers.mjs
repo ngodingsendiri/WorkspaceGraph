@@ -9,6 +9,7 @@ import os from 'os'
 import { fileURLToPath, pathToFileURL } from 'url'
 import { createRequire } from 'module'
 import { execSync } from 'child_process'
+import { readIpcSource } from './qa-ipc.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const root = path.join(__dirname, '..')
@@ -97,7 +98,7 @@ ok('ollama-localhost', ollama.includes('11434'))
 ok('ollama-no-key-required', ollama.includes("id === 'ollama'") || base.includes("id === 'ollama'"))
 
 console.log('\n═══ 3. IPC / preload / Settings UI ═══')
-const ipc = read('src/main/ipc/index.ts')
+const ipc = readIpcSource()
 for (const h of [
   'ai:getProviders',
   'ai:testProvider',

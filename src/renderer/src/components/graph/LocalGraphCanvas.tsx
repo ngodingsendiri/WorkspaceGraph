@@ -268,8 +268,11 @@ export const LocalGraphCanvas: React.FC = () => {
         ctx.fillStyle = col
         ctx.fill()
         ctx.lineWidth = (isC ? 1.8 : n.id === hover ? lerp(0.6, 1.2, hs) : 0.55) / t.k
-        ctx.strokeStyle =
-          isC ? pal.centerStroke : n.id === hover && hs > 0.4 ? pal.edgeHot : pal.nodeStroke
+        ctx.strokeStyle = isC
+          ? pal.centerStroke
+          : n.id === hover && hs > 0.4
+            ? pal.edgeHot
+            : pal.nodeStroke
         ctx.stroke()
       }
     }
@@ -291,8 +294,7 @@ export const LocalGraphCanvas: React.FC = () => {
         const text = titleStr.length > 22 ? titleStr.slice(0, 21) + '…' : titleStr
         const sx = n.x * t.k + t.x + rWorld * t.k + 5
         const sy = n.y * t.k + t.y
-        const labelA =
-          n.id === hover || n.id === centerId ? 1 : hot ? lerp(0.85, 0.9, hs) : 0.82
+        const labelA = n.id === hover || n.id === centerId ? 1 : hot ? lerp(0.85, 0.9, hs) : 0.82
         if (pal.isLight && labelA > 0.3) {
           const tw = ctx.measureText(text).width
           ctx.fillStyle = pal.labelBg
@@ -511,11 +513,19 @@ export const LocalGraphCanvas: React.FC = () => {
         const idSet = new Set(simNodes.map((n) => n.id))
         const simLinks: SimLink[] = data.edges
           .map((e) => {
-            const source = typeof e.source === 'string' ? e.source : String((e as { source?: string }).source || '')
-            const target = typeof e.target === 'string' ? e.target : String((e as { target?: string }).target || '')
+            const source =
+              typeof e.source === 'string'
+                ? e.source
+                : String((e as { source?: string }).source || '')
+            const target =
+              typeof e.target === 'string'
+                ? e.target
+                : String((e as { target?: string }).target || '')
             return { e, source, target }
           })
-          .filter(({ source, target }) => source && target && idSet.has(source) && idSet.has(target))
+          .filter(
+            ({ source, target }) => source && target && idSet.has(source) && idSet.has(target)
+          )
           .map(({ e, source, target }) => ({
             id: e.id || `${source}->${target}`,
             type: e.type || 'wiki_link',

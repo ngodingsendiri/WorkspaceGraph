@@ -17,7 +17,7 @@ try {
 const rootEl = document.getElementById('root')
 if (!rootEl) {
   document.body.innerHTML =
-    '<pre style="padding:16px;color:#f88;font-family:Inter,\'Segoe UI Variable\',\'Segoe UI\',system-ui">#root missing — index.html broken</pre>'
+    "<pre style=\"padding:16px;color:#f88;font-family:Inter,'Segoe UI Variable','Segoe UI',system-ui\">#root missing — index.html broken</pre>"
 } else {
   ReactDOM.createRoot(rootEl).render(
     <React.StrictMode>

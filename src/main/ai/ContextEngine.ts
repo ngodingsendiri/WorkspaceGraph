@@ -189,9 +189,7 @@ export class ContextEngine {
       agentRole === 'researcher' ||
       agentRole === 'curator' ||
       agentRole === 'planner' ||
-      /sop|aturan|rules|template|prosedur|format|surat|cara kerja/i.test(
-        qLower
-      )
+      /sop|aturan|rules|template|prosedur|format|surat|cara kerja/i.test(qLower)
 
     {
       const systemNotes = this.searchEngine.getSystemFolderNotes()

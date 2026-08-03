@@ -15,15 +15,15 @@ describe('SearchEngine', () => {
     return markdown.parseFile(filePath, content, '/vault')
   }
 
-const buildIndex = async (files: ReturnType<typeof parse>[]) => {
-  await search.buildIndex(files)
-}
+  const buildIndex = async (files: ReturnType<typeof parse>[]) => {
+    await search.buildIndex(files)
+  }
 
   describe('buildIndex', () => {
     it('indexes parsed files', () => {
       const files = [
         parse('/vault/A.md', '# A\n\nContent A'),
-        parse('/vault/B.md', '# B\n\nContent B'),
+        parse('/vault/B.md', '# B\n\nContent B')
       ]
       buildIndex(files)
 
@@ -42,7 +42,7 @@ const buildIndex = async (files: ReturnType<typeof parse>[]) => {
       await buildIndex([
         parse('/vault/A.md', '---\ntype: knowledge\n---\n# A\n\nKnowledge about TypeScript'),
         parse('/vault/B.md', '---\ntype: project\n---\n# B\n\nProject planning'),
-        parse('/vault/C.md', '---\ntype: task\n---\n# C\n\nTask list'),
+        parse('/vault/C.md', '---\ntype: task\n---\n# C\n\nTask list')
       ])
     })
 
@@ -53,12 +53,12 @@ const buildIndex = async (files: ReturnType<typeof parse>[]) => {
 
     it('searches by keyword', () => {
       const results = search.searchSync({ query: 'TypeScript', limit: 10 })
-      expect(results.some(r => r.title === 'A')).toBe(true)
+      expect(results.some((r) => r.title === 'A')).toBe(true)
     })
 
     it('filters by type', () => {
       const results = search.searchSync({ query: 'planning', filterType: 'project', limit: 10 })
-      expect(results.every(r => r.type === 'project')).toBe(true)
+      expect(results.every((r) => r.type === 'project')).toBe(true)
     })
 
     it('filters by tag', () => {
@@ -66,7 +66,7 @@ const buildIndex = async (files: ReturnType<typeof parse>[]) => {
       search.addToIndex(tagged)
 
       const results = search.searchSync({ query: '', filterTag: 'mytag', limit: 10 })
-      expect(results.some(r => r.title === 'D')).toBe(true)
+      expect(results.some((r) => r.title === 'D')).toBe(true)
     })
 
     it('supports orphan:true query', () => {
@@ -77,12 +77,12 @@ const buildIndex = async (files: ReturnType<typeof parse>[]) => {
     it('supports backlinks: query', () => {
       const files = [
         parse('/vault/A.md', '---\ntype: note\n---\n# A\n\n[[B]]'),
-        parse('/vault/B.md', '---\ntype: note\n---\n# B'),
+        parse('/vault/B.md', '---\ntype: note\n---\n# B')
       ]
       buildIndex(files)
 
       const results = search.searchSync({ query: 'backlinks:B', limit: 10 })
-      expect(results.some(r => r.matchedField === 'backlink')).toBe(true)
+      expect(results.some((r) => r.matchedField === 'backlink')).toBe(true)
     })
 
     it('supports path: query', () => {
@@ -95,7 +95,7 @@ const buildIndex = async (files: ReturnType<typeof parse>[]) => {
       search.addToIndex(tagged)
 
       const results = search.searchSync({ query: '#exact', limit: 10 })
-      expect(results.some(r => r.matchedField === 'tag')).toBe(true)
+      expect(results.some((r) => r.matchedField === 'tag')).toBe(true)
     })
   })
 
@@ -103,7 +103,7 @@ const buildIndex = async (files: ReturnType<typeof parse>[]) => {
     beforeEach(async () => {
       await buildIndex([
         parse('/vault/A.md', '# A\n\nKnowledge about TypeScript'),
-        parse('/vault/B.md', '# B\n\nProject planning'),
+        parse('/vault/B.md', '# B\n\nProject planning')
       ])
     })
 
@@ -128,10 +128,7 @@ const buildIndex = async (files: ReturnType<typeof parse>[]) => {
     })
 
     it('removes file from index', () => {
-      buildIndex([
-        parse('/vault/A.md', '# A'),
-        parse('/vault/B.md', '# B'),
-      ])
+      buildIndex([parse('/vault/A.md', '# A'), parse('/vault/B.md', '# B')])
       expect(search.getIndexSize()).toBe(2)
 
       search.removeFromIndex('A-id') // won't match but tests API
@@ -144,22 +141,19 @@ const buildIndex = async (files: ReturnType<typeof parse>[]) => {
       const files = [
         parse('/vault/A.md', '# A\n\n[[B]]'),
         parse('/vault/B.md', '# B'),
-        parse('/vault/C.md', '# C\n\n[[B]]'),
+        parse('/vault/C.md', '# C\n\n[[B]]')
       ]
       buildIndex(files)
 
       const results = search.searchBacklinks('B', 10)
       expect(results.length).toBe(2)
-      expect(results.every(r => r.matchedField === 'backlink')).toBe(true)
+      expect(results.every((r) => r.matchedField === 'backlink')).toBe(true)
     })
   })
 
   describe('searchByPathFragment', () => {
     it('finds files by path fragment', () => {
-      const files = [
-        parse('/vault/Folder/Note.md', '# Note'),
-        parse('/vault/Other.md', '# Other'),
-      ]
+      const files = [parse('/vault/Folder/Note.md', '# Note'), parse('/vault/Other.md', '# Other')]
       buildIndex(files)
 
       const results = search.searchByPathFragment('Folder', 10)
@@ -172,7 +166,7 @@ const buildIndex = async (files: ReturnType<typeof parse>[]) => {
     it('finds notes by tag', () => {
       const files = [
         parse('/vault/A.md', '---\ntags: [tag1]\n---\n# A'),
-        parse('/vault/B.md', '---\ntags: [tag2]\n---\n# B'),
+        parse('/vault/B.md', '---\ntags: [tag2]\n---\n# B')
       ]
       buildIndex(files)
 
@@ -184,10 +178,7 @@ const buildIndex = async (files: ReturnType<typeof parse>[]) => {
 
   describe('getRecentFiles', () => {
     it('returns recent files', () => {
-      const files = [
-        parse('/vault/A.md', '# A'),
-        parse('/vault/B.md', '# B'),
-      ]
+      const files = [parse('/vault/A.md', '# A'), parse('/vault/B.md', '# B')]
       buildIndex(files)
 
       const results = search.getRecentFiles(5)
@@ -199,13 +190,13 @@ const buildIndex = async (files: ReturnType<typeof parse>[]) => {
     it('returns tags with counts', () => {
       const files = [
         parse('/vault/A.md', '---\ntags: [tag1, tag2]\n---\n# A'),
-        parse('/vault/B.md', '---\ntags: [tag1]\n---\n# B'),
+        parse('/vault/B.md', '---\ntags: [tag1]\n---\n# B')
       ]
       buildIndex(files)
 
       const tags = search.getAllTags()
-      expect(tags.find(t => t.tag === 'tag1')?.count).toBe(2)
-      expect(tags.find(t => t.tag === 'tag2')?.count).toBe(1)
+      expect(tags.find((t) => t.tag === 'tag1')?.count).toBe(2)
+      expect(tags.find((t) => t.tag === 'tag2')?.count).toBe(1)
     })
   })
 
@@ -214,7 +205,7 @@ const buildIndex = async (files: ReturnType<typeof parse>[]) => {
       const files = [
         parse('/vault/Rules/R1.md', '# R1'),
         parse('/vault/SOP/S1.md', '# S1'),
-        parse('/vault/Other.md', '# Other'),
+        parse('/vault/Other.md', '# Other')
       ]
       buildIndex(files)
 

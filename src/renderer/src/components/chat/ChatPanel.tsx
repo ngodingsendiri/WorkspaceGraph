@@ -46,12 +46,8 @@ export const ChatPanel: React.FC = () => {
    * causes "Maximum update depth exceeded".
    */
   const activeTabId = useEditorStore((s) => s.activeTabId)
-  const activeTabPath = useEditorStore(
-    (s) => s.tabs.find((x) => x.id === s.activeTabId)?.path
-  )
-  const activeTabTitle = useEditorStore(
-    (s) => s.tabs.find((x) => x.id === s.activeTabId)?.title
-  )
+  const activeTabPath = useEditorStore((s) => s.tabs.find((x) => x.id === s.activeTabId)?.path)
+  const activeTabTitle = useEditorStore((s) => s.tabs.find((x) => x.id === s.activeTabId)?.title)
   const activeTab =
     activeTabId && activeTabPath
       ? { id: activeTabId, path: activeTabPath, title: activeTabTitle || '' }
@@ -243,9 +239,7 @@ export const ChatPanel: React.FC = () => {
   }
 
   const statusLine =
-    lastToolStatus ||
-    lastKernelStatus ||
-    (isGenerating ? 'kernel: running…' : 'kernel: idle')
+    lastToolStatus || lastKernelStatus || (isGenerating ? 'kernel: running…' : 'kernel: idle')
 
   return (
     <aside className="chat-panel chat-panel--kernel" aria-label="AI kernel assistant">

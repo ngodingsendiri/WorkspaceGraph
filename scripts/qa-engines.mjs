@@ -7,6 +7,7 @@ import path from 'path'
 import fs from 'fs'
 import os from 'os'
 import { fileURLToPath } from 'url'
+import { readIpcSource } from './qa-ipc.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const root = path.join(__dirname, '..')
@@ -55,8 +56,8 @@ See [[Beta]] and [[Gamma|G]].
   const we = fs.readFileSync(path.join(root, 'src/main/engine/WorkspaceEngine.ts'), 'utf8')
   assert(we.includes('Knowledge') && we.includes('Daily') && we.includes('People'), 'standard folders present')
 
-  // IPC must expose backlinks
-  const ipc = fs.readFileSync(path.join(root, 'src/main/ipc/index.ts'), 'utf8')
+  // IPC must expose backlinks (read whole ipc dir — handlers split across modules)
+  const ipc = readIpcSource()
   assert(ipc.includes('graph:getBacklinks'), 'IPC backlinks')
   assert(ipc.includes('markdown:render'), 'IPC markdown render')
   assert(ipc.includes('setOrphanIds'), 'orphan sync to search')

@@ -68,7 +68,9 @@ export interface ChatStore {
   loadChat: (id: string) => Promise<void>
   ensureConversationId: () => Promise<string>
   /** Scaffold AI Memory/ then run bootstrap agent prompt */
-  learnWorkspace: (activeFilePath?: string) => Promise<{ ok: boolean; error?: string; created?: string[] }>
+  learnWorkspace: (
+    activeFilePath?: string
+  ) => Promise<{ ok: boolean; error?: string; created?: string[] }>
   lastKernelStatus: string
 }
 

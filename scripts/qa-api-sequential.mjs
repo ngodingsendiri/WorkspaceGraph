@@ -9,6 +9,7 @@ import fs from 'fs'
 import os from 'os'
 import { fileURLToPath, pathToFileURL } from 'url'
 import { createRequire } from 'module'
+import { readIpcSource } from './qa-ipc.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const root = path.join(__dirname, '..')
@@ -56,7 +57,7 @@ async function stepFetchOllama() {
 function stepSourceWiring() {
   section('2. IPC ↔ preload ↔ renderer wiring')
 
-  const ipc = fs.readFileSync(path.join(root, 'src/main/ipc/index.ts'), 'utf8')
+  const ipc = readIpcSource()
   const pre = fs.readFileSync(path.join(root, 'src/preload/index.ts'), 'utf8')
   const preD = fs.readFileSync(path.join(root, 'src/preload/index.d.ts'), 'utf8')
 
@@ -244,7 +245,7 @@ async function stepStreamErrorPath() {
       `${f} stream catch sends done+error`
     )
   }
-  const ipc = fs.readFileSync(path.join(root, 'src/main/ipc/index.ts'), 'utf8')
+  const ipc = readIpcSource()
   assert(ipc.includes('catch (err)') && ipc.includes('ai:streamMessage'), 'IPC stream try/catch')
   const pre = fs.readFileSync(path.join(root, 'src/preload/index.ts'), 'utf8')
   assert(pre.includes('.catch(') && pre.includes('streamAIMessage'), 'preload stream invoke catch')
@@ -253,7 +254,7 @@ async function stepStreamErrorPath() {
 async function stepIpcMatrix() {
   section('7. Full AI IPC surface matrix')
 
-  const ipc = fs.readFileSync(path.join(root, 'src/main/ipc/index.ts'), 'utf8')
+  const ipc = readIpcSource()
   const matrix = [
     ['getProviders', 'list status + models'],
     ['testProvider', 'live ping'],

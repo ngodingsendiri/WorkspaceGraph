@@ -11,6 +11,7 @@ import path from 'path'
 import os from 'os'
 import crypto from 'crypto'
 import { fileURLToPath, pathToFileURL } from 'url'
+import { readIpcSource } from './qa-ipc.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const root = path.join(__dirname, '..')
@@ -254,7 +255,7 @@ async function main() {
   {
     const eng = fs.readFileSync(path.join(root, 'src/main/engine/GraphEngine.ts'), 'utf8')
     const gc = fs.readFileSync(path.join(root, 'src/renderer/src/components/graph/GraphCanvas.tsx'), 'utf8')
-    const ipc = fs.readFileSync(path.join(root, 'src/main/ipc/index.ts'), 'utf8')
+    const ipc = readIpcSource()
     const store = fs.readFileSync(path.join(root, 'src/renderer/src/store/graphStore.ts'), 'utf8')
     ok('buildAdj-skip-ghost', eng.includes('includeGhosts') && eng.includes('isGhost'))
     ok('stripInternal', eng.includes('stripInternal') || eng.includes('outLinks: _ol'))

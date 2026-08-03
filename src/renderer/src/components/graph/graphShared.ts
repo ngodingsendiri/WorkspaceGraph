@@ -191,11 +191,7 @@ export function nodeRadius(degree: number, scale = 1, hubDim = false): number {
 }
 
 /** Ideal link distance — longer for hubs so clusters breathe (Obsidian-ish). */
-export function linkDistanceFor(
-  sourceDegree: number,
-  targetDegree: number,
-  base: number
-): number {
+export function linkDistanceFor(sourceDegree: number, targetDegree: number, base: number): number {
   const d = Math.max(sourceDegree, 0) + Math.max(targetDegree, 0)
   const boost = Math.min(48, Math.sqrt(d) * 6)
   return base + boost * 0.35
@@ -341,7 +337,8 @@ export function diagnoseEmptyFilter(input: {
   if (hubMode === 'hide') active.push('hubs:hide')
   if (selectedType !== 'all') active.push(`type:${selectedType}`)
   if (selectedTag !== 'all') active.push(`tag:${selectedTag}`)
-  if (searchMode === 'filter' && searchQuery.trim()) active.push(`search-filter:“${searchQuery.trim()}”`)
+  if (searchMode === 'filter' && searchQuery.trim())
+    active.push(`search-filter:“${searchQuery.trim()}”`)
 
   if (active.length > 1) {
     return {
@@ -419,7 +416,8 @@ export function diagnoseEmptyFilter(input: {
     return {
       code: 'FILTER_TYPES_HIDDEN',
       title: 'Tags & Attachments disembunyikan',
-      cause: 'showTags=false dan showAttachments=false — semua node termasuk tag/attachment tersembunyi',
+      cause:
+        'showTags=false dan showAttachments=false — semua node termasuk tag/attachment tersembunyi',
       action: 'Centang Tags / Attachments di panel P (display)',
       severity: 'warn'
     }
@@ -483,19 +481,19 @@ export function diagnoseViewportBlank(input: {
       code: 'CAM_OFFSCREEN',
       title: 'Kamera tersimpan menaruh graph di luar layar',
       cause: `viewport ${w}×${h} · terlihat ${inView}/${total} node · kamera x=${camX.toFixed(0)} y=${camY.toFixed(0)} k=${zoomK.toFixed(2)} · trigger=${trigger}${hadSavedCamera ? ' · sumber=graph-layout.json camera' : ''}`,
-      action: 'Fit otomatis dijalankan & kamera dikoreksi. Tekan F / Home bila perlu. Jangan pan jauh lalu tutup app tanpa Fit.',
+      action:
+        'Fit otomatis dijalankan & kamera dikoreksi. Tekan F / Home bila perlu. Jangan pan jauh lalu tutup app tanpa Fit.',
       severity: 'warn'
     }
   }
 
-  const code: GraphDiagCode =
-    trigger.includes('resize')
-      ? 'FIT_RESIZE'
-      : trigger.includes('sim')
-        ? 'FIT_SIM'
-        : trigger.includes('data')
-          ? 'FIT_DATA'
-          : 'CAM_OFFSCREEN'
+  const code: GraphDiagCode = trigger.includes('resize')
+    ? 'FIT_RESIZE'
+    : trigger.includes('sim')
+      ? 'FIT_SIM'
+      : trigger.includes('data')
+        ? 'FIT_DATA'
+        : 'CAM_OFFSCREEN'
 
   return {
     code,
@@ -535,7 +533,8 @@ export function diagnosePathResult(input: {
         code: 'PATH_NONE',
         title: 'Tidak ada jalur wikilink',
         cause: `Tidak ada rantai [[link]] antara “${input.fromTitle || '?'}” ↔ “${input.toTitle || '?'}” (tanpa hop lewat note hilang/ghost)`,
-        action: 'Tambah wikilink di note, atau naikkan depth Focus, atau pilih pasangan yang terhubung',
+        action:
+          'Tambah wikilink di note, atau naikkan depth Focus, atau pilih pasangan yang terhubung',
         severity: 'warn'
       }
     case 'ok':
@@ -631,7 +630,12 @@ export function css(name: string, fb: string): string {
 export function canvasSafeColor(raw: string, fallback: string): string {
   const s = (raw || '').trim()
   if (!s) return fallback
-  if (s.startsWith('var(') || s.startsWith('color-mix') || s.startsWith('oklch') || s.startsWith('oklab')) {
+  if (
+    s.startsWith('var(') ||
+    s.startsWith('color-mix') ||
+    s.startsWith('oklch') ||
+    s.startsWith('oklab')
+  ) {
     return fallback
   }
   return s
@@ -679,7 +683,12 @@ export function nid(x: string | { id: string }): string {
 export function safeTags(n: { tags?: string | string[] }): string[] {
   if (!n.tags) return []
   if (Array.isArray(n.tags)) return n.tags
-  return typeof n.tags === 'string' ? n.tags.split(',').map((t) => t.trim()).filter(Boolean) : []
+  return typeof n.tags === 'string'
+    ? n.tags
+        .split(',')
+        .map((t) => t.trim())
+        .filter(Boolean)
+    : []
 }
 
 /** Escape HTML entities for safe DOM insertion */
@@ -689,5 +698,5 @@ export function escapeHtml(s: string): string {
     .replace(/</g, '<')
     .replace(/>/g, '>')
     .replace(/"/g, '"')
-    .replace(/'/g, '\'')
+    .replace(/'/g, "'")
 }

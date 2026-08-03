@@ -70,9 +70,11 @@ export class SearchEngine {
     if (hasWorker) {
       this.ensureWorker().then((ok) => {
         if (ok && this.searchWorker) {
-          this.searchWorker.post({ type: 'buildIndex', entries: Array.from(this.index.values()) }).catch(() => {
-            this.initFuseLocal()
-          })
+          this.searchWorker
+            .post({ type: 'buildIndex', entries: Array.from(this.index.values()) })
+            .catch(() => {
+              this.initFuseLocal()
+            })
         } else {
           this.initFuseLocal()
         }
@@ -247,7 +249,8 @@ export class SearchEngine {
         const entry = res.item
         if (seen.has(entry.id)) continue
         if (filterType && entry.type !== filterType) continue
-        if (filterTag && !entry.tags.some((t) => t.toLowerCase() === filterTag.toLowerCase())) continue
+        if (filterTag && !entry.tags.some((t) => t.toLowerCase() === filterTag.toLowerCase()))
+          continue
 
         let preview: string | undefined
         let matchedField: SearchResult['matchedField'] = 'content'

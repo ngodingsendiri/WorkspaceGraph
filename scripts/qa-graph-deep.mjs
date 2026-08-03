@@ -16,6 +16,7 @@ import path from 'path'
 import os from 'os'
 import crypto from 'crypto'
 import { fileURLToPath, pathToFileURL } from 'url'
+import { readIpcSource } from './qa-ipc.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const root = path.join(__dirname, '..')
@@ -458,7 +459,7 @@ async function main() {
   g.buildFromParsedFiles([md.parseFile(yp, fs.readFileSync(yp, 'utf8'), tmp)])
   ok('resolve-missing-null', g.resolveTitleToPath('MissingZ') === null)
   // openExternal IPC wired
-  const ipcSrc = fs.readFileSync(path.join(root, 'src/main/ipc/index.ts'), 'utf8')
+  const ipcSrc = readIpcSource()
   const preSrc = fs.readFileSync(path.join(root, 'src/preload/index.ts'), 'utf8')
   ok('ipc-open-external', ipcSrc.includes('file:openExternal') && ipcSrc.includes('shell.openPath'))
   ok('preload-open-external', preSrc.includes('openFileExternal'))

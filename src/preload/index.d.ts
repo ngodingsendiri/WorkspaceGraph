@@ -19,11 +19,20 @@ export interface API {
   onWorkspaceUpdated: (callback: (state: any) => void) => () => void
 
   readFile: (filePath: string) => Promise<any>
-  writeFile: (filePath: string, content: string, expectedMtime?: number) => Promise<{ conflict: false } | { conflict: true; existingMtime: number; theirs: string; yours: string }>,
+  writeFile: (
+    filePath: string,
+    content: string,
+    expectedMtime?: number
+  ) => Promise<
+    { conflict: false } | { conflict: true; existingMtime: number; theirs: string; yours: string }
+  >
   deleteFile: (filePath: string) => Promise<boolean>
   createFile: (filePath: string, content?: string) => Promise<boolean>
   createFolder: (folderPath: string) => Promise<boolean>
-  renameFile: (oldPath: string, newPath: string) => Promise<{ ok: boolean; renamedLinks: number; affectedFiles: string[] }>
+  renameFile: (
+    oldPath: string,
+    newPath: string
+  ) => Promise<{ ok: boolean; renamedLinks: number; affectedFiles: string[] }>
   openFileExternal: (filePath: string) => Promise<{ ok: boolean; error?: string }>
 
   getGraphData: () => Promise<any>

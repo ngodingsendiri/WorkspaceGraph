@@ -5,6 +5,7 @@
 import fs from 'fs'
 import path from 'path'
 import { fileURLToPath } from 'url'
+import { readIpcSource } from './qa-ipc.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const root = path.join(__dirname, '..')
@@ -38,7 +39,7 @@ const mid = fs.readFileSync(path.join(root, 'src/main/ai/AIMiddleware.ts'), 'utf
 assert(mid.includes('KERNEL_SYSTEM_PROMPT'), 'middleware uses kernel prompt')
 assert(mid.includes('unknown tools skipped'), 'unknown tool handling')
 
-const ipc = fs.readFileSync(path.join(root, 'src/main/ipc/index.ts'), 'utf8')
+const ipc = readIpcSource()
 assert(ipc.includes('ai:ensureMemory'), 'IPC ensureMemory')
 assert(ipc.includes('ai:listMemory'), 'IPC listMemory')
 

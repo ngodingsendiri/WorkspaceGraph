@@ -19,7 +19,7 @@ export const MergeDialog: React.FC<MergeDialogProps> = ({
   filePath,
   theirs,
   yours,
-  base = '',
+  base = ''
 }) => {
   const [resolved, setResolved] = useState<string>(yours)
   const [activeTab, setActiveTab] = useState<'yours' | 'theirs' | 'merged'>('merged')
@@ -53,7 +53,7 @@ export const MergeDialog: React.FC<MergeDialogProps> = ({
 
   return createPortal(
     <div className="merge-dialog-overlay" onClick={onClose}>
-      <div className="merge-dialog" onClick={e => e.stopPropagation()}>
+      <div className="merge-dialog" onClick={(e) => e.stopPropagation()}>
         <div className="merge-dialog-header">
           <h3>⚠️ Conflict detected</h3>
           <span className="merge-file-path">{filePath}</span>
@@ -84,18 +84,14 @@ export const MergeDialog: React.FC<MergeDialogProps> = ({
         </div>
 
         <div className="merge-content">
-          {activeTab === 'yours' && (
-            <pre className="merge-pane read-only">{yours}</pre>
-          )}
-          {activeTab === 'theirs' && (
-            <pre className="merge-pane read-only">{theirs}</pre>
-          )}
+          {activeTab === 'yours' && <pre className="merge-pane read-only">{yours}</pre>}
+          {activeTab === 'theirs' && <pre className="merge-pane read-only">{theirs}</pre>}
           {activeTab === 'merged' && (
             <textarea
               ref={textareaRef}
               className="merge-pane editable"
               value={resolved}
-              onChange={e => setResolved(e.target.value)}
+              onChange={(e) => setResolved(e.target.value)}
               spellCheck={false}
             />
           )}
@@ -111,10 +107,18 @@ export const MergeDialog: React.FC<MergeDialogProps> = ({
           <button className="btn btn-secondary" onClick={applyYours}>
             Use Yours
           </button>
-          <button className="btn btn-primary" onClick={() => { onResolve(resolved); onClose() }}>
+          <button
+            className="btn btn-primary"
+            onClick={() => {
+              onResolve(resolved)
+              onClose()
+            }}
+          >
             Save Merged
           </button>
-          <button className="btn btn-ghost" onClick={onClose}>Cancel</button>
+          <button className="btn btn-ghost" onClick={onClose}>
+            Cancel
+          </button>
         </div>
       </div>
     </div>,

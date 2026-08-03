@@ -9,10 +9,7 @@ import { LocalGraphCanvas as LocalGraphView } from '../graph/LocalGraphCanvas'
 import { MergeDialog } from './MergeDialog'
 import { Icon } from '../ui/Icons'
 import { getActiveMode, subscribeThemePreferenceChange, type ThemeMode } from '../../utils/theme'
-import {
-  livePreviewExtension,
-  setLivePreviewOpenHandler
-} from './livePreviewExtension'
+import { livePreviewExtension, setLivePreviewOpenHandler } from './livePreviewExtension'
 
 /**
  * Minimal editor chrome. No @codemirror/lang-markdown here —
@@ -91,7 +88,7 @@ export const MarkdownEditor: React.FC = () => {
   const [formatOpen, setFormatOpen] = useState(false)
   const formatMenuRef = useRef<HTMLDivElement | null>(null)
 
-const activeTab = tabs.find((t) => t.id === activeTabId)
+  const activeTab = tabs.find((t) => t.id === activeTabId)
   const closeMergeDialog = useEditorStore((s) => s.closeMergeDialog)
   const resolveMergeDialog = useEditorStore((s) => s.resolveMergeDialog)
   const mergeDialog = useEditorStore((s) => s.mergeDialog)
@@ -102,10 +99,9 @@ const activeTab = tabs.find((t) => t.id === activeTabId)
    * Content is already LF-normalized on open; only re-normalize if \r sneaks in.
    */
   const rawContent = typeof activeTab?.content === 'string' ? activeTab.content : ''
-  const editorValue =
-    rawContent.includes('\r')
-      ? rawContent.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
-      : rawContent
+  const editorValue = rawContent.includes('\r')
+    ? rawContent.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
+    : rawContent
 
   /**
    * Freeze "big note" decision at tab switch — do NOT recompute on every keystroke.

@@ -53,10 +53,7 @@ class WikiLinkWidget extends WidgetType {
   }
   eq(o: WikiLinkWidget): boolean {
     return (
-      this.label === o.label &&
-      this.target === o.target &&
-      this.from === o.from &&
-      this.to === o.to
+      this.label === o.label && this.target === o.target && this.from === o.from && this.to === o.to
     )
   }
   toDOM(): HTMLElement {
@@ -79,12 +76,7 @@ function parseWikiInner(inner: string): { target: string; label: string } {
   const pipe = normalized.indexOf('|')
   let target = (pipe >= 0 ? normalized.slice(0, pipe) : normalized).trim()
   const alias = pipe >= 0 ? normalized.slice(pipe + 1).trim() : ''
-  target = target
-    .split('#')[0]
-    .split('^')[0]
-    .trim()
-    .replace(/\\/g, '/')
-    .replace(/\/+$/g, '')
+  target = target.split('#')[0].split('^')[0].trim().replace(/\\/g, '/').replace(/\/+$/g, '')
   return { target, label: alias || target || inner }
 }
 

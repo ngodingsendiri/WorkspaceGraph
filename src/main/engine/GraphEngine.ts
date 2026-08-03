@@ -750,7 +750,21 @@ export class GraphEngine {
    * The renderer can use this for layout calculation without stressing IPC serialization.
    */
   getGraphSkeleton(): {
-    nodes: Pick<GraphNode, 'id' | 'title' | 'type' | 'relativePath' | 'tags' | 'degree' | 'x' | 'y' | 'pinned' | 'isGhost' | 'isTag' | 'isAttachment'>[]
+    nodes: Pick<
+      GraphNode,
+      | 'id'
+      | 'title'
+      | 'type'
+      | 'relativePath'
+      | 'tags'
+      | 'degree'
+      | 'x'
+      | 'y'
+      | 'pinned'
+      | 'isGhost'
+      | 'isTag'
+      | 'isAttachment'
+    >[]
     edges: GraphEdge[]
     nodeCount: number
     edgeCount: number
@@ -1261,9 +1275,12 @@ export class GraphEngine {
   }
 
   filterByTag(tag: string): GraphData {
-    const filteredNodes = Array.from(this.nodes.values()).filter((n) =>
-      !n.isTag && !n.isGhost && !n.isAttachment &&
-      n.tags.some((t) => t.toLowerCase() === tag.toLowerCase())
+    const filteredNodes = Array.from(this.nodes.values()).filter(
+      (n) =>
+        !n.isTag &&
+        !n.isGhost &&
+        !n.isAttachment &&
+        n.tags.some((t) => t.toLowerCase() === tag.toLowerCase())
     )
     const filteredIds = new Set(filteredNodes.map((n) => n.id))
     const filteredEdges = Array.from(this.edges.values()).filter(

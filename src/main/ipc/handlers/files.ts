@@ -1,0 +1,160 @@
+import { ipcMain, shell } from 'electron'
+import fs from 'fs'
+import { workspaceEngine } from '../../engine/WorkspaceEngine'
+import { markdownEngine } from '../../engine/MarkdownEngine'
+import { assertPathInVault } from '../../security/PathSandbox'
+import {
+  requireOpenVault,
+  syncSingleFile,
+  markSelfWrite,
+  debounceEmit,
+  handleFileRemove
+} from '../shared'
+
+export function registerFileHandlers(): void {
+  /** Open any vault file (attachments) with OS default app — sandboxed to vault. */
+  ipcMain.handle('file:openExternal', async (_, filePath: string) => {
+    const root = requireOpenVault()
+    assertPathInVault(filePath, root)
+    if (!fs.existsSync(filePath)) {
+      return { ok: false, error: 'File not found' }
+    }
+    const err = await shell.openPath(filePath)
+    if (err) return { ok: false, error: err }
+    return { ok: true }
+  })
+
+  ipcMain.handle('file:read', async (_, filePath: string) => {
+    const root = requireOpenVault()
+    assertPathInVault(filePath, root)
+    const { content: raw } = workspaceEngine.readFile(filePath)
+    const state = workspaceEngine.getState()
+    // light:true — no wiki/heading scan, no HTML. Opening notes must stay snappy.
+    const parsed = markdownEngine.parseFile(filePath, raw, state.rootPath || '', {
+      light: true
+    })
+    return { ...parsed, html: '' }
+  })
+
+  ipcMain.handle('markdown:render', async (_, content: string) => {
+    try {
+      if (typeof content !== 'string') return ''
+      // Cap size so a pathological note cannot freeze the main process
+      const capped = content.length > 500_000 ? content.slice(0, 500_000) : content
+      // Strip frontmatter for preview body if present (LF-normalized inside engine)
+      let body = capped
+      if (body.startsWith('---')) {
+        const end = body.indexOf('\n---', 3)
+        if (end !== -1) body = body.slice(end + 4)
+        else {
+          // CRLF frontmatter close: \r\n---
+          const endCr = body.indexOf('\r\n---', 3)
+          if (endCr !== -1) body = body.slice(endCr + 5)
+        }
+      }
+      return markdownEngine.renderToHtml(body)
+    } catch (err) {
+      console.error('markdown:render failed:', err)
+      return '<p><em>Preview failed</em></p>'
+    }
+  })
+
+  ipcMain.handle(
+    'file:write',
+    async (
+      _,
+      { filePath, content, expectedMtime }: { filePath: string; content: string; expectedMtime?: number }
+    ) => {
+      const root = requireOpenVault()
+      assertPathInVault(filePath, root)
+      if (typeof content !== 'string' || content.length > 5_000_000) {
+        throw new Error('Invalid or oversized file content')
+      }
+      // Conflict detection: if file exists and expectedMtime provided, check it matches
+      let existingMtime: number | undefined
+      if (expectedMtime !== undefined) {
+        try {
+          const stats = fs.statSync(filePath)
+          existingMtime = stats.mtimeMs
+        } catch {
+          existingMtime = undefined
+        }
+        if (existingMtime !== undefined && existingMtime !== expectedMtime) {
+          // Conflict! Return both versions for merge UI
+          const theirs = workspaceEngine.readFile(filePath).content
+          return {
+            conflict: true,
+            existingMtime,
+            theirs,
+            yours: content
+          }
+        }
+      }
+      workspaceEngine.writeFile(filePath, content)
+      const state = workspaceEngine.getState()
+      if (state.rootPath) {
+        markSelfWrite(filePath)
+        syncSingleFile(filePath, state.rootPath)
+        debounceEmit()
+      }
+      return { conflict: false }
+    }
+  )
+
+  ipcMain.handle('file:delete', async (_, filePath: string) => {
+    const root = requireOpenVault()
+    assertPathInVault(filePath, root)
+    workspaceEngine.deleteFile(filePath)
+    handleFileRemove(filePath)
+    debounceEmit()
+    return true
+  })
+
+  ipcMain.handle(
+    'file:create',
+    async (_, { filePath, content }: { filePath: string; content?: string }) => {
+      const root = requireOpenVault()
+      assertPathInVault(filePath, root)
+      if (content !== undefined && (typeof content !== 'string' || content.length > 5_000_000)) {
+        throw new Error('Invalid or oversized file content')
+      }
+      workspaceEngine.createFile(filePath, content || '')
+      const state = workspaceEngine.getState()
+      if (state.rootPath) {
+        markSelfWrite(filePath)
+        syncSingleFile(filePath, state.rootPath)
+        debounceEmit()
+      }
+      return true
+    }
+  )
+
+  ipcMain.handle('file:createFolder', async (_, folderPath: string) => {
+    const root = requireOpenVault()
+    assertPathInVault(folderPath, root)
+    workspaceEngine.createFolder(folderPath)
+    debounceEmit()
+    return true
+  })
+
+  ipcMain.handle(
+    'file:rename',
+    async (_, { oldPath, newPath }: { oldPath: string; newPath: string }) => {
+      const root = requireOpenVault()
+      assertPathInVault(oldPath, root)
+      assertPathInVault(newPath, root)
+      // Auto-updates WikiLinks across vault; returns affected file list for toast notification
+      const result = workspaceEngine.renameFile(oldPath, newPath)
+      const state = workspaceEngine.getState()
+      if (state.rootPath) {
+        // Mark all affected files as self-written to suppress double-sync from chokidar
+        for (const f of result.affectedFiles) markSelfWrite(f)
+        markSelfWrite(newPath)
+        handleFileRemove(oldPath)
+        syncSingleFile(newPath, state.rootPath)
+        debounceEmit()
+      }
+      return { ok: true, renamedLinks: result.renamedLinks, affectedFiles: result.affectedFiles }
+    }
+  )
+}

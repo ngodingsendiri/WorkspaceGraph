@@ -4,6 +4,7 @@
 import path from 'path'
 import fs from 'fs'
 import { fileURLToPath } from 'url'
+import { readIpcSource } from './qa-ipc.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const root = path.join(__dirname, '..')
@@ -63,7 +64,7 @@ async function main() {
   const api = fs.readFileSync(path.join(root, 'src/main/api/InternalAPI.ts'), 'utf8')
   assert(api.includes('health') && api.includes('version'), 'internal API')
 
-  const ipc = fs.readFileSync(path.join(root, 'src/main/ipc/index.ts'), 'utf8')
+  const ipc = readIpcSource()
   assert(ipc.includes('automation:get') && ipc.includes('plugins:list'), 'IPC platform')
   assert(ipc.includes('security:status') && ipc.includes('api:health'), 'IPC security/health')
   assert(ipc.includes('assertPathInVault') || ipc.includes('isPathInVault'), 'IPC path sandbox')

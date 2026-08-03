@@ -262,8 +262,7 @@ export function mergeGraphSettings(partial?: Partial<GraphSettings> | null): Gra
         0.25,
         3
       ),
-      existingFilesOnly:
-        d.existingFilesOnly ?? DEFAULT_GRAPH_SETTINGS.display.existingFilesOnly,
+      existingFilesOnly: d.existingFilesOnly ?? DEFAULT_GRAPH_SETTINGS.display.existingFilesOnly,
       showTags: d.showTags ?? DEFAULT_GRAPH_SETTINGS.display.showTags,
       showAttachments: d.showAttachments ?? DEFAULT_GRAPH_SETTINGS.display.showAttachments,
       animateForces: d.animateForces ?? DEFAULT_GRAPH_SETTINGS.display.animateForces,
@@ -280,10 +279,7 @@ export function mergeGraphSettings(partial?: Partial<GraphSettings> | null): Gra
       localDepth: clamp(fil.localDepth ?? DEFAULT_GRAPH_SETTINGS.filters.localDepth, 1, 5),
       orphanMode,
       hubMode,
-      searchMode: normalizeSearchMode(
-        fil.searchMode,
-        DEFAULT_GRAPH_SETTINGS.filters.searchMode
-      )
+      searchMode: normalizeSearchMode(fil.searchMode, DEFAULT_GRAPH_SETTINGS.filters.searchMode)
     },
     groups: normalizeColorGroups(p.groups)
   }
@@ -349,9 +345,7 @@ export function saveGraphLayout(
     const existing = options?.replaceAll
       ? { nodes: {} as Record<string, GraphLayoutNodePos>, camera: null as GraphCamera | null }
       : loadGraphLayout(vaultRoot)
-    const nextNodes = options?.cameraOnly
-      ? { ...existing.nodes }
-      : { ...existing.nodes }
+    const nextNodes = options?.cameraOnly ? { ...existing.nodes } : { ...existing.nodes }
     if (!options?.cameraOnly) {
       for (const [id, pos] of Object.entries(patch.nodes || {})) {
         if (!id || !pos) continue
@@ -479,11 +473,7 @@ function sanitizeSnapshot(raw: Partial<GraphViewSnapshot> | null | undefined): G
     arrows: s.arrows ?? DEFAULT_VIEW_SNAPSHOT.arrows,
     textFade: clamp(Number(s.textFade ?? DEFAULT_VIEW_SNAPSHOT.textFade), 0.4, 2.5),
     nodeSize: clamp(Number(s.nodeSize ?? DEFAULT_VIEW_SNAPSHOT.nodeSize), 0.25, 2),
-    lineThickness: clamp(
-      Number(s.lineThickness ?? DEFAULT_VIEW_SNAPSHOT.lineThickness),
-      0.25,
-      3
-    ),
+    lineThickness: clamp(Number(s.lineThickness ?? DEFAULT_VIEW_SNAPSHOT.lineThickness), 0.25, 3),
     existingFilesOnly: s.existingFilesOnly ?? DEFAULT_VIEW_SNAPSHOT.existingFilesOnly,
     showTags: s.showTags ?? DEFAULT_VIEW_SNAPSHOT.showTags,
     showAttachments: s.showAttachments ?? DEFAULT_VIEW_SNAPSHOT.showAttachments,
@@ -503,8 +493,7 @@ function sanitizeSnapshot(raw: Partial<GraphViewSnapshot> | null | undefined): G
     showLabels: s.showLabels ?? true,
     showTagEdges: s.showTagEdges ?? false,
     showLegend: s.showLegend ?? false,
-    colorBy:
-      s.colorBy === 'folder' ? 'folder' : s.colorBy === 'type' ? 'type' : 'default',
+    colorBy: s.colorBy === 'folder' ? 'folder' : s.colorBy === 'type' ? 'type' : 'default',
     forces,
     perfMode: s.perfMode === 'quality' || s.perfMode === 'speed' ? s.perfMode : 'auto',
     arrows: disp.arrows,

@@ -96,7 +96,7 @@ export const WelcomeScreen: React.FC = () => {
           <div className="welcome-recent">
             <div className="section-title">Recent</div>
             <div className="flex flex-col gap-1">
-              {recentWorkspaces.map(p => (
+              {recentWorkspaces.map((p) => (
                 <button
                   key={p}
                   type="button"
@@ -106,7 +106,11 @@ export const WelcomeScreen: React.FC = () => {
                 >
                   <span className="truncate">{p.split(/[/\\]/).pop()}</span>
                   <span
-                    style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', maxWidth: '55%' }}
+                    style={{
+                      fontSize: 'var(--text-xs)',
+                      color: 'var(--text-muted)',
+                      maxWidth: '55%'
+                    }}
                     className="truncate"
                   >
                     {p}

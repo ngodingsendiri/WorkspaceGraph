@@ -1,7 +1,7 @@
 /**
  * Embedding Worker — runs Xenova Transformers (ONNX) in a separate thread.
  * Receives texts, returns Float32Array vectors.
- * 
+ *
  * This runs in a worker_thread, NOT the main Electron process.
  */
 import { parentPort, workerData } from 'worker_threads'
@@ -15,7 +15,6 @@ async function initEmbedder(): Promise<void> {
   if (embedder || initializing) return
   initializing = true
   try {
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
     const { pipeline, env } = await import('@xenova/transformers')
     env.allowLocalModels = false
     if (env.backends?.onnx) env.backends.onnx.logLevel = 'error'
@@ -37,7 +36,12 @@ async function embedTexts(texts: string[]): Promise<Float32Array[]> {
     const out = await embedder(texts[i], { pooling: 'mean', normalize: true })
     vectors.push(out.data as Float32Array)
     if (i % 5 === 0) {
-      parentPort?.postMessage({ type: 'progress', current: i + 1, total: texts.length, stage: 'embedding' } as WorkerResponse)
+      parentPort?.postMessage({
+        type: 'progress',
+        current: i + 1,
+        total: texts.length,
+        stage: 'embedding'
+      } as WorkerResponse)
     }
   }
   return vectors

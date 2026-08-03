@@ -457,9 +457,7 @@ export const GraphFiltersPanel: React.FC<GraphFiltersPanelProps> = ({
             }}
           />
           Existing files only
-          {ghostCount > 0 ? (
-            <span className="graph-filter-hint"> · {ghostCount} ghost</span>
-          ) : null}
+          {ghostCount > 0 ? <span className="graph-filter-hint"> · {ghostCount} ghost</span> : null}
         </label>
         <label className="graph-check">
           <input
@@ -917,8 +915,8 @@ export const GraphFiltersPanel: React.FC<GraphFiltersPanelProps> = ({
           </button>
         </div>
         <p className="graph-filter-hint">
-          Like Obsidian Forces. Drag = live layout; release = save. Reset / Default
-          preset restores built-in values.
+          Like Obsidian Forces. Drag = live layout; release = save. Reset / Default preset restores
+          built-in values.
         </p>
       </Section>
 

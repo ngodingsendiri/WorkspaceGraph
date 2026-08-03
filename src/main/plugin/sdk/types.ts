@@ -17,7 +17,7 @@ export interface PluginManifest {
   main: string
 }
 
-export type PluginPermission = 
+export type PluginPermission =
   | 'vault.read'
   | 'vault.write'
   | 'vault.delete'

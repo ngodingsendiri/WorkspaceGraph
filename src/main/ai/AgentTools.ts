@@ -369,7 +369,7 @@ export async function executeTool(action: ToolAction): Promise<ToolResult> {
         let finalContent = content
         if (fs.existsSync(abs) && !content.startsWith('---')) {
           try {
-const existing = workspaceEngine.readFile(abs).content
+            const existing = workspaceEngine.readFile(abs).content
             if (existing.startsWith('---')) {
               const end = findFrontmatterClose(existing)
               if (end !== -1) {
@@ -406,7 +406,7 @@ const existing = workspaceEngine.readFile(abs).content
         if (!abs || !fs.existsSync(abs)) {
           return { tool, ok: false, error: `Note not found for append: ${input}` }
         }
-const existing = workspaceEngine.readFile(abs).content
+        const existing = workspaceEngine.readFile(abs).content
         const merged = existing.replace(/\s*$/, '') + '\n\n' + content.trim() + '\n'
         const prop = createProposal('append_note', abs, merged, 'append')
         // Store only the append slice in preview; full content is merged for apply

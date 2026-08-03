@@ -39,8 +39,13 @@ describe('EmbeddingEngine', () => {
         exec: vi.fn(),
         prepare: vi.fn().mockReturnThis(),
         all: vi.fn().mockReturnValue([
-          { path: '/vault/A.md', chunk: 'content', vector: Buffer.from(new Float32Array([0.1, 0.2]).buffer), mtime_ms: 1000 },
-        ]),
+          {
+            path: '/vault/A.md',
+            chunk: 'content',
+            vector: Buffer.from(new Float32Array([0.1, 0.2]).buffer),
+            mtime_ms: 1000
+          }
+        ])
       }
       engine.loadFromDb(mockDb as any)
       expect(engine.getStatus().totalChunks).toBe(1)
@@ -51,8 +56,13 @@ describe('EmbeddingEngine', () => {
         exec: vi.fn(),
         prepare: vi.fn().mockReturnThis(),
         all: vi.fn().mockReturnValue([
-          { path: '/vault/A.md', chunk: 'content', vector: Buffer.from('invalid'), mtime_ms: 1000 },
-        ]),
+          {
+            path: '/vault/A.md',
+            chunk: 'content',
+            vector: Buffer.from('invalid'),
+            mtime_ms: 1000
+          }
+        ])
       }
       engine.loadFromDb(mockDb as any)
       expect(engine.getStatus().totalChunks).toBe(0)

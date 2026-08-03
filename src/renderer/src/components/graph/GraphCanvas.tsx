@@ -47,11 +47,7 @@ import {
   safeTags,
   escapeHtml
 } from './graphShared'
-import {
-  computeHotSet,
-  drawCanvas2DScene,
-  type DrawContext,
-} from './graphCanvas2D'
+import { computeHotSet, drawCanvas2DScene, type DrawContext } from './graphCanvas2D'
 import { Icon } from '../ui/Icons'
 
 import {
@@ -579,7 +575,9 @@ export const GraphCanvas: React.FC = () => {
       const list =
         points ||
         nodesRef.current
-          .filter((n) => n.x != null && n.y != null && Number.isFinite(n.x!) && Number.isFinite(n.y!))
+          .filter(
+            (n) => n.x != null && n.y != null && Number.isFinite(n.x!) && Number.isFinite(n.y!)
+          )
           .map((n) => ({ x: n.x as number, y: n.y as number }))
       for (const n of list) {
         total++
@@ -636,8 +634,7 @@ export const GraphCanvas: React.FC = () => {
       .filter((p) => p && Number.isFinite(p.x) && Number.isFinite(p.y))
       .map((p) => ({ x: p.x, y: p.y }))
 
-    const ok =
-      layoutPts.length === 0 ? true : cameraShowsPoints(layoutCamera, layoutPts)
+    const ok = layoutPts.length === 0 ? true : cameraShowsPoints(layoutCamera, layoutPts)
 
     if (!ok) {
       // Leave cameraHydrated false so first auto-fit may run — but mark restore attempted
@@ -836,9 +833,7 @@ export const GraphCanvas: React.FC = () => {
           if ((n.relativePath || '').toLowerCase().includes(q)) return true
           if ((n.type || '').toLowerCase() === q || (n.type || '').toLowerCase().includes(q))
             return true
-          return safeTags(n).some(
-            (t) => t.toLowerCase().includes(bare) || t.toLowerCase() === bare
-          )
+          return safeTags(n).some((t) => t.toLowerCase().includes(bare) || t.toLowerCase() === bare)
         })
         .map((n) => n.id)
     )
@@ -1010,62 +1005,61 @@ export const GraphCanvas: React.FC = () => {
       return
     }
     try {
-    // ── Size from STAGE (wrap) first — display must not depend on hidden canvas ──
-    const wrap = wrapRef.current
-    const canvas = canvasRef.current
-    const sized = syncCanvasSize()
-    let w = sized.ready ? sized.w : Math.floor(wrap?.clientWidth || 0)
-    let h = sized.ready ? sized.h : Math.floor(wrap?.clientHeight || 0)
-    if (w < 8 || h < 8) {
-      // If wrap has no dimensions at all, don't loop — wait for ResizeObserver
-      if (!wrap || wrap.clientWidth < 2 || wrap.clientHeight < 2) {
+      // ── Size from STAGE (wrap) first — display must not depend on hidden canvas ──
+      const wrap = wrapRef.current
+      const canvas = canvasRef.current
+      const sized = syncCanvasSize()
+      let w = sized.ready ? sized.w : Math.floor(wrap?.clientWidth || 0)
+      let h = sized.ready ? sized.h : Math.floor(wrap?.clientHeight || 0)
+      if (w < 8 || h < 8) {
+        // If wrap has no dimensions at all, don't loop — wait for ResizeObserver
+        if (!wrap || wrap.clientWidth < 2 || wrap.clientHeight < 2) {
+          dirtyRef.current = true
+          return
+        }
+        w = Math.max(320, Math.floor(window.innerWidth * 0.55))
+        h = Math.max(240, Math.floor(window.innerHeight * 0.65))
         dirtyRef.current = true
-        return
+        if (!rafRef.current) {
+          rafRef.current = requestAnimationFrame(() => {
+            rafRef.current = 0
+            paintFnRef.current()
+          })
+        }
+        // Still try to draw with fallback size — don't leave SVG blank forever
       }
-      w = Math.max(320, Math.floor(window.innerWidth * 0.55))
-      h = Math.max(240, Math.floor(window.innerHeight * 0.65))
-      dirtyRef.current = true
-      if (!rafRef.current) {
-        rafRef.current = requestAnimationFrame(() => {
-          rafRef.current = 0
-          paintFnRef.current()
-        })
-      }
-      // Still try to draw with fallback size — don't leave SVG blank forever
-    }
 
-    const pal = paletteRef.current
-    const t = transformRef.current
-    const simNodes = nodesRef.current
-    const simLinks = linksRef.current
-    const hover = hoverIdRef.current
-    /** Animated 0..1 — multiplies hover dim so enter/leave doesn't hard-flash */
-    const hs = hoverStrengthRef.current
-    const flags = viewFlagsRef.current
-    const lod = resolveLod(simNodes.length, flags.perfMode)
-    const large = lod !== 'full' || simNodes.length > 100
+      const pal = paletteRef.current
+      const t = transformRef.current
+      const simNodes = nodesRef.current
+      const simLinks = linksRef.current
+      const hover = hoverIdRef.current
+      /** Animated 0..1 — multiplies hover dim so enter/leave doesn't hard-flash */
+      const hs = hoverStrengthRef.current
+      const flags = viewFlagsRef.current
+      const lod = resolveLod(simNodes.length, flags.perfMode)
+      const large = lod !== 'full' || simNodes.length > 100
 
-    const kSafe = Math.max(t.k, 0.05)
+      const kSafe = Math.max(t.k, 0.05)
 
-    const pathN = flags.pathNodeIds
-    const pathE = flags.pathEdgeKeys
-    const focN = flags.focusNodeIds
-    const focE = flags.focusEdgeKeys
-    const focusId = flags.focusedId
-    const colorMode = flags.colorBy
-    const matchIds = flags.searchMatchIds
-    const thr = flags.hubThreshold
-    const dimHubsOn = flags.dimHubs
+      const pathN = flags.pathNodeIds
+      const pathE = flags.pathEdgeKeys
+      const focN = flags.focusNodeIds
+      const focE = flags.focusEdgeKeys
+      const focusId = flags.focusedId
+      const colorMode = flags.colorBy
+      const matchIds = flags.searchMatchIds
+      const thr = flags.hubThreshold
+      const dimHubsOn = flags.dimHubs
 
-    // ── 1) React SVG frame (Obsidian: world-space graph + screen labels) ──
-    let drawn = 0
-    try {
-      if (simNodes.length === 0) {
-        emptySvgFramesRef.current++
-        // Keep last React frame during short rebuilds; only clear after many empty frames
-        if (emptySvgFramesRef.current >= 12) {
-          pushSvgFrame(
-            {
+      // ── 1) React SVG frame (Obsidian: world-space graph + screen labels) ──
+      let drawn = 0
+      try {
+        if (simNodes.length === 0) {
+          emptySvgFramesRef.current++
+          // Keep last React frame during short rebuilds; only clear after many empty frames
+          if (emptySvgFramesRef.current >= 12) {
+            pushSvgFrame({
               w: Math.max(1, w),
               h: Math.max(1, h),
               tx: t.x,
@@ -1075,240 +1069,253 @@ export const GraphCanvas: React.FC = () => {
               nodes: [],
               labels: [],
               hud: 'sim:0 · kosong — cek filter / data vault'
-            }
-          )
-        }
-      } else {
-        emptySvgFramesRef.current = 0
-        const sizeMul = flags.nodeSize || 1
-        const lineMul = flags.lineThickness || 1
-
-        // Hover neighbor set (Obsidian: dim non-neighbors)
-        let hot: Set<string> | null = null
-        if (hover && hs > 0.02) {
-          hot = new Set([hover])
-          for (const e of simLinks) {
-            const s = nid(e.source)
-            const tg = nid(e.target)
-            if (s === hover) hot.add(tg)
-            if (tg === hover) hot.add(s)
-          }
-        }
-
-        for (const n of simNodes) {
-          if (n.x == null || n.y == null || !Number.isFinite(n.x) || !Number.isFinite(n.y)) continue
-          const sx = n.x * t.k + t.x
-          const sy = n.y * t.k + t.y
-          if (sx >= -40 && sx <= w + 40 && sy >= -40 && sy <= h + 40) drawn++
-        }
-
-        const byId = new Map(simNodes.map((n) => [n.id, n]))
-        const end = (x: string | SimNode): SimNode | null => {
-          if (x && typeof x === 'object' && 'id' in x) return x as SimNode
-          if (typeof x === 'string') return byId.get(x) || null
-          return null
-        }
-
-        const maxE = Math.min(simLinks.length, lod === 'low' ? 500 : lod === 'medium' ? 1500 : 6000)
-        const edgesOut: SvgEdge[] = []
-        let edgeList = simLinks
-        if (simLinks.length > maxE) {
-          edgeList = [...simLinks]
-            .sort((a, b) => {
-              const score = (e: SimLink) => {
-                const s = end(e.source as string | SimNode)
-                const tg = end(e.target as string | SimNode)
-                if (!s?.id || !tg?.id) return 0
-                const ek = edgeKey(s.id, tg.id)
-                if (pathE != null && pathE.has(ek)) return 3
-                if (focE != null && focE.has(ek)) return 2
-                if (hot && (s.id === hover || tg.id === hover)) return 2
-                return 0
-              }
-              return score(b) - score(a)
             })
-            .slice(0, maxE)
-        }
-        for (const e of edgeList) {
-          const s = end(e.source as string | SimNode)
-          const tg = end(e.target as string | SimNode)
-          if (!s?.id || !tg?.id || s.x == null || s.y == null || tg.x == null || tg.y == null) continue
-          if (!Number.isFinite(s.x) || !Number.isFinite(s.y) || !Number.isFinite(tg.x) || !Number.isFinite(tg.y))
-            continue
-          const ek = edgeKey(s.id, tg.id)
-          const onPath = pathE != null && pathE.has(ek)
-          const onFoc = focE != null && focE.has(ek)
-          const isHot =
-            Boolean(hot) &&
-            (s.id === hover || tg.id === hover) &&
-            hot!.has(s.id) &&
-            hot!.has(tg.id)
-          const dimHover = Boolean(hot && !isHot && pathN == null && focN == null)
-          const dimPath = pathN != null && !onPath
-          const dimFocus = pathN == null && focN != null && !onFoc
-          const dimSearch =
-            pathN == null &&
-            focN == null &&
-            matchIds != null &&
-            !matchIds.has(s.id) &&
-            !matchIds.has(tg.id)
-          let op = e.type === 'tag' ? 0.45 : 0.55
-          if (onPath) op = 0.92
-          else if (onFoc) op = 0.78
-          else if (isHot) op = lerp(op, 0.88, hs)
-          else if (dimHover) op = lerp(op, 0.12, hs)
-          else if (dimPath || dimFocus) op = 0.12
-          else if (dimSearch) op = 0.14
-          // World-space stroke (scales with zoom via group transform)
-          const sw =
-            (onPath ? 1.6 : isHot ? lerp(0.85, 1.15, hs) : e.type === 'tag' ? 0.55 : 0.75) *
-            lineMul
-          edgesOut.push({
-            key: ek,
-            x1: s.x,
-            y1: s.y,
-            x2: tg.x,
-            y2: tg.y,
-            stroke: onPath || (isHot && hs > 0.45) ? pal.edgeHot : e.type === 'tag' ? pal.edgeTag : pal.edge,
-            sw,
-            op,
-            dash: e.type === 'tag' && !onPath ? '3 4' : undefined
-          })
-        }
+          }
+        } else {
+          emptySvgFramesRef.current = 0
+          const sizeMul = flags.nodeSize || 1
+          const lineMul = flags.lineThickness || 1
 
-        const nodesOut: SvgNode[] = []
-        const labelsOut: SvgLabel[] = []
-        const labelsOn = showLabelsRef.current
-        const maxLabels = labelsOn ? labelDrawBudget(lod) : 0
-        let labCount = 0
-        const sel = flags.selectedIds
-        for (const n of simNodes) {
-          if (n.x == null || n.y == null || !Number.isFinite(n.x) || !Number.isFinite(n.y)) continue
-          const sx = n.x * t.k + t.x
-          const sy = n.y * t.k + t.y
-          // Frustum in screen space
-          if (sx < -40 || sy < -40 || sx > w + 40 || sy > h + 40) continue
-
-          const isTag = Boolean(n.isTag || n.type === 'tag')
-          const isGhost = Boolean(n.isGhost || n.type === 'ghost')
-          const isAtt = Boolean(n.isAttachment || n.type === 'attachment')
-          const isHub = !isGhost && !isTag && n.degree >= thr
-          const col = canvasSafeColor(
-            resolveObsidianNodeFill({
-              isLight: pal.isLight,
-              isGhost,
-              isTag,
-              isAttachment: isAtt,
-              type: n.type,
-              relativePath: n.relativePath,
-              groupColor: flags.groupColors?.get(n.id) || null,
-              colorBy: colorMode === 'folder' || colorMode === 'type' ? colorMode : 'default'
-            }),
-            pal.colors.default || '#7c6cf0'
-          )
-          const deg = typeof n.degree === 'number' ? n.degree : 0
-          // World radius — scales with zoom (Obsidian feel)
-          const rWorld = Math.max(
-            2.2,
-            nodeRadius(deg, sizeMul, dimHubsOn && isHub) * (isTag || isAtt ? 0.9 : 1)
-          )
-          const isHover = n.id === hover
-          const isSel = sel != null && sel.has(n.id)
-          const onPath = pathN != null && pathN.has(n.id)
-          const onFoc = focN != null && focN.has(n.id)
-          const isMatch = matchIds != null && matchIds.has(n.id)
-          let fillOp = isGhost ? 0.5 : 1
-          if (pathN != null && !onPath && !isSel && !isHover) fillOp *= 0.22
-          else if (pathN == null && focN != null && !onFoc && !isSel && !isHover) fillOp *= 0.26
-          else if (
-            pathN == null &&
-            focN == null &&
-            matchIds != null &&
-            !matchIds.has(n.id) &&
-            !isSel &&
-            !isHover
-          ) {
-            fillOp *= 0.3
-          } else if (hot && !hot.has(n.id) && pathN == null && focN == null) {
-            fillOp *= lerp(1, 0.22, hs)
+          // Hover neighbor set (Obsidian: dim non-neighbors)
+          let hot: Set<string> | null = null
+          if (hover && hs > 0.02) {
+            hot = new Set([hover])
+            for (const e of simLinks) {
+              const s = nid(e.source)
+              const tg = nid(e.target)
+              if (s === hover) hot.add(tg)
+              if (tg === hover) hot.add(s)
+            }
           }
 
-          const stroke =
-            isHover || isSel || onPath || isMatch ? pal.edgeHot : isGhost ? col : pal.nodeStroke
-          const sw = isSel || onPath ? 1.35 : isHover ? lerp(0.7, 1.1, hs) : isGhost ? 1 : 0.55
+          for (const n of simNodes) {
+            if (n.x == null || n.y == null || !Number.isFinite(n.x) || !Number.isFinite(n.y))
+              continue
+            const sx = n.x * t.k + t.x
+            const sy = n.y * t.k + t.y
+            if (sx >= -40 && sx <= w + 40 && sy >= -40 && sy <= h + 40) drawn++
+          }
 
-          nodesOut.push({
-            key: n.id,
-            kind: isGhost ? 'ghost' : 'circle',
-            cx: n.x,
-            cy: n.y,
-            r: rWorld,
-            fill: isGhost ? (pal.isLight ? 'rgba(255,255,255,0.35)' : 'rgba(20,22,28,0.4)') : col,
-            stroke,
-            sw,
-            fillOp,
-            strokeOp: isGhost ? Math.min(1, fillOp + 0.25) : fillOp
-          })
-          if (isSel) {
+          const byId = new Map(simNodes.map((n) => [n.id, n]))
+          const end = (x: string | SimNode): SimNode | null => {
+            if (x && typeof x === 'object' && 'id' in x) return x as SimNode
+            if (typeof x === 'string') return byId.get(x) || null
+            return null
+          }
+
+          const maxE = Math.min(
+            simLinks.length,
+            lod === 'low' ? 500 : lod === 'medium' ? 1500 : 6000
+          )
+          const edgesOut: SvgEdge[] = []
+          let edgeList = simLinks
+          if (simLinks.length > maxE) {
+            edgeList = [...simLinks]
+              .sort((a, b) => {
+                const score = (e: SimLink) => {
+                  const s = end(e.source as string | SimNode)
+                  const tg = end(e.target as string | SimNode)
+                  if (!s?.id || !tg?.id) return 0
+                  const ek = edgeKey(s.id, tg.id)
+                  if (pathE != null && pathE.has(ek)) return 3
+                  if (focE != null && focE.has(ek)) return 2
+                  if (hot && (s.id === hover || tg.id === hover)) return 2
+                  return 0
+                }
+                return score(b) - score(a)
+              })
+              .slice(0, maxE)
+          }
+          for (const e of edgeList) {
+            const s = end(e.source as string | SimNode)
+            const tg = end(e.target as string | SimNode)
+            if (!s?.id || !tg?.id || s.x == null || s.y == null || tg.x == null || tg.y == null)
+              continue
+            if (
+              !Number.isFinite(s.x) ||
+              !Number.isFinite(s.y) ||
+              !Number.isFinite(tg.x) ||
+              !Number.isFinite(tg.y)
+            )
+              continue
+            const ek = edgeKey(s.id, tg.id)
+            const onPath = pathE != null && pathE.has(ek)
+            const onFoc = focE != null && focE.has(ek)
+            const isHot =
+              Boolean(hot) &&
+              (s.id === hover || tg.id === hover) &&
+              hot!.has(s.id) &&
+              hot!.has(tg.id)
+            const dimHover = Boolean(hot && !isHot && pathN == null && focN == null)
+            const dimPath = pathN != null && !onPath
+            const dimFocus = pathN == null && focN != null && !onFoc
+            const dimSearch =
+              pathN == null &&
+              focN == null &&
+              matchIds != null &&
+              !matchIds.has(s.id) &&
+              !matchIds.has(tg.id)
+            let op = e.type === 'tag' ? 0.45 : 0.55
+            if (onPath) op = 0.92
+            else if (onFoc) op = 0.78
+            else if (isHot) op = lerp(op, 0.88, hs)
+            else if (dimHover) op = lerp(op, 0.12, hs)
+            else if (dimPath || dimFocus) op = 0.12
+            else if (dimSearch) op = 0.14
+            // World-space stroke (scales with zoom via group transform)
+            const sw =
+              (onPath ? 1.6 : isHot ? lerp(0.85, 1.15, hs) : e.type === 'tag' ? 0.55 : 0.75) *
+              lineMul
+            edgesOut.push({
+              key: ek,
+              x1: s.x,
+              y1: s.y,
+              x2: tg.x,
+              y2: tg.y,
+              stroke:
+                onPath || (isHot && hs > 0.45)
+                  ? pal.edgeHot
+                  : e.type === 'tag'
+                    ? pal.edgeTag
+                    : pal.edge,
+              sw,
+              op,
+              dash: e.type === 'tag' && !onPath ? '3 4' : undefined
+            })
+          }
+
+          const nodesOut: SvgNode[] = []
+          const labelsOut: SvgLabel[] = []
+          const labelsOn = showLabelsRef.current
+          const maxLabels = labelsOn ? labelDrawBudget(lod) : 0
+          let labCount = 0
+          const sel = flags.selectedIds
+          for (const n of simNodes) {
+            if (n.x == null || n.y == null || !Number.isFinite(n.x) || !Number.isFinite(n.y))
+              continue
+            const sx = n.x * t.k + t.x
+            const sy = n.y * t.k + t.y
+            // Frustum in screen space
+            if (sx < -40 || sy < -40 || sx > w + 40 || sy > h + 40) continue
+
+            const isTag = Boolean(n.isTag || n.type === 'tag')
+            const isGhost = Boolean(n.isGhost || n.type === 'ghost')
+            const isAtt = Boolean(n.isAttachment || n.type === 'attachment')
+            const isHub = !isGhost && !isTag && n.degree >= thr
+            const col = canvasSafeColor(
+              resolveObsidianNodeFill({
+                isLight: pal.isLight,
+                isGhost,
+                isTag,
+                isAttachment: isAtt,
+                type: n.type,
+                relativePath: n.relativePath,
+                groupColor: flags.groupColors?.get(n.id) || null,
+                colorBy: colorMode === 'folder' || colorMode === 'type' ? colorMode : 'default'
+              }),
+              pal.colors.default || '#7c6cf0'
+            )
+            const deg = typeof n.degree === 'number' ? n.degree : 0
+            // World radius — scales with zoom (Obsidian feel)
+            const rWorld = Math.max(
+              2.2,
+              nodeRadius(deg, sizeMul, dimHubsOn && isHub) * (isTag || isAtt ? 0.9 : 1)
+            )
+            const isHover = n.id === hover
+            const isSel = sel != null && sel.has(n.id)
+            const onPath = pathN != null && pathN.has(n.id)
+            const onFoc = focN != null && focN.has(n.id)
+            const isMatch = matchIds != null && matchIds.has(n.id)
+            let fillOp = isGhost ? 0.5 : 1
+            if (pathN != null && !onPath && !isSel && !isHover) fillOp *= 0.22
+            else if (pathN == null && focN != null && !onFoc && !isSel && !isHover) fillOp *= 0.26
+            else if (
+              pathN == null &&
+              focN == null &&
+              matchIds != null &&
+              !matchIds.has(n.id) &&
+              !isSel &&
+              !isHover
+            ) {
+              fillOp *= 0.3
+            } else if (hot && !hot.has(n.id) && pathN == null && focN == null) {
+              fillOp *= lerp(1, 0.22, hs)
+            }
+
+            const stroke =
+              isHover || isSel || onPath || isMatch ? pal.edgeHot : isGhost ? col : pal.nodeStroke
+            const sw = isSel || onPath ? 1.35 : isHover ? lerp(0.7, 1.1, hs) : isGhost ? 1 : 0.55
+
             nodesOut.push({
-              key: n.id + ':sel',
-              kind: 'circle',
+              key: n.id,
+              kind: isGhost ? 'ghost' : 'circle',
               cx: n.x,
               cy: n.y,
-              r: rWorld + 2.2,
-              fill: 'none',
-              stroke: pal.edgeHot,
-              sw: 0.9,
-              fillOp: 0,
-              strokeOp: 0.75
+              r: rWorld,
+              fill: isGhost ? (pal.isLight ? 'rgba(255,255,255,0.35)' : 'rgba(20,22,28,0.4)') : col,
+              stroke,
+              sw,
+              fillOp,
+              strokeOp: isGhost ? Math.min(1, fillOp + 0.25) : fillOp
+            })
+            if (isSel) {
+              nodesOut.push({
+                key: n.id + ':sel',
+                kind: 'circle',
+                cx: n.x,
+                cy: n.y,
+                r: rWorld + 2.2,
+                fill: 'none',
+                stroke: pal.edgeHot,
+                sw: 0.9,
+                fillOp: 0,
+                strokeOp: 0.75
+              })
+            }
+
+            // Labels: screen-space + Obsidian text fade by zoom
+            const forceLab = isHover || isSel || onPath || onFoc || n.id === focusId || isMatch
+            let zA = labelZoomAlpha(kSafe, flags.textFade, deg)
+            if (forceLab) zA = Math.max(zA, smooth01(Math.min(1, kSafe / 0.4)) * 0.95)
+            if (!labelsOn || zA < 0.04 || labCount >= maxLabels) continue
+            if (lod === 'low' && !forceLab && deg < 3) continue
+            if (lod === 'medium' && !forceLab && deg < 2) continue
+            if (large && lod === 'full' && !forceLab && deg < 2 && simNodes.length > 120) continue
+
+            let labOp = zA
+            if (hot && !hot.has(n.id) && !forceLab) labOp *= lerp(1, 0.15, hs)
+            else if (pathN != null && !onPath && !forceLab) labOp *= 0.15
+            else if (matchIds != null && !matchIds.has(n.id) && !forceLab) labOp *= 0.18
+
+            const titleStr = String(n.title || n.relativePath || n.id || '')
+            const text = titleStr.length > 28 ? titleStr.slice(0, 27) + '…' : titleStr
+            labelsOut.push({
+              key: n.id,
+              x: sx + rWorld * kSafe + 5,
+              y: sy + 1,
+              text,
+              fill: forceLab ? pal.edgeHot : pal.label,
+              bold: Boolean(forceLab),
+              op: labOp
+            })
+            labCount++
+          }
+
+          if (nodesOut.length === 0 && simNodes.length > 0) {
+            // Screen-space helper (outside transform) via labels only + one node at origin-ish
+            labelsOut.push({
+              key: '__offscreen-lab',
+              x: w / 2,
+              y: h / 2,
+              text: `${simNodes.length} node di luar layar — tekan F (Fit)`,
+              fill: '#f0c060',
+              bold: true,
+              op: 1
             })
           }
 
-          // Labels: screen-space + Obsidian text fade by zoom
-          const forceLab =
-            isHover || isSel || onPath || onFoc || n.id === focusId || isMatch
-          let zA = labelZoomAlpha(kSafe, flags.textFade, deg)
-          if (forceLab) zA = Math.max(zA, smooth01(Math.min(1, kSafe / 0.4)) * 0.95)
-          if (!labelsOn || zA < 0.04 || labCount >= maxLabels) continue
-          if (lod === 'low' && !forceLab && deg < 3) continue
-          if (lod === 'medium' && !forceLab && deg < 2) continue
-          if (large && lod === 'full' && !forceLab && deg < 2 && simNodes.length > 120) continue
-
-          let labOp = zA
-          if (hot && !hot.has(n.id) && !forceLab) labOp *= lerp(1, 0.15, hs)
-          else if (pathN != null && !onPath && !forceLab) labOp *= 0.15
-          else if (matchIds != null && !matchIds.has(n.id) && !forceLab) labOp *= 0.18
-
-          const titleStr = String(n.title || n.relativePath || n.id || '')
-          const text = titleStr.length > 28 ? titleStr.slice(0, 27) + '…' : titleStr
-          labelsOut.push({
-            key: n.id,
-            x: sx + rWorld * kSafe + 5,
-            y: sy + 1,
-            text,
-            fill: forceLab ? pal.edgeHot : pal.label,
-            bold: Boolean(forceLab),
-            op: labOp
-          })
-          labCount++
-        }
-
-        if (nodesOut.length === 0 && simNodes.length > 0) {
-          // Screen-space helper (outside transform) via labels only + one node at origin-ish
-          labelsOut.push({
-            key: '__offscreen-lab',
-            x: w / 2,
-            y: h / 2,
-            text: `${simNodes.length} node di luar layar — tekan F (Fit)`,
-            fill: '#f0c060',
-            bold: true,
-            op: 1
-          })
-        }
-
-        const hud = `${simNodes.length} notes · ${simLinks.length} links · k:${kSafe.toFixed(2)}`
-        pushSvgFrame(
-          {
+          const hud = `${simNodes.length} notes · ${simLinks.length} links · k:${kSafe.toFixed(2)}`
+          pushSvgFrame({
             w: Math.max(1, w),
             h: Math.max(1, h),
             tx: t.x,
@@ -1318,13 +1325,11 @@ export const GraphCanvas: React.FC = () => {
             nodes: nodesOut,
             labels: labelsOut,
             hud
-          }
-        )
-      }
-    } catch (svgErr) {
-      console.error('[GraphCanvas] SVG frame failed:', svgErr)
-      pushSvgFrame(
-        {
+          })
+        }
+      } catch (svgErr) {
+        console.error('[GraphCanvas] SVG frame failed:', svgErr)
+        pushSvgFrame({
           w: Math.max(1, w),
           h: Math.max(1, h),
           tx: 0,
@@ -1334,15 +1339,32 @@ export const GraphCanvas: React.FC = () => {
           nodes: [],
           labels: [],
           hud: `SVG error · sim:${simNodes.length}`
-        }
-      )
-    }
+        })
+      }
 
-    // Off-screen recovery ONLY on first load — never after user pan/zoom or vault camera (BUG-2)
-    if (simNodes.length > 0 && drawn === 0 && canAutoFitCamera()) {
-      const now = Date.now()
-      if (now - lastAutoFitOffscreenAtRef.current > 900) {
-        lastAutoFitOffscreenAtRef.current = now
+      // Off-screen recovery ONLY on first load — never after user pan/zoom or vault camera (BUG-2)
+      if (simNodes.length > 0 && drawn === 0 && canAutoFitCamera()) {
+        const now = Date.now()
+        if (now - lastAutoFitOffscreenAtRef.current > 900) {
+          lastAutoFitOffscreenAtRef.current = now
+          requestAnimationFrame(() => {
+            try {
+              if (!canAutoFitCamera()) return
+              fitViewRef.current?.(false)
+              hasAutoFitRef.current = true
+            } catch {
+              /* ignore */
+            }
+          })
+        }
+      }
+
+      // First-fit once nodes exist (skipped if vault camera restored)
+      if (
+        simNodes.length > 0 &&
+        canAutoFitCamera() &&
+        simNodes.some((n) => n.x != null && n.y != null)
+      ) {
         requestAnimationFrame(() => {
           try {
             if (!canAutoFitCamera()) return
@@ -1353,61 +1375,53 @@ export const GraphCanvas: React.FC = () => {
           }
         })
       }
-    }
 
-    // First-fit once nodes exist (skipped if vault camera restored)
-    if (
-      simNodes.length > 0 &&
-      canAutoFitCamera() &&
-      simNodes.some((n) => n.x != null && n.y != null)
-    ) {
-      requestAnimationFrame(() => {
-        try {
-          if (!canAutoFitCamera()) return
-          fitViewRef.current?.(false)
-          hasAutoFitRef.current = true
-        } catch {
-          /* ignore */
+      // ── 2) Hidden canvas = PNG fallback only — skip every frame (display is SVG)
+      if (!exportCanvasPaintRef.current) {
+        dirtyRef.current = false
+        return
+      }
+      exportCanvasPaintRef.current = false
+
+      const ctx = canvas?.getContext('2d') || null
+      if (!ctx || !canvas || simNodes.length === 0) {
+        dirtyRef.current = false
+        return
+      }
+      const dpr = Math.min(window.devicePixelRatio || 1, 2)
+      try {
+        ctx.setTransform(1, 0, 0, 1, 0, 0)
+        ctx.globalAlpha = 1
+        ctx.globalCompositeOperation = 'source-over'
+
+        // Delegate to shared Canvas 2D drawing (same code as interactive gesture path)
+        const dc: DrawContext = {
+          ctx,
+          w,
+          h,
+          dpr,
+          pal,
+          tx: t.x,
+          ty: t.y,
+          k: t.k,
+          simNodes,
+          simLinks,
+          hover,
+          hoverStrength: hs,
+          flags,
+          pulse: pathPulseRef.current,
+          lod,
+          large,
+          showLabels: showLabelsRef.current
         }
-      })
-    }
+        const hotExport = computeHotSet(hover, hs, simLinks)
+        drawCanvas2DScene(dc, hotExport)
+      } catch (canvasErr) {
+        // Export buffer only — never blank the SVG display path
+        console.error('[GraphCanvas] export-canvas paint failed:', canvasErr)
+      }
 
-    // ── 2) Hidden canvas = PNG fallback only — skip every frame (display is SVG)
-    if (!exportCanvasPaintRef.current) {
       dirtyRef.current = false
-      return
-    }
-    exportCanvasPaintRef.current = false
-
-    const ctx = canvas?.getContext('2d') || null
-    if (!ctx || !canvas || simNodes.length === 0) {
-      dirtyRef.current = false
-      return
-    }
-    const dpr = Math.min(window.devicePixelRatio || 1, 2)
-    try {
-    ctx.setTransform(1, 0, 0, 1, 0, 0)
-    ctx.globalAlpha = 1
-    ctx.globalCompositeOperation = 'source-over'
-
-    // Delegate to shared Canvas 2D drawing (same code as interactive gesture path)
-    const dc: DrawContext = {
-      ctx, w, h, dpr, pal,
-      tx: t.x, ty: t.y, k: t.k,
-      simNodes, simLinks,
-      hover, hoverStrength: hs,
-      flags, pulse: pathPulseRef.current,
-      lod, large,
-      showLabels: showLabelsRef.current,
-    }
-    const hotExport = computeHotSet(hover, hs, simLinks)
-    drawCanvas2DScene(dc, hotExport)
-    } catch (canvasErr) {
-      // Export buffer only — never blank the SVG display path
-      console.error('[GraphCanvas] export-canvas paint failed:', canvasErr)
-    }
-
-    dirtyRef.current = false
     } catch (err) {
       console.error('[GraphCanvas] paint failed:', err)
       dirtyRef.current = true
@@ -1450,13 +1464,23 @@ export const GraphCanvas: React.FC = () => {
     const large = lod !== 'full' || simNodes.length > 100
     try {
       const dc: DrawContext = {
-        ctx, w, h, dpr, pal,
-        tx: t.x, ty: t.y, k: t.k,
-        simNodes, simLinks,
-        hover, hoverStrength: hs,
-        flags, pulse: pathPulseRef.current,
-        lod, large,
-        showLabels: showLabelsRef.current,
+        ctx,
+        w,
+        h,
+        dpr,
+        pal,
+        tx: t.x,
+        ty: t.y,
+        k: t.k,
+        simNodes,
+        simLinks,
+        hover,
+        hoverStrength: hs,
+        flags,
+        pulse: pathPulseRef.current,
+        lod,
+        large,
+        showLabels: showLabelsRef.current
       }
       const hot = computeHotSet(hover, hs, simLinks)
       drawCanvas2DScene(dc, hot)
@@ -1613,31 +1637,27 @@ export const GraphCanvas: React.FC = () => {
       }
       schedulePaint()
       // Fit only if allowed and camera not restored / user not panned
-      if (
-        opts?.allowFit !== false &&
-        nodesRef.current.length > 0 &&
-        canAutoFitCamera()
-      ) {
-        kickRafs.push(requestAnimationFrame(() => {
-          try {
-            if (!canAutoFitCamera()) return
-            fitViewRef.current?.(false)
-            hasAutoFitRef.current = true
-            paintFnRef.current()
-            schedulePaint()
-          } catch {
-            /* ignore */
-          }
-        }))
+      if (opts?.allowFit !== false && nodesRef.current.length > 0 && canAutoFitCamera()) {
+        kickRafs.push(
+          requestAnimationFrame(() => {
+            try {
+              if (!canAutoFitCamera()) return
+              fitViewRef.current?.(false)
+              hasAutoFitRef.current = true
+              paintFnRef.current()
+              schedulePaint()
+            } catch {
+              /* ignore */
+            }
+          })
+        )
       }
     }
 
     kick('graph-enter')
     // Fewer delayed kicks — only seed/paint + one fit chance if still needed
     const delays = [120, 400, 1000]
-    const timers = delays.map((ms) =>
-      setTimeout(() => kick(`graph-enter-${ms}`), ms)
-    )
+    const timers = delays.map((ms) => setTimeout(() => kick(`graph-enter-${ms}`), ms))
 
     let ro: ResizeObserver | null = null
     const kickRafs: number[] = []
@@ -1738,8 +1758,7 @@ export const GraphCanvas: React.FC = () => {
       spatialRef.current.rebuild(all)
       spatialDirtyRef.current = false
     }
-    const candidates =
-      all.length > 80 ? spatialRef.current.query(x, y, 80) : all
+    const candidates = all.length > 80 ? spatialRef.current.query(x, y, 80) : all
 
     let best: SimNode | null = null
     let bestD = Infinity
@@ -1858,16 +1877,15 @@ export const GraphCanvas: React.FC = () => {
     // Skip rebuild if node set hasn't changed (e.g. spotlight searchQuery change)
     const newIds = filteredNodes.map((n) => n.id)
     const prevIds = nodesRef.current.map((n) => n.id)
-    if (
-      newIds.length === prevIds.length &&
-      newIds.every((id, i) => id === prevIds[i])
-    ) {
+    if (newIds.length === prevIds.length && newIds.every((id, i) => id === prevIds[i])) {
       // Still update links if edges changed
       const idSet = new Set(newIds)
       const simLinks: SimLink[] = []
       for (const e of filteredEdges) {
-        const src = typeof e.source === 'string' ? e.source : String((e as { source?: string }).source || '')
-        const tgt = typeof e.target === 'string' ? e.target : String((e as { target?: string }).target || '')
+        const src =
+          typeof e.source === 'string' ? e.source : String((e as { source?: string }).source || '')
+        const tgt =
+          typeof e.target === 'string' ? e.target : String((e as { target?: string }).target || '')
         if (!src || !tgt || src === tgt) continue
         if (!idSet.has(src) || !idSet.has(tgt)) continue
         simLinks.push({
@@ -1965,9 +1983,7 @@ export const GraphCanvas: React.FC = () => {
       // Soft merge if we already had a sim and overlap is significant
       const overlap = simNodes.filter((s) => prevById.has(s.id)).length
       const canSoft =
-        simRef.current != null &&
-        prevCount > 0 &&
-        overlap >= Math.min(prevCount, n) * 0.4
+        simRef.current != null && prevCount > 0 && overlap >= Math.min(prevCount, n) * 0.4
 
       if (typeof d3.forceSimulation !== 'function') {
         console.error('[GraphCanvas] d3.forceSimulation missing — check d3 import')
@@ -2088,7 +2104,8 @@ export const GraphCanvas: React.FC = () => {
           fitView(false)
         }
         requestAnimationFrame(() => {
-          if (!pointerGestureRef.current && !animateForcesRef.current) ensureGraphVisibleRef.current('sim-end')
+          if (!pointerGestureRef.current && !animateForcesRef.current)
+            ensureGraphVisibleRef.current('sim-end')
         })
         // Obsidian-like continuous gentle motion
         if (animateForcesRef.current) {
@@ -2202,7 +2219,11 @@ export const GraphCanvas: React.FC = () => {
       }
       // Prefer nodes with real positions (skip NaN)
       simNodes = simNodes.filter(
-        (n) => typeof n.x === 'number' && typeof n.y === 'number' && Number.isFinite(n.x) && Number.isFinite(n.y)
+        (n) =>
+          typeof n.x === 'number' &&
+          typeof n.y === 'number' &&
+          Number.isFinite(n.x) &&
+          Number.isFinite(n.y)
       )
       if (simNodes.length === 0) {
         if (announce) flashAction('Fit — posisi node belum siap, coba Layout')
@@ -2527,9 +2548,7 @@ export const GraphCanvas: React.FC = () => {
             if (Object.keys(patch).length) void saveLayoutPositionsRef.current(patch, false)
           }, 600)
         }
-        simRef.current?.alphaTarget(
-          animateForcesRef.current ? OBSIDIAN_SIM.animateAlphaTarget : 0
-        )
+        simRef.current?.alphaTarget(animateForcesRef.current ? OBSIDIAN_SIM.animateAlphaTarget : 0)
       } else if ((mode === 'pan' || mode === 'pinch') && moved) {
         scheduleSaveCameraRef.current()
       }
@@ -2809,7 +2828,10 @@ export const GraphCanvas: React.FC = () => {
       e.preventDefault()
       e.stopImmediatePropagation()
       const hit = hitNodeRef.current(e.clientX, e.clientY)
-      if (!hit) { setCtxMenu(null); return }
+      if (!hit) {
+        setCtxMenu(null)
+        return
+      }
       setCtxMenu({ x: e.clientX, y: e.clientY, node: hit })
     }
 
@@ -2890,8 +2912,6 @@ export const GraphCanvas: React.FC = () => {
       unbind()
     }
   }, [activeView, schedulePaint])
-
-
 
   // External focus — retry until sim has positions (was clearing focus too early)
   useEffect(() => {
@@ -3149,7 +3169,8 @@ export const GraphCanvas: React.FC = () => {
   ])
 
   const handleFindPath = useCallback(async () => {
-    const titleOf = (id: string) => nodesRef.current.find((n) => n.id === id)?.title || id.slice(0, 8)
+    const titleOf = (id: string) =>
+      nodesRef.current.find((n) => n.id === id)?.title || id.slice(0, 8)
     if (!pathFromId || !pathToId) {
       const d = diagnosePathResult({ phase: 'need-two' })
       setGraphDiag(d)
@@ -3195,9 +3216,7 @@ export const GraphCanvas: React.FC = () => {
     })
     setGraphDiag(d)
     setPathStatus(
-      res.length === 0
-        ? `[PATH_OK] Note yang sama (“${fromTitle}”)`
-        : formatGraphDiag(d)
+      res.length === 0 ? `[PATH_OK] Note yang sama (“${fromTitle}”)` : formatGraphDiag(d)
     )
     setFocusNodeIds(null)
     setFocusEdgeKeys(null)
@@ -3308,9 +3327,7 @@ export const GraphCanvas: React.FC = () => {
       setShowLabels(s.showLabels !== false)
       setShowTagEdges(Boolean(s.showTagEdges))
       setShowLegend(Boolean(s.showLegend))
-      setColorBy(
-        s.colorBy === 'folder' ? 'folder' : s.colorBy === 'type' ? 'type' : 'default'
-      )
+      setColorBy(s.colorBy === 'folder' ? 'folder' : s.colorBy === 'type' ? 'type' : 'default')
       if (s.forces) setForces({ ...DEFAULT_FORCE_SETTINGS, ...s.forces })
       setPerfMode(s.perfMode === 'quality' || s.perfMode === 'speed' ? s.perfMode : 'auto')
       setExistingFilesOnly(s.existingFilesOnly !== false)
@@ -3352,13 +3369,7 @@ export const GraphCanvas: React.FC = () => {
       }
       schedulePaint()
     },
-    [
-      savedViews,
-      updateGraphSettings,
-      graphSettings?.filters.localDepth,
-      schedulePaint,
-      applyCamera
-    ]
+    [savedViews, updateGraphSettings, graphSettings?.filters.localDepth, schedulePaint, applyCamera]
   )
 
   const handleDeleteView = useCallback(
@@ -3456,8 +3467,7 @@ export const GraphCanvas: React.FC = () => {
         clone.insertBefore(bg, clone.firstChild)
         const xml = new XMLSerializer().serializeToString(clone)
         // data: URL avoids blob CORS issues on some Electron builds
-        const url =
-          'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(xml)
+        const url = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(xml)
         const img = new Image()
         img.onload = () => {
           try {
@@ -3488,39 +3498,40 @@ export const GraphCanvas: React.FC = () => {
     requestAnimationFrame(() => requestAnimationFrame(runSvgExport))
   }, [paint, stats.nodes, syncCanvasSize, schedulePaint, fitView, flashAction])
 
-// Phase 6: keyboard shortcuts when Graph view is active
-  const onKey = useCallback(async (e: KeyboardEvent) => {
-    if (activeView !== 'graph') return
-    const el = e.target as HTMLElement | null
-    if (!el) return
-    const tag = el.tagName
-    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable) {
-      if (e.key === 'Escape') {
-        ;(el as HTMLInputElement).blur?.()
+  // Phase 6: keyboard shortcuts when Graph view is active
+  const onKey = useCallback(
+    async (e: KeyboardEvent) => {
+      if (activeView !== 'graph') return
+      const el = e.target as HTMLElement | null
+      if (!el) return
+      const tag = el.tagName
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable) {
+        if (e.key === 'Escape') {
+          ;(el as HTMLInputElement).blur?.()
+          return
+        }
         return
       }
-      return
-    }
-    // Phase 7: Ctrl/Cmd+A select all visible; Ctrl+C copy wikilinks
-    if ((e.ctrlKey || e.metaKey) && (e.key === 'a' || e.key === 'A')) {
-      e.preventDefault()
-      setSelectedIds(new Set(nodesRef.current.map((n) => n.id)))
-      setPathStatus(`Selected ${nodesRef.current.length} nodes`)
-      schedulePaint()
-      return
-    }
-    if ((e.ctrlKey || e.metaKey) && (e.key === 'c' || e.key === 'C')) {
-      const ids = selectedIdsRef.current
-      if (ids.size === 0) return
-      e.preventDefault()
-      const titles = nodesRef.current.filter((n) => ids.has(n.id)).map((n) => `[[${n.title}]]`)
-      void navigator.clipboard?.writeText(titles.join(' ')).then(
-        () => setPathStatus(`Copied ${titles.length} wikilink(s)`),
-        () => setPathStatus('Clipboard gagal')
-      )
-      return
-    }
-    if (e.ctrlKey || e.metaKey || e.altKey) return
+      // Phase 7: Ctrl/Cmd+A select all visible; Ctrl+C copy wikilinks
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'a' || e.key === 'A')) {
+        e.preventDefault()
+        setSelectedIds(new Set(nodesRef.current.map((n) => n.id)))
+        setPathStatus(`Selected ${nodesRef.current.length} nodes`)
+        schedulePaint()
+        return
+      }
+      if ((e.ctrlKey || e.metaKey) && (e.key === 'c' || e.key === 'C')) {
+        const ids = selectedIdsRef.current
+        if (ids.size === 0) return
+        e.preventDefault()
+        const titles = nodesRef.current.filter((n) => ids.has(n.id)).map((n) => `[[${n.title}]]`)
+        void navigator.clipboard?.writeText(titles.join(' ')).then(
+          () => setPathStatus(`Copied ${titles.length} wikilink(s)`),
+          () => setPathStatus('Clipboard gagal')
+        )
+        return
+      }
+      if (e.ctrlKey || e.metaKey || e.altKey) return
 
       if (e.key === 'Escape') {
         e.preventDefault()
@@ -3684,17 +3695,42 @@ export const GraphCanvas: React.FC = () => {
         if (ids.length === 0) return
         e.preventDefault()
         const targets = nodesRef.current.filter(
-          (n) => ids.includes(n.id) && !n.isGhost && n.type !== 'ghost' && !n.isTag && n.type !== 'tag' && n.path
+          (n) =>
+            ids.includes(n.id) &&
+            !n.isGhost &&
+            n.type !== 'ghost' &&
+            !n.isTag &&
+            n.type !== 'tag' &&
+            n.path
         )
-        if (targets.length === 0) { setPathStatus('No deletable nodes selected'); return }
+        if (targets.length === 0) {
+          setPathStatus('No deletable nodes selected')
+          return
+        }
         if (!window.confirm(`Delete ${targets.length} file(s)?`)) return
         for (const n of targets) void window.api.deleteFile(n.path)
         setSelectedIds(new Set())
         setPathStatus(`Deleted ${targets.length} file(s)`)
         return
       }
-
-  }, [activeView, handleClearPath, handleClearFocus, fitView, handleReheatAndFit, handleSaveLayout, handleExportPng, schedulePaint, scheduleSaveCamera, zoomBy, updateGraphSettings, openTab, setActiveView, flashAction])
+    },
+    [
+      activeView,
+      handleClearPath,
+      handleClearFocus,
+      fitView,
+      handleReheatAndFit,
+      handleSaveLayout,
+      handleExportPng,
+      schedulePaint,
+      scheduleSaveCamera,
+      zoomBy,
+      updateGraphSettings,
+      openTab,
+      setActiveView,
+      flashAction
+    ]
+  )
 
   useEffect(() => {
     if (activeView !== 'graph') return
@@ -3725,7 +3761,12 @@ export const GraphCanvas: React.FC = () => {
         </span>
         <div className="graph-toolbar-actions">
           {actionToast ? (
-            <span className="graph-toolbar-toast" role="status" aria-live="polite" title={actionToast}>
+            <span
+              className="graph-toolbar-toast"
+              role="status"
+              aria-live="polite"
+              title={actionToast}
+            >
               {actionToast}
             </span>
           ) : (
@@ -3917,293 +3958,283 @@ export const GraphCanvas: React.FC = () => {
 
       {/* Stage mirrors local-graph-body: relative flex child; canvas fills it (LocalGraph path) */}
       <div className="graph-stage" ref={wrapRef}>
-      {/* Off-screen buffer for PNG export fallback */}
-      <canvas
-        ref={canvasRef}
-        className="graph-canvas graph-canvas--export"
-        aria-hidden="true"
-      />
-      {/* React-owned SVG — world graph under camera transform (Obsidian zoom scale) */}
-      <div className="graph-svg-host" role="img" aria-label="Knowledge graph">
-        {svgFrame ? (
-          <svg
-            ref={svgRef}
-            className="graph-svg"
-            viewBox={`0 0 ${svgFrame.w} ${svgFrame.h}`}
-            width={svgFrame.w}
-            height={svgFrame.h}
-            preserveAspectRatio="none"
-          >
-            <g
-              className="g-world"
-              transform={`translate(${svgFrame.tx},${svgFrame.ty}) scale(${svgFrame.k})`}
+        {/* Off-screen buffer for PNG export fallback */}
+        <canvas ref={canvasRef} className="graph-canvas graph-canvas--export" aria-hidden="true" />
+        {/* React-owned SVG — world graph under camera transform (Obsidian zoom scale) */}
+        <div className="graph-svg-host" role="img" aria-label="Knowledge graph">
+          {svgFrame ? (
+            <svg
+              ref={svgRef}
+              className="graph-svg"
+              viewBox={`0 0 ${svgFrame.w} ${svgFrame.h}`}
+              width={svgFrame.w}
+              height={svgFrame.h}
+              preserveAspectRatio="none"
             >
-              <g className="g-edges">
-                {svgFrame.edges.map((e) => (
-                  <line
-                    key={e.key}
-                    x1={e.x1}
-                    y1={e.y1}
-                    x2={e.x2}
-                    y2={e.y2}
-                    stroke={e.stroke}
-                    strokeWidth={e.sw}
-                    strokeOpacity={e.op}
-                    strokeLinecap="round"
-                    strokeDasharray={e.dash}
-                  />
+              <g
+                className="g-world"
+                transform={`translate(${svgFrame.tx},${svgFrame.ty}) scale(${svgFrame.k})`}
+              >
+                <g className="g-edges">
+                  {svgFrame.edges.map((e) => (
+                    <line
+                      key={e.key}
+                      x1={e.x1}
+                      y1={e.y1}
+                      x2={e.x2}
+                      y2={e.y2}
+                      stroke={e.stroke}
+                      strokeWidth={e.sw}
+                      strokeOpacity={e.op}
+                      strokeLinecap="round"
+                      strokeDasharray={e.dash}
+                    />
+                  ))}
+                </g>
+                <g className="g-nodes">
+                  {svgFrame.nodes.map((n) => (
+                    <circle
+                      key={n.key}
+                      cx={n.cx}
+                      cy={n.cy}
+                      r={n.r}
+                      fill={n.fill === 'none' ? 'none' : n.fill}
+                      stroke={n.stroke}
+                      strokeWidth={n.sw}
+                      fillOpacity={n.fill === 'none' ? 0 : n.fillOp}
+                      strokeOpacity={n.strokeOp ?? (n.fill === 'none' ? n.fillOp : 1)}
+                      strokeDasharray={n.kind === 'ghost' ? '2 2' : undefined}
+                    />
+                  ))}
+                </g>
+              </g>
+              <g className="g-labels">
+                {svgFrame.labels.map((lab) => (
+                  <text
+                    key={lab.key}
+                    x={lab.x}
+                    y={lab.y}
+                    fill={lab.fill}
+                    fillOpacity={lab.op}
+                    fontSize={11}
+                    fontFamily='Inter, "Segoe UI", system-ui, sans-serif'
+                    fontWeight={lab.bold ? 600 : 400}
+                    dominantBaseline="middle"
+                  >
+                    {lab.text}
+                  </text>
                 ))}
               </g>
-              <g className="g-nodes">
-                {svgFrame.nodes.map((n) => (
-                  <circle
-                    key={n.key}
-                    cx={n.cx}
-                    cy={n.cy}
-                    r={n.r}
-                    fill={n.fill === 'none' ? 'none' : n.fill}
-                    stroke={n.stroke}
-                    strokeWidth={n.sw}
-                    fillOpacity={n.fill === 'none' ? 0 : n.fillOp}
-                    strokeOpacity={n.strokeOp ?? (n.fill === 'none' ? n.fillOp : 1)}
-                    strokeDasharray={n.kind === 'ghost' ? '2 2' : undefined}
-                  />
-                ))}
-              </g>
-            </g>
-            <g className="g-labels">
-              {svgFrame.labels.map((lab) => (
-                <text
-                  key={lab.key}
-                  x={lab.x}
-                  y={lab.y}
-                  fill={lab.fill}
-                  fillOpacity={lab.op}
-                  fontSize={11}
-                  fontFamily='Inter, "Segoe UI", system-ui, sans-serif'
-                  fontWeight={lab.bold ? 600 : 400}
-                  dominantBaseline="middle"
-                >
-                  {lab.text}
-                </text>
-              ))}
-            </g>
-          </svg>
-        ) : (
-          <div className="graph-live-hud graph-live-hud--load" aria-live="polite">
-            Memuat graph…
+            </svg>
+          ) : (
+            <div className="graph-live-hud graph-live-hud--load" aria-live="polite">
+              Memuat graph…
+            </div>
+          )}
+        </div>
+        {nodes.length === 0 || filteredNodes.length === 0
+          ? (() => {
+              const emptyDiag = diagnoseEmptyFilter({
+                totalNodes: nodes.length,
+                loaded: graphLoaded,
+                orphanMode,
+                hubMode,
+                selectedType,
+                selectedTag,
+                searchQuery,
+                searchMode,
+                existingFilesOnly,
+                showTags,
+                showAttachments
+              })
+              return (
+                <div className="graph-empty" style={{ pointerEvents: 'auto' }}>
+                  <p>
+                    <code className="graph-diag-code">{emptyDiag.code}</code> {emptyDiag.title}
+                  </p>
+                  <p className="muted">
+                    <strong>Sebab:</strong> {emptyDiag.cause}
+                  </p>
+                  <p className="muted">
+                    <strong>Lakukan:</strong> {emptyDiag.action}
+                  </p>
+                  {nodes.length > 0 && filteredNodes.length === 0 ? (
+                    <button
+                      type="button"
+                      className="btn btn-surface btn-sm"
+                      style={{ marginTop: 12, pointerEvents: 'auto' }}
+                      onClick={() => {
+                        setOrphanMode('all')
+                        setHubMode('dim')
+                        setSelectedType('all')
+                        setSelectedTag('all')
+                        setSearchQuery('')
+                        setSearchMode('spotlight')
+                        setExistingFilesOnly(true)
+                        setGraphDiag(null)
+                        setPathStatus('[FILTER] Reset → orphans:all, type:all, search clear')
+                      }}
+                    >
+                      Reset filter
+                    </button>
+                  ) : null}
+                </div>
+              )
+            })()
+          : null}
+
+        {/* Always-on filter chip when not full graph — never silent about orphans:only */}
+        {orphanMode !== 'all' ||
+        hubMode === 'hide' ||
+        selectedType !== 'all' ||
+        selectedTag !== 'all' ? (
+          <div className="graph-filter-live-chip" role="status">
+            <span>
+              Filter aktif:{' '}
+              <strong>
+                {[
+                  orphanMode !== 'all' ? `orphans:${orphanMode}` : null,
+                  hubMode === 'hide' ? 'hubs:hide' : null,
+                  selectedType !== 'all' ? `type:${selectedType}` : null,
+                  selectedTag !== 'all' ? `tag:${selectedTag}` : null
+                ]
+                  .filter(Boolean)
+                  .join(' · ')}
+              </strong>
+              {` · tampil ${filteredNodes.length}/${nodes.filter((n) => !n.isGhost).length}`}
+            </span>
+            <button
+              type="button"
+              className="graph-chip"
+              style={{ pointerEvents: 'auto' }}
+              onClick={() => {
+                setOrphanMode('all')
+                setHubMode('dim')
+                setSelectedType('all')
+                setSelectedTag('all')
+                setSearchQuery('')
+                setSearchMode('spotlight')
+                setShowLabels(true)
+                setGraphDiag(null)
+                setPathStatus('[FILTER] Reset → tampilkan semua note')
+                void updateGraphSettings({
+                  filters: { orphanMode: 'all', hubMode: 'dim', searchMode: 'spotlight' },
+                  display: { showLabels: true }
+                })
+                requestAnimationFrame(() => {
+                  setCameraTransformRef.current(d3.zoomIdentity, { user: true, save: true })
+                  hasAutoFitRef.current = false
+                  fitViewRef.current?.(false)
+                  hasAutoFitRef.current = true
+                  schedulePaint()
+                })
+              }}
+            >
+              Tampilkan semua
+            </button>
+          </div>
+        ) : null}
+
+        {/* Specific banner after auto-fit / path / camera (if-A-then-B) */}
+        {graphDiag && graphDiag.code !== 'OK' && filteredNodes.length > 0 ? (
+          <div
+            className={`graph-diag-banner graph-diag-banner--${graphDiag.severity}`}
+            role="status"
+          >
+            <div className="graph-diag-banner-row">
+              <code className="graph-diag-code">{graphDiag.code}</code>
+              <strong>{graphDiag.title}</strong>
+              <button
+                type="button"
+                className="graph-diag-dismiss"
+                aria-label="Tutup"
+                onClick={() => setGraphDiag(null)}
+              >
+                ×
+              </button>
+            </div>
+            <p className="muted">
+              <strong>Sebab:</strong> {graphDiag.cause}
+            </p>
+            <p className="muted">
+              <strong>Lakukan:</strong> {graphDiag.action}
+            </p>
+            <div style={{ marginTop: 8, display: 'flex', gap: 8 }}>
+              <button
+                type="button"
+                className="graph-chip"
+                onClick={() => {
+                  setCameraTransformRef.current(d3.zoomIdentity, { user: true, save: true })
+                  fitView(true, null, { silent: false })
+                  setGraphDiag(null)
+                }}
+              >
+                Fit sekarang (F)
+              </button>
+              <button
+                type="button"
+                className="graph-chip"
+                onClick={() => {
+                  handleReheatAndFit()
+                  setGraphDiag(null)
+                }}
+              >
+                Layout + Fit (R)
+              </button>
+            </div>
+          </div>
+        ) : null}
+
+        {showLegend && (
+          <div className="graph-legend">
+            {colorGroups.length > 0
+              ? colorGroups.map((g) => (
+                  <div key={g.id} className="graph-legend-item" title={g.query}>
+                    <span className="graph-legend-dot" style={{ background: g.color }} />
+                    <span>{g.query}</span>
+                  </div>
+                ))
+              : Object.entries(paletteRef.current.colors)
+                  .filter(([k]) => k !== 'other')
+                  .map(([type, color]) => (
+                    <div key={type} className="graph-legend-item">
+                      <span className="graph-legend-dot" style={{ background: color }} />
+                      <span>{type}</span>
+                    </div>
+                  ))}
           </div>
         )}
-      </div>
-      {nodes.length === 0 || filteredNodes.length === 0
-        ? (() => {
-            const emptyDiag = diagnoseEmptyFilter({
-              totalNodes: nodes.length,
-              loaded: graphLoaded,
-              orphanMode,
-              hubMode,
-              selectedType,
-              selectedTag,
-              searchQuery,
-              searchMode,
-              existingFilesOnly,
-              showTags,
-              showAttachments
-            })
-            return (
-              <div className="graph-empty" style={{ pointerEvents: 'auto' }}>
-                <p>
-                  <code className="graph-diag-code">{emptyDiag.code}</code> {emptyDiag.title}
-                </p>
-                <p className="muted">
-                  <strong>Sebab:</strong> {emptyDiag.cause}
-                </p>
-                <p className="muted">
-                  <strong>Lakukan:</strong> {emptyDiag.action}
-                </p>
-                {nodes.length > 0 && filteredNodes.length === 0 ? (
-                  <button
-                    type="button"
-                    className="btn btn-surface btn-sm"
-                    style={{ marginTop: 12, pointerEvents: 'auto' }}
-                    onClick={() => {
-                      setOrphanMode('all')
-                      setHubMode('dim')
-                      setSelectedType('all')
-                      setSelectedTag('all')
-                      setSearchQuery('')
-                      setSearchMode('spotlight')
-                      setExistingFilesOnly(true)
-                      setGraphDiag(null)
-                      setPathStatus('[FILTER] Reset → orphans:all, type:all, search clear')
-                    }}
-                  >
-                    Reset filter
-                  </button>
-                ) : null}
-              </div>
-            )
-          })()
-        : null}
 
-      {/* Always-on filter chip when not full graph — never silent about orphans:only */}
-      {orphanMode !== 'all' || hubMode === 'hide' || selectedType !== 'all' || selectedTag !== 'all' ? (
-        <div className="graph-filter-live-chip" role="status">
-          <span>
-            Filter aktif:{' '}
-            <strong>
-              {[
-                orphanMode !== 'all' ? `orphans:${orphanMode}` : null,
-                hubMode === 'hide' ? 'hubs:hide' : null,
-                selectedType !== 'all' ? `type:${selectedType}` : null,
-                selectedTag !== 'all' ? `tag:${selectedTag}` : null
-              ]
-                .filter(Boolean)
-                .join(' · ')}
-            </strong>
-            {` · tampil ${filteredNodes.length}/${nodes.filter((n) => !n.isGhost).length}`}
-          </span>
+        {/* Obsidian-like zoom controls (bottom-right) */}
+        <div className="graph-zoom-controls">
+          <button type="button" onClick={() => zoomBy(1.25)} title="Zoom in" aria-label="Zoom in">
+            <Icon name="zoomIn" size={15} />
+          </button>
+          <button type="button" onClick={() => zoomBy(0.8)} title="Zoom out" aria-label="Zoom out">
+            <Icon name="zoomOut" size={15} />
+          </button>
           <button
             type="button"
-            className="graph-chip"
-            style={{ pointerEvents: 'auto' }}
-            onClick={() => {
-              setOrphanMode('all')
-              setHubMode('dim')
-              setSelectedType('all')
-              setSelectedTag('all')
-              setSearchQuery('')
-              setSearchMode('spotlight')
-              setShowLabels(true)
-              setGraphDiag(null)
-              setPathStatus('[FILTER] Reset → tampilkan semua note')
-              void updateGraphSettings({
-                filters: { orphanMode: 'all', hubMode: 'dim', searchMode: 'spotlight' },
-                display: { showLabels: true }
-              })
-              requestAnimationFrame(() => {
-                setCameraTransformRef.current(d3.zoomIdentity, { user: true, save: true })
-                hasAutoFitRef.current = false
-                fitViewRef.current?.(false)
-                hasAutoFitRef.current = true
-                schedulePaint()
-              })
-            }}
+            onClick={() => fitView(true, null, { silent: false })}
+            title="Zoom to fit (F)"
+            aria-label="Zoom to fit"
           >
-            Tampilkan semua
+            <Icon name="fitScreen" size={15} />
           </button>
         </div>
-      ) : null}
 
-      {/* Specific banner after auto-fit / path / camera (if-A-then-B) */}
-      {graphDiag && graphDiag.code !== 'OK' && filteredNodes.length > 0 ? (
         <div
-          className={`graph-diag-banner graph-diag-banner--${graphDiag.severity}`}
-          role="status"
-        >
-          <div className="graph-diag-banner-row">
-            <code className="graph-diag-code">{graphDiag.code}</code>
-            <strong>{graphDiag.title}</strong>
-            <button
-              type="button"
-              className="graph-diag-dismiss"
-              aria-label="Tutup"
-              onClick={() => setGraphDiag(null)}
-            >
-              ×
-            </button>
-          </div>
-          <p className="muted">
-            <strong>Sebab:</strong> {graphDiag.cause}
-          </p>
-          <p className="muted">
-            <strong>Lakukan:</strong> {graphDiag.action}
-          </p>
-          <div style={{ marginTop: 8, display: 'flex', gap: 8 }}>
-            <button
-              type="button"
-              className="graph-chip"
-              onClick={() => {
-                setCameraTransformRef.current(d3.zoomIdentity, { user: true, save: true })
-                fitView(true, null, { silent: false })
-                setGraphDiag(null)
-              }}
-            >
-              Fit sekarang (F)
-            </button>
-            <button
-              type="button"
-              className="graph-chip"
-              onClick={() => {
-                handleReheatAndFit()
-                setGraphDiag(null)
-              }}
-            >
-              Layout + Fit (R)
-            </button>
-          </div>
-        </div>
-      ) : null}
-
-      {showLegend && (
-        <div className="graph-legend">
-          {colorGroups.length > 0
-            ? colorGroups.map((g) => (
-                <div key={g.id} className="graph-legend-item" title={g.query}>
-                  <span className="graph-legend-dot" style={{ background: g.color }} />
-                  <span>{g.query}</span>
-                </div>
-              ))
-            : Object.entries(paletteRef.current.colors)
-                .filter(([k]) => k !== 'other')
-                .map(([type, color]) => (
-                  <div key={type} className="graph-legend-item">
-                    <span className="graph-legend-dot" style={{ background: color }} />
-                    <span>{type}</span>
-                  </div>
-                ))}
-        </div>
-      )}
-
-      {/* Obsidian-like zoom controls (bottom-right) */}
-      <div className="graph-zoom-controls">
-        <button
-          type="button"
-          onClick={() => zoomBy(1.25)}
-          title="Zoom in"
-          aria-label="Zoom in"
-        >
-          <Icon name="zoomIn" size={15} />
-        </button>
-        <button
-          type="button"
-          onClick={() => zoomBy(0.8)}
-          title="Zoom out"
-          aria-label="Zoom out"
-        >
-          <Icon name="zoomOut" size={15} />
-        </button>
-        <button
-          type="button"
-          onClick={() => fitView(true, null, { silent: false })}
-          title="Zoom to fit (F)"
-          aria-label="Zoom to fit"
-        >
-          <Icon name="fitScreen" size={15} />
-        </button>
+          ref={tooltipElRef}
+          className="graph-tooltip"
+          style={{
+            opacity: 0,
+            left: 0,
+            top: 0,
+            pointerEvents: 'none'
+          }}
+        />
       </div>
-
-      <div
-        ref={tooltipElRef}
-        className="graph-tooltip"
-        style={{
-          opacity: 0,
-          left: 0,
-          top: 0,
-          pointerEvents: 'none'
-        }}
-      />
-      </div>{/* .graph-stage */}
+      {/* .graph-stage */}
 
       {ctxMenu && (
         <div
@@ -4212,46 +4243,70 @@ export const GraphCanvas: React.FC = () => {
           onContextMenu={(e) => e.preventDefault()}
         >
           {!ctxMenu.node.isGhost && ctxMenu.node.type !== 'ghost' && ctxMenu.node.path && (
-            <button type="button" onClick={() => {
-              void openTab(ctxMenu.node.path)
-              setActiveView('editor')
-              setCtxMenu(null)
-            }}>Open</button>
+            <button
+              type="button"
+              onClick={() => {
+                void openTab(ctxMenu.node.path)
+                setActiveView('editor')
+                setCtxMenu(null)
+              }}
+            >
+              Open
+            </button>
           )}
           {ctxMenu.node.title && (
-            <button type="button" onClick={() => {
-              navigator.clipboard.writeText(ctxMenu.node.path || ctxMenu.node.title || '')
-              flashAction('Path copied')
-              setCtxMenu(null)
-            }}>Copy path</button>
+            <button
+              type="button"
+              onClick={() => {
+                navigator.clipboard.writeText(ctxMenu.node.path || ctxMenu.node.title || '')
+                flashAction('Path copied')
+                setCtxMenu(null)
+              }}
+            >
+              Copy path
+            </button>
           )}
-          <button type="button" onClick={() => {
-            const n = ctxMenu.node
-            const isPinned = Boolean(n.pinned || (n.fx != null && n.fy != null))
-            if (isPinned) {
-              n.fx = null; n.fy = null; n.pinned = false
-            } else {
-              n.pinned = true
-            }
-            posCache.current.set(n.id, { x: n.x!, y: n.y!, fx: n.fx, fy: n.fy })
-            setPinnedCount(nodesRef.current.filter((nd) => nd.pinned || nd.fx != null).length)
-            simRef.current?.alpha(0.3).restart()
-            schedulePaint()
-            setCtxMenu(null)
-          }}>{(ctxMenu.node.pinned || (ctxMenu.node.fx != null)) ? 'Unpin' : 'Pin'}</button>
-          {!ctxMenu.node.isGhost && ctxMenu.node.type !== 'ghost' && !ctxMenu.node.isTag && ctxMenu.node.type !== 'tag' && ctxMenu.node.path && (
-            <button type="button" className="danger" onClick={() => {
-              if (!window.confirm(`Delete "${ctxMenu.node.title || ctxMenu.node.path}"?`)) return
-              void window.api.deleteFile(ctxMenu.node.path)
+          <button
+            type="button"
+            onClick={() => {
+              const n = ctxMenu.node
+              const isPinned = Boolean(n.pinned || (n.fx != null && n.fy != null))
+              if (isPinned) {
+                n.fx = null
+                n.fy = null
+                n.pinned = false
+              } else {
+                n.pinned = true
+              }
+              posCache.current.set(n.id, { x: n.x!, y: n.y!, fx: n.fx, fy: n.fy })
+              setPinnedCount(nodesRef.current.filter((nd) => nd.pinned || nd.fx != null).length)
+              simRef.current?.alpha(0.3).restart()
+              schedulePaint()
               setCtxMenu(null)
-            }}>Delete</button>
-          )}
+            }}
+          >
+            {ctxMenu.node.pinned || ctxMenu.node.fx != null ? 'Unpin' : 'Pin'}
+          </button>
+          {!ctxMenu.node.isGhost &&
+            ctxMenu.node.type !== 'ghost' &&
+            !ctxMenu.node.isTag &&
+            ctxMenu.node.type !== 'tag' &&
+            ctxMenu.node.path && (
+              <button
+                type="button"
+                className="danger"
+                onClick={() => {
+                  if (!window.confirm(`Delete "${ctxMenu.node.title || ctxMenu.node.path}"?`))
+                    return
+                  void window.api.deleteFile(ctxMenu.node.path)
+                  setCtxMenu(null)
+                }}
+              >
+                Delete
+              </button>
+            )}
         </div>
       )}
     </div>
   )
 }
-
-
-
-

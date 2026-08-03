@@ -438,7 +438,8 @@ export class WorkspaceEngine {
     if (!fs.existsSync(oldPath)) {
       throw new Error(`Source path does not exist: ${oldPath}`)
     }
-    if (path.resolve(oldPath) === path.resolve(newPath)) return { renamedLinks: 0, affectedFiles: [] }
+    if (path.resolve(oldPath) === path.resolve(newPath))
+      return { renamedLinks: 0, affectedFiles: [] }
     if (fs.existsSync(newPath)) {
       throw new Error(`Target already exists: ${newPath}`)
     }
@@ -465,8 +466,8 @@ export class WorkspaceEngine {
     const version = (raw.version as number) || 0
     if (version >= SETTINGS_VERSION) return raw
 
-    let migrated = { ...raw }
-    
+    const migrated = { ...raw }
+
     // Migration from v0 (no version) to v1
     if (version < 1) {
       // Add default values for new settings

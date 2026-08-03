@@ -9,6 +9,7 @@ import fs from 'fs'
 import os from 'os'
 import { fileURLToPath, pathToFileURL } from 'url'
 import { createRequire } from 'module'
+import { readIpcSource } from './qa-ipc.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const root = path.join(__dirname, '..')
@@ -59,7 +60,7 @@ function auditWorkspace() {
   record('1.2', 'Create workspace + standard folders', we.includes('STANDARD_FOLDERS') && we.includes('createWorkspace') ? 'pass' : 'fail')
   record('1.3', 'Seed templates on create', we.includes('seedBuiltinToVault') ? 'pass' : 'fail')
   record('1.4', 'Recent workspaces', we.includes('recentWorkspaces') || we.includes('getRecentWorkspaces') ? 'pass' : 'fail')
-  record('1.5', 'IPC workspace open/create/close', read('src/main/ipc/index.ts').includes('workspace:open') && read('src/main/ipc/index.ts').includes('workspace:create') ? 'pass' : 'fail')
+  record('1.5', 'IPC workspace open/create/close', readIpcSource().includes('workspace:open') && readIpcSource().includes('workspace:create') ? 'pass' : 'fail')
   record('1.6', 'Welcome UI open + create vault', read('src/renderer/src/components/welcome/WelcomeScreen.tsx').includes('createWorkspace') && read('src/renderer/src/components/welcome/WelcomeScreen.tsx').includes('openFolder') ? 'pass' : 'fail')
   record('1.7', 'UI: open/create vault in running app', 'manual', 'npm run dev → Open/Create vault')
 }
@@ -109,7 +110,7 @@ async function auditGraph(md, GraphEngine) {
   const orphans = graph.getOrphanNodeIds()
   record('3.5', 'Orphan detection (C)', orphans.includes(files[2].id) ? 'pass' : 'fail')
   record('3.6', 'resolveTitleToPath', graph.resolveTitleToPath('B')?.includes('B.md') ? 'pass' : 'fail')
-  record('3.7', 'IPC graph:getBacklinks + resolveLink', read('src/main/ipc/index.ts').includes('graph:getBacklinks') && read('src/main/ipc/index.ts').includes('graph:resolveLink') ? 'pass' : 'fail')
+  record('3.7', 'IPC graph:getBacklinks + resolveLink', readIpcSource().includes('graph:getBacklinks') && readIpcSource().includes('graph:resolveLink') ? 'pass' : 'fail')
   record('3.8', 'GraphCanvas fluid UI present', read('src/renderer/src/components/graph/GraphCanvas.tsx').includes('forceSimulation') && read('src/renderer/src/components/graph/GraphCanvas.tsx').includes('posCache') ? 'pass' : 'fail')
   record('3.9', 'UI: open Graph View, drag/zoom', 'manual', 'Graph View in app')
 }
@@ -140,7 +141,7 @@ async function auditSearch(md, SearchEngine, GraphEngine) {
   const bl = se.search({ query: 'backlink:Beta', limit: 10 })
   record('4.6', 'backlink:Beta finds Alpha', bl.some(r => r.title === 'Alpha') ? 'pass' : 'fail')
   record('4.7', 'getAllTags', se.getAllTags().some(t => t.tag === 'core') ? 'pass' : 'fail')
-  record('4.8', 'IPC search:query + recent + rebuild', read('src/main/ipc/index.ts').includes('search:rebuildIndex') ? 'pass' : 'fail')
+  record('4.8', 'IPC search:query + recent + rebuild', readIpcSource().includes('search:rebuildIndex') ? 'pass' : 'fail')
   record('4.9', 'UI: Ctrl+K search', 'manual', 'Search modal in app')
 }
 
@@ -168,7 +169,7 @@ function auditIndexDb() {
   }
   const idb = read('src/main/engine/IndexDatabase.ts')
   record('5.2', 'IndexDatabase index.db path', idb.includes('index.db') && idb.includes('fts5') ? 'pass' : 'fail')
-  record('5.3', 'IPC rebuild + stats', read('src/main/ipc/index.ts').includes('search:rebuildIndex') ? 'pass' : 'fail')
+  record('5.3', 'IPC rebuild + stats', readIpcSource().includes('search:rebuildIndex') ? 'pass' : 'fail')
   record('5.4', 'Settings Search Index UI', read('src/renderer/src/components/settings/SettingsView.tsx').includes('Rebuild') || read('src/renderer/src/components/settings/SettingsView.tsx').includes('rebuild') ? 'pass' : 'fail')
 }
 
@@ -209,7 +210,7 @@ function auditTemplatesDomain() {
   const body = 'title: {{title}}\ndate: {{date}}'
   const rendered = body.replace(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g, (_, k) => ({ title: 'Hello', date: '2026-07-22' })[k] || '')
   record('7.3', 'Template var substitution runtime', rendered.includes('Hello') && rendered.includes('2026-07-22') ? 'pass' : 'fail')
-  record('7.4', 'IPC template:list/createNote', read('src/main/ipc/index.ts').includes('template:createNote') ? 'pass' : 'fail')
+  record('7.4', 'IPC template:list/createNote', readIpcSource().includes('template:createNote') ? 'pass' : 'fail')
   record('7.5', 'Template picker UI', exists('src/renderer/src/components/systems/TemplatePicker.tsx') ? 'pass' : 'fail')
   const de = read('src/main/engine/DomainEngine.ts')
   record('7.6', 'Domain overview projects/tasks/people', de.includes('getOverview') && de.includes('parseCheckboxes') ? 'pass' : 'fail')
@@ -226,7 +227,7 @@ function auditTemplatesDomain() {
 function auditAI() {
   console.log('\n═══ 8. AI system ═══')
   const mid = read('src/main/ai/AIMiddleware.ts')
-  const ipc = read('src/main/ipc/index.ts')
+  const ipc = readIpcSource()
   const chat = read('src/renderer/src/store/chatStore.ts')
   record(
     '8.1',

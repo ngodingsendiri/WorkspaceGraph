@@ -443,9 +443,11 @@ export const DashboardView: React.FC<{ onOpenSearch: () => void }> = ({ onOpenSe
               Tidak ada orphan — semua note terhubung.
             </div>
           ) : (
-            orphanNodes.slice(0, 8).map((n) =>
-              listItem(n.title, n.relativePath || n.type, () => openNote(n.path), '0 links')
-            )
+            orphanNodes
+              .slice(0, 8)
+              .map((n) =>
+                listItem(n.title, n.relativePath || n.type, () => openNote(n.path), '0 links')
+              )
           )}
           {orphanNodes.length > 8 && (
             <button

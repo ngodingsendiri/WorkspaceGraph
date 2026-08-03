@@ -130,9 +130,7 @@ export const Icon: React.FC<IconProps> = ({
 
   // strokeWidth 1.5–2 → weight ~300–500 for similar visual weight to old SVG strokes
   const weight =
-    strokeWidth != null
-      ? Math.round(Math.min(700, Math.max(200, 200 + strokeWidth * 100)))
-      : 400
+    strokeWidth != null ? Math.round(Math.min(700, Math.max(200, 200 + strokeWidth * 100))) : 400
 
   return (
     <span

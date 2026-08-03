@@ -18,7 +18,11 @@ describe('MarkdownEngine', () => {
     })
 
     it('extracts title from frontmatter', () => {
-      const parsed = engine.parseFile('/vault/Note.md', '---\ntitle: FM Title\n---\n# Content', '/vault')
+      const parsed = engine.parseFile(
+        '/vault/Note.md',
+        '---\ntitle: FM Title\n---\n# Content',
+        '/vault'
+      )
       expect(parsed.title).toBe('FM Title')
     })
 
@@ -81,7 +85,7 @@ describe('MarkdownEngine', () => {
     it('deduplicates tags', () => {
       const content = `---\ntags: [dup]\n---\n\n#dup`
       const parsed = engine.parseFile('/vault/Note.md', content, '/vault')
-      expect(parsed.tags.filter(t => t === 'dup')).toHaveLength(1)
+      expect(parsed.tags.filter((t) => t === 'dup')).toHaveLength(1)
     })
 
     it('counts words', () => {
@@ -95,7 +99,7 @@ describe('MarkdownEngine', () => {
       expect(parsed.headings).toEqual([
         { level: 1, text: 'H1' },
         { level: 2, text: 'H2' },
-        { level: 3, text: 'H3' },
+        { level: 3, text: 'H3' }
       ])
     })
 
@@ -206,17 +210,13 @@ describe('MarkdownEngine', () => {
 
   describe('resolveWikiLink', () => {
     it('resolves by exact title', () => {
-      const map = new Map([
-        ['/vault/Note.md', 'Note Title'],
-      ])
+      const map = new Map([['/vault/Note.md', 'Note Title']])
       const resolved = engine.resolveWikiLink('Note Title', map)
       expect(resolved).toBe('/vault/Note.md')
     })
 
     it('resolves by basename', () => {
-      const map = new Map([
-        ['/vault/Folder/Note.md', 'Note Title'],
-      ])
+      const map = new Map([['/vault/Folder/Note.md', 'Note Title']])
       const resolved = engine.resolveWikiLink('Note', map)
       expect(resolved).toBe('/vault/Folder/Note.md')
     })

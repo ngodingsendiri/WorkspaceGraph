@@ -263,15 +263,18 @@ function renderMarkdownToHtml(content: string): string {
 
   // 1) Fenced code FIRST — so [[wiki]] / | inside code stay literal
   const codeBlocks: string[] = []
-  let src = normalized.replace(/```([^\n`]*)\n([\s\S]*?)```/g, (_m, langRaw: string, body: string) => {
-    const lang = String(langRaw || '')
-      .trim()
-      .replace(/[^a-zA-Z0-9_+#.-]/g, '')
-    const i = codeBlocks.length
-    const cls = lang ? ` class="language-${escapeHtml(lang)}"` : ''
-    codeBlocks.push(`<pre><code${cls}>${escapeHtml(body.replace(/\n$/, ''))}</code></pre>`)
-    return `\n§§CODE${i}§§\n`
-  })
+  let src = normalized.replace(
+    /```([^\n`]*)\n([\s\S]*?)```/g,
+    (_m, langRaw: string, body: string) => {
+      const lang = String(langRaw || '')
+        .trim()
+        .replace(/[^a-zA-Z0-9_+#.-]/g, '')
+      const i = codeBlocks.length
+      const cls = lang ? ` class="language-${escapeHtml(lang)}"` : ''
+      codeBlocks.push(`<pre><code${cls}>${escapeHtml(body.replace(/\n$/, ''))}</code></pre>`)
+      return `\n§§CODE${i}§§\n`
+    }
+  )
 
   // 2) Protect wikilinks (incl. \| alias in tables) outside code
   const wikiSlots: { target: string; label: string }[] = []
@@ -280,12 +283,7 @@ function renderMarkdownToHtml(content: string): string {
     const pipe = normalized.indexOf('|')
     let target = (pipe >= 0 ? normalized.slice(0, pipe) : normalized).trim()
     const alias = pipe >= 0 ? normalized.slice(pipe + 1).trim() : ''
-    target = target
-      .split('#')[0]
-      .split('^')[0]
-      .trim()
-      .replace(/\\/g, '/')
-      .replace(/\/+$/g, '')
+    target = target.split('#')[0].split('^')[0].trim().replace(/\\/g, '/').replace(/\/+$/g, '')
     const label = alias || target
     const idx = wikiSlots.length
     wikiSlots.push({ target, label })
@@ -402,7 +400,9 @@ function renderMarkdownToHtml(content: string): string {
         q.push(lines[i].replace(/^>\s?/, ''))
         i++
       }
-      out.push(`<blockquote>${renderInline(escapeHtml(q.join('\n')).replace(/\n/g, '<br />'))}</blockquote>`)
+      out.push(
+        `<blockquote>${renderInline(escapeHtml(q.join('\n')).replace(/\n/g, '<br />'))}</blockquote>`
+      )
       continue
     }
 
@@ -456,11 +456,7 @@ function renderMarkdownToHtml(content: string): string {
       if (L.startsWith('>')) break
       if (/^\s*([-*+]|\d+\.)\s+/.test(L)) break
       if (/^§§CODE\d+§§$/.test(L.trim())) break
-      if (
-        i + 1 < lines.length &&
-        isGfmTableRow(L) &&
-        isGfmSepRow(lines[i + 1])
-      ) {
+      if (i + 1 < lines.length && isGfmTableRow(L) && isGfmSepRow(lines[i + 1])) {
         break
       }
       if (/^(-{3,}|\*{3,}|_{3,})\s*$/.test(L.trim()) && L.trim().length >= 3) break

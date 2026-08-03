@@ -24,11 +24,16 @@ function EmbeddingBadge() {
       try {
         const s = await window.api.getEmbeddingStatus()
         if (mounted) setStatus(s)
-      } catch { /* ignore */ }
+      } catch {
+        /* ignore */
+      }
     }
     poll()
     const id = setInterval(poll, 3000)
-    return () => { mounted = false; clearInterval(id) }
+    return () => {
+      mounted = false
+      clearInterval(id)
+    }
   }, [isOpen])
 
   if (!status || status.state === 'idle') return null
@@ -51,15 +56,19 @@ function EmbeddingBadge() {
     <span
       title={`Semantic RAG — ${labels[status.state]}`}
       style={{
-        display: 'inline-flex', alignItems: 'center', gap: 4,
-        color: colors[status.state], fontSize: 'var(--text-xs)',
+        display: 'inline-flex',
+        alignItems: 'center',
+        gap: 4,
+        color: colors[status.state],
+        fontSize: 'var(--text-xs)',
         cursor: 'default'
       }}
     >
-      {spinning
-        ? <span style={{ display: 'inline-block', animation: 'spin 1s linear infinite' }}>⟳</span>
-        : <Icon name="psychology" size={12} />
-      }
+      {spinning ? (
+        <span style={{ display: 'inline-block', animation: 'spin 1s linear infinite' }}>⟳</span>
+      ) : (
+        <Icon name="psychology" size={12} />
+      )}
       {labels[status.state]}
     </span>
   )

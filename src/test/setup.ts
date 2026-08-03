@@ -8,12 +8,12 @@ vi.mock('electron', () => ({
     getPath: vi.fn((name: string) => {
       if (name === 'userData') return path.join(__dirname, '..', '..', 'test-fixtures', 'userData')
       return '/mock/path'
-    }),
+    })
   },
   ipcMain: {
     handle: vi.fn(),
     on: vi.fn(),
-    removeHandler: vi.fn(),
+    removeHandler: vi.fn()
   },
   BrowserWindow: vi.fn(),
   shell: { openExternal: vi.fn() },
@@ -22,14 +22,14 @@ vi.mock('electron', () => ({
   safeStorage: {
     isEncryptionAvailable: vi.fn(() => true),
     encryptString: vi.fn((str: string) => Buffer.from(`encrypted:${str}`)),
-    decryptString: vi.fn((buf: Buffer) => buf.toString().replace('encrypted:', '')),
-  },
+    decryptString: vi.fn((buf: Buffer) => buf.toString().replace('encrypted:', ''))
+  }
 }))
 
 vi.mock('@electron-toolkit/utils', () => ({
   electronApp: { setAppUserModelId: vi.fn() },
   optimizer: { watchWindowShortcuts: vi.fn() },
-  is: { dev: true },
+  is: { dev: true }
 }))
 
 vi.mock('better-sqlite3', () => {
@@ -37,12 +37,12 @@ vi.mock('better-sqlite3', () => {
     prepare: vi.fn(() => ({
       run: vi.fn(),
       get: vi.fn(),
-      all: vi.fn(() => []),
+      all: vi.fn(() => [])
     })),
     exec: vi.fn(),
     pragma: vi.fn(),
     close: vi.fn(),
-    transaction: vi.fn((fn) => fn),
+    transaction: vi.fn((fn) => fn)
   }
   return vi.fn(() => m)
 })
@@ -50,29 +50,31 @@ vi.mock('better-sqlite3', () => {
 vi.mock('chokidar', () => ({
   watch: vi.fn(() => ({
     on: vi.fn(),
-    close: vi.fn(),
-  })),
+    close: vi.fn()
+  }))
 }))
 
 vi.mock('@xenova/transformers', () => ({
   pipeline: vi.fn().mockResolvedValue({
-    __call: vi.fn().mockResolvedValue({ data: new Float32Array(384).fill(0.1) }),
+    __call: vi.fn().mockResolvedValue({ data: new Float32Array(384).fill(0.1) })
   }),
-  env: { allowLocalModels: false, backends: { onnx: { logLevel: 'error' } } },
+  env: { allowLocalModels: false, backends: { onnx: { logLevel: 'error' } } }
 }))
 
 // Test utilities
-export function createMockParsedMarkdown(overrides: Partial<{
-  id: string
-  filePath: string
-  relativePath: string
-  title: string
-  content: string
-  tags: string[]
-  frontmatter: Record<string, unknown>
-  wikiLinks: Array<{ target: string; alias?: string }>
-  headings: Array<{ level: number; text: string }>
-}> = {}) {
+export function createMockParsedMarkdown(
+  overrides: Partial<{
+    id: string
+    filePath: string
+    relativePath: string
+    title: string
+    content: string
+    tags: string[]
+    frontmatter: Record<string, unknown>
+    wikiLinks: Array<{ target: string; alias?: string }>
+    headings: Array<{ level: number; text: string }>
+  }> = {}
+) {
   const id = overrides.id || 'test-id-' + Math.random().toString(36).slice(2)
   return {
     id,
@@ -85,12 +87,18 @@ export function createMockParsedMarkdown(overrides: Partial<{
     frontmatter: overrides.frontmatter || {},
     wikiLinks: overrides.wikiLinks || [],
     headings: overrides.headings || [{ level: 1, text: overrides.title || id }],
-    wordCount: 10,
+    wordCount: 10
   }
 }
 
 export function createTempDir(): string {
-  const dir = path.join(__dirname, '..', '..', 'test-fixtures', `test-${Date.now()}-${Math.random().toString(36).slice(2)}`)
+  const dir = path.join(
+    __dirname,
+    '..',
+    '..',
+    'test-fixtures',
+    `test-${Date.now()}-${Math.random().toString(36).slice(2)}`
+  )
   fs.mkdirSync(dir, { recursive: true })
   return dir
 }

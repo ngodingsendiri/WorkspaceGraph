@@ -96,7 +96,7 @@ export class EmbeddingEngine {
       state: this.state,
       totalChunks: this.index.length,
       indexedFiles: this.indexedPaths.size,
-      modelReady: this.worker !== null,
+      modelReady: this.worker !== null
     }
   }
 
@@ -143,13 +143,15 @@ export class EmbeddingEngine {
     if (!ok) {
       // Fallback: load model on main thread (original behavior)
       try {
-        // eslint-disable-next-line @typescript-eslint/no-require-imports
         const xenovaMod = await import('@xenova/transformers')
         const { pipeline, env } = xenovaMod
         env.allowLocalModels = false
         if (env.backends?.onnx) env.backends.onnx.logLevel = 'error'
         // Store embedder on a temp property for fallback
-        ;(this as any)._fallbackEmbedder = await pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2')
+        ;(this as any)._fallbackEmbedder = await pipeline(
+          'feature-extraction',
+          'Xenova/all-MiniLM-L6-v2'
+        )
         console.log('[EmbeddingEngine] Fallback model ready on main thread')
       } catch (e) {
         console.warn('[EmbeddingEngine] Fallback init failed:', e)
@@ -179,7 +181,9 @@ export class EmbeddingEngine {
     this.migrateDb(db)
     this.currentDb = db
     type Row = { path: string; chunk: string; vector: Buffer; mtime_ms: number }
-    const rows = db.prepare('SELECT path, chunk, vector, mtime_ms FROM embedding_chunks').all() as Row[]
+    const rows = db
+      .prepare('SELECT path, chunk, vector, mtime_ms FROM embedding_chunks')
+      .all() as Row[]
     let loaded = 0
     for (const row of rows) {
       try {
@@ -196,7 +200,13 @@ export class EmbeddingEngine {
     }
   }
 
-  private saveChunkToDb(db: MinDb, filePath: string, chunk: string, vector: Float32Array, mtime: number): void {
+  private saveChunkToDb(
+    db: MinDb,
+    filePath: string,
+    chunk: string,
+    vector: Float32Array,
+    mtime: number
+  ): void {
     try {
       db.prepare(
         'INSERT INTO embedding_chunks (path, mtime_ms, chunk, vector) VALUES (?, ?, ?, ?)'
@@ -209,7 +219,9 @@ export class EmbeddingEngine {
   private deleteFromDb(db: MinDb, filePath: string): void {
     try {
       db.prepare('DELETE FROM embedding_chunks WHERE path = ?').run(filePath)
-    } catch { /* ignore */ }
+    } catch {
+      /* ignore */
+    }
   }
 
   // ── Embedding (worker or fallback) ──────────────────────────────────────────
@@ -239,16 +251,20 @@ export class EmbeddingEngine {
     const norm = filePath.replace(/\\/g, '/')
 
     let mtime = 0
-    try { mtime = fs.statSync(filePath).mtimeMs } catch { return }
+    try {
+      mtime = fs.statSync(filePath).mtimeMs
+    } catch {
+      return
+    }
 
     const activeDb = db ?? this.currentDb
 
     if (this.indexedPaths.has(norm)) {
       if (activeDb) {
         type MtimeRow = { mtime_ms: number }
-        const row = activeDb.prepare(
-          'SELECT mtime_ms FROM embedding_chunks WHERE path = ? LIMIT 1'
-        ).get(filePath) as MtimeRow | undefined
+        const row = activeDb
+          .prepare('SELECT mtime_ms FROM embedding_chunks WHERE path = ? LIMIT 1')
+          .get(filePath) as MtimeRow | undefined
         if (row && row.mtime_ms >= mtime) return
         this.index = this.index.filter((e) => e.filePath.replace(/\\/g, '/') !== norm)
         this.indexedPaths.delete(norm)
@@ -261,7 +277,11 @@ export class EmbeddingEngine {
     this.indexedPaths.add(norm)
 
     let raw: string
-    try { raw = fs.readFileSync(filePath, 'utf-8') } catch { return }
+    try {
+      raw = fs.readFileSync(filePath, 'utf-8')
+    } catch {
+      return
+    }
 
     let body = raw
     if (body.startsWith('---')) {
@@ -301,7 +321,12 @@ export class EmbeddingEngine {
   // ── Search ──────────────────────────────────────────────────────────────────
 
   async search(query: string, topK = 6): Promise<SemanticHit[]> {
-    if ((!this.worker && !(this as any)._fallbackEmbedder) || !query.trim() || this.index.length === 0) return []
+    if (
+      (!this.worker && !(this as any)._fallbackEmbedder) ||
+      !query.trim() ||
+      this.index.length === 0
+    )
+      return []
 
     let qv: Float32Array
     if (this.worker) {
@@ -359,7 +384,11 @@ export class EmbeddingEngine {
     const out: string[] = []
     const walk = (dir: string) => {
       let entries: fs.Dirent[] = []
-      try { entries = fs.readdirSync(dir, { withFileTypes: true }) } catch { return }
+      try {
+        entries = fs.readdirSync(dir, { withFileTypes: true })
+      } catch {
+        return
+      }
       for (const e of entries) {
         if (e.name.startsWith('.') || e.name === 'node_modules') continue
         const full = path.join(dir, e.name)
