@@ -591,6 +591,18 @@ export const GraphFiltersPanel: React.FC<GraphFiltersPanelProps> = ({
                   } as GraphSettings['filters']
                 })
               }}
+              onKeyUp={(e) => {
+                if (e.key.startsWith('Arrow') || e.key === 'Enter') {
+                  const n = Number((e.target as HTMLInputElement).value)
+                  onPersist?.({
+                    filters: {
+                      hubDegreeThreshold: n,
+                      orphanMode,
+                      hubMode
+                    } as GraphSettings['filters']
+                  })
+                }
+              }}
             />
             <span className="graph-filter-range-val">{hubThreshold}</span>
           </label>
@@ -737,6 +749,12 @@ export const GraphFiltersPanel: React.FC<GraphFiltersPanelProps> = ({
                 const n = Number((e.target as HTMLInputElement).value)
                 onDisplayOptsCommit({ ...displayOpts, [s.key]: n })
               }}
+              onKeyUp={(e) => {
+                if (e.key.startsWith('Arrow') || e.key === 'Enter') {
+                  const n = Number((e.target as HTMLInputElement).value)
+                  onDisplayOptsCommit({ ...displayOpts, [s.key]: n })
+                }
+              }}
             />
           </label>
         ))}
@@ -878,6 +896,12 @@ export const GraphFiltersPanel: React.FC<GraphFiltersPanelProps> = ({
               onTouchEnd={(e) => {
                 const n = Number((e.target as HTMLInputElement).value)
                 onForcesCommit({ ...forces, [s.key]: n })
+              }}
+              onKeyUp={(e) => {
+                if (e.key.startsWith('Arrow') || e.key === 'Enter') {
+                  const n = Number((e.target as HTMLInputElement).value)
+                  onForcesCommit({ ...forces, [s.key]: n })
+                }
               }}
             />
           </label>

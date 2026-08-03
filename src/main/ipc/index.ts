@@ -31,7 +31,11 @@ import { pluginHost } from '../plugin/PluginHost'
 import { InternalAPI } from '../api/InternalAPI'
 import { readPermissions } from '../security/Permissions'
 import { assertPathInVault } from '../security/PathSandbox'
-import { isEncryptedForm } from '../security/SecretsStore'
+import {
+  isEncryptedForm,
+  scrubSettingsSecrets,
+  mergeSettingsPreservingSecrets
+} from '../security/SecretsStore'
 import type { ParsedMarkdown } from '../engine/MarkdownEngine'
 // Static import — dynamic require('../engine/GraphLayoutStore') fails at runtime after electron-vite
 // bundles main into out/main/index.js (MODULE_NOT_FOUND)
@@ -1265,13 +1269,20 @@ export function registerIPCHandlers(): void {
   })
 
   // --- Settings Handlers ---
+  /**
+   * Renderer NEVER receives real API keys — only scrubbed settings with apiKeySet flags.
+   * A new key is only accepted when the user explicitly types one via ai:configure;
+   * the stored key is never shipped to the renderer (not even on demand).
+   */
   ipcMain.handle('settings:get', async () => {
-    return workspaceEngine.getSettings()
+    return scrubSettingsSecrets(workspaceEngine.getSettings())
   })
 
   ipcMain.handle('settings:save', async (_, settings: Record<string, unknown>) => {
-    workspaceEngine.saveSettings(settings)
-    const perms = readPermissions(settings)
+    // Merge over stored settings so scrubbed apiKey:'' from renderer never wipes real keys
+    const merged = mergeSettingsPreservingSecrets(workspaceEngine.getSettings(), settings)
+    workspaceEngine.saveSettings(merged)
+    const perms = readPermissions(merged)
     automationEngine.setEnabled(perms.automation)
     pluginHost.setAllowed(perms.plugins)
     loadSettingsIntoProviders()

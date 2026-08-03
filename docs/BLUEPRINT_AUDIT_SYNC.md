@@ -1,5 +1,7 @@
 # Blueprint ↔ Code ↔ Audit — Sinkronisasi
 
+> ⚠️ **Snapshot historis (2026-07-22).** Bagian "❌ Belum" di §7 (index.db, template engine, automation, plugin SDK, installer) sebagian besar **sudah delivered** (Phase 2–5 di kode). Status implementasi aktual lihat **`docs/AUDIT.md`** (2026-08-03).
+
 **Tanggal:** 2026-07-22  
 **Acuan utama:** Blueprint `00`–`35` di root project  
 **Acuan tampilan (request user):** **clean seperti Obsidian** (tanpa meniru plugin ecosystem)  

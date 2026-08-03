@@ -137,7 +137,11 @@ async function main() {
 
   const se = fs.readFileSync(path.join(root, 'src/main/engine/SearchEngine.ts'), 'utf8')
   assert(se.includes('searchFts') || se.includes('indexDatabase'), 'SearchEngine hybrid FTS')
-  assert(se.includes('searchBacklinks') && se.includes('backlinks:'), 'backlink operator')
+  // Operator is implemented as regex /^backlinks?:(.+)$/i — match the actual source form
+  assert(
+    se.includes('searchBacklinks') && (se.includes('backlinks?:') || se.includes('backlinks:')),
+    'backlink operator'
+  )
   assert(se.includes('path:'), 'path operator')
 
   const ctx = fs.readFileSync(path.join(root, 'src/main/ai/ContextEngine.ts'), 'utf8')

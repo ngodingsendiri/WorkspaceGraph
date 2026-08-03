@@ -1,5 +1,7 @@
 # WorkspaceGraph — Audit Review
 
+> ⚠️ **Snapshot historis (2026-07-22).** Temuan HIGH-1 (XSS) dan HIGH-2 (sandbox) sudah diperbaiki; MED-1 (QA gagal) dan status keseluruhan sudah berubah. Status aktual lihat **`docs/AUDIT.md`** (2026-08-03).
+
 **Tanggal:** 2026-07-22  
 **Path:** `C:\code\WorkspaceGraph`  
 **Mode:** Read-only audit sebelum perbaikan

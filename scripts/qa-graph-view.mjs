@@ -68,12 +68,27 @@ async function main() {
     path.join(root, 'src/renderer/src/components/graph/GraphCanvas.tsx'),
     'utf8'
   )
-  assert(gc.includes('ALWAYS produce a drawable size') || gc.includes('Last resort'), 'syncCanvasSize always-ready comment')
+  assert(
+    gc.includes('Never paint 0×0') ||
+      gc.includes('never paint 0×0') ||
+      gc.includes('Last resort'),
+    'syncCanvasSize always-ready comment'
+  )
   assert(gc.includes('paint failed') || gc.includes('try {'), 'paint try/catch')
   assert(gc.includes('fitViewRef'), 'auto-fit via fitViewRef')
-  assert(gc.includes('bind to wrap') || gc.includes('canvas || wrap'), 'pointer bind canvas||wrap')
+  assert(
+    gc.includes('bind(el)') ||
+      gc.includes("addEventListener('pointerdown'") ||
+      gc.includes('canvas || wrap'),
+    'pointer bind canvas||wrap'
+  )
   assert(gc.includes('titleStr') || gc.includes("n.title || n.relativePath"), 'safe title in paint')
-  assert(gc.includes('dragged.x = dragged.fx'), 'drag keeps x/y in sync')
+  assert(
+    gc.includes('dragged.x = w.x') ||
+      gc.includes('dragged.x = dragged.fx') ||
+      gc.includes('dragged.fx = w.x'),
+    'drag keeps x/y in sync'
+  )
   assert(
     gc.includes('ensureGraphVisible') || gc.includes('countNodesInViewport'),
     'blank-viewport recovery (stale camera)'

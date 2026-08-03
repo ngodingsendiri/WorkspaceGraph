@@ -77,3 +77,54 @@ export function revealSettingsSecrets(settings: Record<string, unknown>): Record
   }
   return clone
 }
+
+/**
+ * Strip all API keys before sending settings to the renderer (never ship secrets).
+ * Keeps a non-secret marker `apiKeySet` so the UI can show “saved” without the raw key.
+ */
+export function scrubSettingsSecrets(settings: Record<string, unknown>): Record<string, unknown> {
+  const clone = JSON.parse(JSON.stringify(settings)) as Record<string, unknown>
+  const ai = clone.ai as Record<string, Record<string, unknown>> | undefined
+  if (ai && typeof ai === 'object') {
+    for (const id of Object.keys(ai)) {
+      if (ai[id] && typeof ai[id] === 'object') {
+        const cfg = ai[id] as Record<string, unknown>
+        const hasKey = Boolean(cfg.apiKey)
+        cfg.apiKey = ''
+        cfg.apiKeySet = hasKey
+      }
+    }
+  }
+  return clone
+}
+
+/**
+ * Merge renderer-sent settings over current stored settings, preserving API keys
+ * whenever the incoming payload leaves apiKey empty/absent (renderer only sees scrubbed
+ * settings via settings:get, so a round-trip must never wipe the real stored key).
+ */
+export function mergeSettingsPreservingSecrets(
+  current: Record<string, unknown>,
+  incoming: Record<string, unknown>
+): Record<string, unknown> {
+  const merged: Record<string, unknown> = { ...current, ...incoming }
+  const curAi = (current.ai || {}) as Record<string, Record<string, unknown>>
+  const inAi = incoming.ai
+  if (inAi === undefined || inAi === null || typeof inAi !== 'object' || Array.isArray(inAi)) {
+    return merged
+  }
+
+  const incomingAi = inAi as Record<string, Record<string, unknown>>
+  const mergedAi: Record<string, Record<string, unknown>> = {}
+  const ids = new Set([...Object.keys(curAi), ...Object.keys(incomingAi)])
+  for (const id of ids) {
+    const cur = curAi[id] || {}
+    const inc = incomingAi[id] || {}
+    // Renderer sends apiKey:'' when it has no new key — keep the stored one
+    const apiKey = inc.apiKey ? inc.apiKey : cur.apiKey
+    const { apiKeySet: _marker, ...incClean } = inc
+    mergedAi[id] = { ...cur, ...incClean, apiKey }
+  }
+  merged.ai = mergedAi
+  return merged
+}

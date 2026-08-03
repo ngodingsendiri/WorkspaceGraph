@@ -252,9 +252,10 @@ describe('WorkspaceEngine', () => {
       fs.writeFileSync(path.join(testDir, 'sub', 'B.md'), '# B')
 
       const paths = engine.getAllMarkdownPaths()
-      expect(paths).toHaveLength(2)
-      expect(paths.some(p => p.includes('A.md'))).toBe(true)
-      expect(paths.some(p => p.includes(path.join('sub', 'B.md')) || p.includes('sub/B.md'))).toBe(true)
+      // Workspace seeding now adds Templates/*.md — assert inclusion, not exact count
+      expect(paths.some(p => p.endsWith('A.md'))).toBe(true)
+      expect(paths.some(p => p.endsWith('B.md') || p.includes('sub/B.md'))).toBe(true)
+      expect(paths.some(p => p.includes('Templates'))).toBe(true)
     })
 
     it('ignores hidden folders and node_modules', () => {
@@ -265,7 +266,9 @@ describe('WorkspaceEngine', () => {
       fs.writeFileSync(path.join(testDir, 'node_modules', 'C.md'), '# C')
 
       const paths = engine.getAllMarkdownPaths()
-      expect(paths).toHaveLength(1)
+      expect(paths.some(p => p.endsWith('A.md'))).toBe(true)
+      expect(paths.some(p => p.includes('.hidden'))).toBe(false)
+      expect(paths.some(p => p.includes('node_modules'))).toBe(false)
     })
   })
 

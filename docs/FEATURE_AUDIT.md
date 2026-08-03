@@ -1,5 +1,7 @@
 # Feature Audit Report
 
+> ⚠️ **Snapshot historis (2026-07-22).** Status fitur inti masih berlaku; angka uji sekarang: vitest **132/132** + QA chain hijau. Lihat **`docs/AUDIT.md`** (2026-08-03).
+
 **Date:** 2026-07-22T12:44:38.108Z
 **PASS:** 70 · **FAIL:** 0 · **MANUAL:** 9
 

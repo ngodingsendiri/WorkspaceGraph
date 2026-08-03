@@ -5,6 +5,9 @@ import { app } from 'electron'
 // Static import so electron-vite bundles SecretsStore into out/main/index.js
 // (dynamic require('../security/SecretsStore') broke at runtime: module not found)
 import { protectSettingsSecrets, revealSettingsSecrets } from '../security/SecretsStore'
+// Static import so electron-vite bundles TemplateEngine into out/main/index.js
+// (dynamic require('./TemplateEngine') failed under vitest: Cannot find module)
+import { templateEngine } from './TemplateEngine'
 
 const SETTINGS_VERSION = 1
 
@@ -278,8 +281,6 @@ export class WorkspaceEngine {
     }
     // Seed built-in templates into Templates/ (Phase 4)
     try {
-      // eslint-disable-next-line @typescript-eslint/no-require-imports
-      const { templateEngine } = require('./TemplateEngine') as typeof import('./TemplateEngine')
       templateEngine.seedBuiltinToVault(workspacePath)
     } catch (err) {
       console.error('Failed to seed templates:', err)

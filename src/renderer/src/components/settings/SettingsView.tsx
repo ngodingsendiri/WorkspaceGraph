@@ -87,15 +87,15 @@ export const SettingsView: React.FC = () => {
         permissions?: typeof permissions
       }
       if (settings?.ai) {
-        const keys: Record<string, string> = {}
         const urls: Record<string, string> = {}
         for (const [id, cfg] of Object.entries(settings.ai)) {
-          if (cfg.apiKey) keys[id] = cfg.apiKey
           if (cfg.baseUrl) urls[id] = cfg.baseUrl
         }
-        setApiKeys(keys)
         setBaseUrls(urls)
       }
+      // Keys are never shipped to the renderer (security) — fields stay masked,
+      // "saved" state comes from security:status. Only a newly typed key is sent.
+      setApiKeys({})
       if (settings?.theme) {
         setTheme(settings.theme)
         applyTheme(settings.theme)
@@ -117,7 +117,11 @@ export const SettingsView: React.FC = () => {
   const handleSaveKey = async (providerId: string) => {
     const key = apiKeys[providerId]?.trim()
     const baseUrl = baseUrls[providerId]?.trim()
-    if (providerId !== 'ollama' && !key) {
+    // Key is masked in the UI — leaving it blank keeps the stored key (if any).
+    const alreadySaved =
+      providerId === 'ollama' ||
+      (secStatus?.secrets?.[providerId] && secStatus.secrets[providerId] !== 'empty')
+    if (providerId !== 'ollama' && !key && !alreadySaved) {
       flash('API key required')
       return
     }
@@ -321,39 +325,43 @@ export const SettingsView: React.FC = () => {
                     ? `Key saved · ${p.models.length} models · klik Test`
                     : p.error || 'Not configured'
               return (
-              <div
-                key={p.id}
-                className={`provider-card ${isReady ? 'active' : ''}`}
-              >
-                <div className={`provider-dot ${isReady ? 'connected' : ''}`} />
-                <div style={{ flex: 1, minWidth: 120 }}>
-                  <div style={{ fontWeight: 600, fontSize: 'var(--text-sm)' }}>{p.name}</div>
-                  <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
-                    {statusText}
-                    {secStatus?.secrets?.[p.id] ? ` · key:${secStatus.secrets[p.id]}` : ''}
-                  </div>
+            <div
+              key={p.id}
+              className={`provider-card ${isReady ? 'active' : ''}`}
+            >
+              <div className={`provider-dot ${isReady ? 'connected' : ''}`} />
+              <div style={{ flex: 1, minWidth: 120 }}>
+                <div style={{ fontWeight: 600, fontSize: 'var(--text-sm)' }}>{p.name}</div>
+                <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
+                  {statusText}
+                  {secStatus?.secrets?.[p.id] ? ` · key:${secStatus.secrets[p.id]}` : ''}
                 </div>
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  {p.id === 'ollama' ? (
-                    <input
-                      type="text"
-                      className="input"
-                      placeholder="http://localhost:11434"
-                      style={{ width: 260 }}
-                      value={baseUrls[p.id] || ''}
-                      onChange={(e) => setBaseUrls({ ...baseUrls, [p.id]: e.target.value })}
-                    />
-                  ) : (
-                    <input
-                      type="password"
-                      className="input"
-                      placeholder="API Key"
-                      style={{ width: 260 }}
-                      value={apiKeys[p.id] || ''}
-                      onChange={(e) => setApiKeys({ ...apiKeys, [p.id]: e.target.value })}
-                      autoComplete="off"
-                    />
-                  )}
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {p.id === 'ollama' ? (
+                  <input
+                    type="text"
+                    className="input"
+                    placeholder="http://localhost:11434"
+                    style={{ width: 260 }}
+                    value={baseUrls[p.id] || ''}
+                    onChange={(e) => setBaseUrls({ ...baseUrls, [p.id]: e.target.value })}
+                  />
+                ) : (
+                  <input
+                    type="password"
+                    className="input"
+                    placeholder={
+                      secStatus?.secrets?.[p.id] && secStatus.secrets[p.id] !== 'empty'
+                        ? '••••••  (saved)'
+                        : 'API Key'
+                    }
+                    style={{ width: 260 }}
+                    value={apiKeys[p.id] || ''}
+                    onChange={(e) => setApiKeys({ ...apiKeys, [p.id]: e.target.value })}
+                    autoComplete="off"
+                  />
+                )}
                   <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end', flexWrap: 'wrap' }}>
                     <button className="btn btn-surface btn-sm" onClick={() => handleTest(p.id)}>
                       Test

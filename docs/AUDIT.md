@@ -1,6 +1,6 @@
 # WorkspaceGraph — Full Audit
 
-**Tanggal:** 2026-07-22 (pass bughunt berulang)  
+**Tanggal:** 2026-08-03 (update setelah siklus perbaikan kritis)  
 **Path:** `C:\code\WorkspaceGraph`  
 **Stack:** Electron 39 + electron-vite + React 19 + TypeScript + Zustand + CodeMirror + D3 + multi-provider AI  
 
@@ -10,7 +10,16 @@
 3. Dokumen ini = **fakta implementasi** (bukan spek)  
 4. UI: **clean seperti Obsidian**
 
-**Verifikasi otomatis:** `npm run typecheck` ✅ · `npm run qa` ✅ 126/126 (runtime + static + Phase2 FTS + security regression) · `npm run lint` 177/82 errors (formatting + type strictness)
+**Verifikasi otomatis (2026-08-03, dijalankan ulang):**
+| Pemeriksaan | Hasil aktual |
+|---|---|
+| `npm run typecheck` | ✅ bersih |
+| `npm test` (vitest) | ✅ **132 passed / 132** (6 file: Workspace, Markdown, Graph, Search, Embedding, Secrets) |
+| `npm run qa` | ✅ **semua fase hijau** (runtime · engines · phase2–5 · graph-view · adversarial, exit 0) |
+| `npm run lint` | ⚠️ 2 errors + 5.534 warnings (5.230 fixable prettier) — **debt kualitas, bukan blocker** |
+| `npm run build` | ✅ production build sukses (diverifikasi sebelumnya) |
+
+> **Catatan penting:** klaim versi dokumen lama (`126/126 QA`, `0 errors, 175 warnings`) **tidak lagi akurat** — `npm run qa` sempat merah (2 kegagalan + fase-fase tersembunyi di balik crash rantai), dan sekarang sudah hijau kembali setelah perbaikan 2026-08-03 (lihat §2).
 
 ---
 
@@ -21,8 +30,8 @@
 | Fondasi Electron/React | Solid | **8.5/10** |
 | Vault Markdown | Open/create, tree CRUD, templates | **8/10** |
 | Graph + backlinks/outgoing | Engine + panel + local graph | **8/10** |
-| Search (Fuse + operators) | empty→recent, `#tag`, `orphan:true` | **7.5/10** |
-| AI multi-provider | Keys persist + load on startup | **8/10** |
+| Search (FTS5 + Fuse + operators) | empty→recent, `#tag`, `orphan:true`, `backlink:` | **7.5/10** |
+| AI multi-provider | Keys persist (encrypted) + load on startup | **8/10** |
 | Context retrieval | Search + active + neighbors; Rules/SOP priority | **6.5/10** |
 | UX Obsidian-feel (Phase 1) | Editor/preview/inspector/hotkeys/ctx menu | **7.5/10** |
 | **Phase 2+ (index.db, agent tools, projects)** | Roadmap debt — **bukan bug** | — |
@@ -30,7 +39,32 @@
 
 ---
 
-## 2. Bug ditemukan & diperbaiki (siklus ini)
+## 2. Perbaikan kritis 2026-08-03 (dari audit mendalam)
+
+### CRIT-1 — QA suite merah → hijau ✅
+`npm run qa` gagal 2 kasus di `scripts/qa-runtime.mjs` (padahal dokumen lama mengklaim 126/126):
+1. **`graph nodes=5 got 9`** — `buildFromParsedFiles()` sekarang selalu membangun tag node; asersi QA lama tidak diupdate.
+2. **Crash `TypeError`** — `search.search()` async dipanggil tanpa `await` di script QA.
+
+Karena crash di fase pertama, seluruh rantai `&&` berhenti → angka "126/126" tidak pernah terverifikasi ulang. Diperbaiki: `await` ditambahkan, asersi memakai `realNodeCount`, dan kegagalan tersembunyi di fase berikutnya ikut dituntaskan (`qa-phase2` "backlink operator" regex `backlinks?:`, 3 asersi statis usang di `qa-graph-view`).
+
+### CRIT-2 — API key plaintext bocor ke renderer → ditutup total ✅
+`settings:get` sebelumnya mengembalikan **key terdekripsi** ke proses renderer. Sekarang:
+- `settings:get` men-scrub semua key → hanya `apiKeySet: true/false`.
+- `settings:save` melakukan **merge-preserve** (key lama dipertahankan saat field kosong; marker internal dibersihkan sebelum persist).
+- **Renderer tidak pernah menerima key tersimpan** — UI menampilkan placeholder "saved" dan hanya mengirim key baru saat user mengetiknya.
+- Regression tests baru: `src/main/security/SecretsStore.test.ts` (5 test).
+
+### CRIT-3 — Dynamic `require` TemplateEngine → static import ✅
+`WorkspaceEngine.ts` memakai `require('./TemplateEngine')` yang gagal diam-diam di vitest. Diubah ke static import; efek sampingnya seeding template kini benar-benar berjalan (test `getAllMarkdownPaths` diupdate dari hitungan absolut → inklusi/eksklusi).
+
+### Regresi yang terbongkar & diperbaiki
+- `WorkspaceEngine.test.ts`: asersi usang yang mengasumsikan seeding template gagal.
+- `scripts/qa-phase2.mjs`, `scripts/qa-graph-view.mjs`: asersi statis tidak sinkron dengan kode pasca-refactor `GraphCanvas`.
+
+---
+
+## 3. Bug ditemukan & diperbaiki (siklus sebelumnya)
 
 | # | Bug / gap | Status |
 |---|-----------|--------|
@@ -58,10 +92,13 @@
 | 22 | QA: `getNeighbors` assertion keliru (ekspektasi self) | ✅ assertion diperbaiki sesuai kontrak API |
 | 23 | QA: regression test XSS tidak ada | ✅ added `escape unsafe markdown HTML` + `block unsafe markdown URLs` |
 | 24 | Lint: lint scan seluruh project (7.808 noise) | ✅ scope ke `src/` + ignore generated |
+| 25 | **QA runtime crash (async tanpa await) + asersi tag-node usang** | ✅ 2026-08-03 |
+| 26 | **API key terdekripsi dikirim via `settings:get`** | ✅ 2026-08-03 scrub + merge-preserve + tests |
+| 27 | **Dynamic `require` TemplateEngine error di vitest** | ✅ 2026-08-03 static import |
 
 ---
 
-## 3. Matriks fungsi (uji berurutan)
+## 4. Matriks fungsi (uji berurutan)
 
 | Fungsi | Hasil audit |
 |--------|-------------|
@@ -72,16 +109,17 @@
 | Split preview + wikilink click | ✅ |
 | Backlinks / outgoing / outline | ✅ |
 | Graph global + filter + local | ✅ |
-| Search fuzzy / tag / orphan / recent | ✅ |
+| Search fuzzy / tag / orphan / recent / backlink | ✅ |
 | Daily note create | ✅ |
 | Dashboard metrics (notes vs files, orphans) | ✅ |
 | AI configure persist + context inject | ✅ |
 | Chat append to note | ✅ |
 | Theme dark/light/system | ✅ tokens |
+| Keamanan key AI (encrypted, scrub, merge-preserve) | ✅ 2026-08-03 |
 
 ---
 
-## 4. Phase 2 (delivered) — Search Index + Context
+## 5. Phase 2 (delivered) — Search Index + Context
 
 | Item | Status |
 |------|--------|
@@ -93,7 +131,7 @@
 | Context: priority + token budget + Rules/SOP | ✅ |
 | Vector embeddings (2b) | ❌ later |
 
-## 5. Phase 3 (delivered) — AI Worker
+## 6. Phase 3 (delivered) — AI Worker
 
 | Item | Status |
 |------|--------|
@@ -106,18 +144,18 @@
 | Cancel stream + timeout | ✅ |
 | Native tool_calling APIs | ❌ optional (uses `wg-action` JSON) |
 
-## 6. Phase 4 (delivered) — Domain + Templates
+## 7. Phase 4 (delivered) — Domain + Templates
 
 | Item | Status |
 |------|--------|
 | Builtin templates (project/task/people/…) | ✅ |
-| Seed `Templates/` on create vault | ✅ |
+| Seed `Templates/` on create vault | ✅ (kini benar-benar bekerja, lihat CRIT-3) |
 | Template picker UI + Ctrl+Shift+N | ✅ |
 | Domain overview (counts, lists, checkboxes) | ✅ |
 | Dashboard widgets domain | ✅ |
 | AI create_from_template | ✅ |
 
-## 7. Phase 5 (delivered) — Platform
+## 8. Phase 5 (delivered) — Platform
 
 | Item | Status |
 |------|--------|
@@ -131,24 +169,29 @@
 | Full JS plugin runtime | ❌ later |
 | Vector RAG 2b | ❌ later |
 
-## 8. Utang residual
+---
+
+## 9. Utang residual
 
 - Soft-delete trash
 - Vector hybrid search
 - Scheduled automation
 - Full plugin code sandbox
+- Monolith: `src/main/ipc/index.ts` (±1.280 baris) & `GraphCanvas.tsx` (±4.257 baris) → refactor ke modul/hook
+- Migrasi `scripts/qa-*.mjs` ke vitest (dua sistem test paralel mudah melenceng — lihat CRIT-1)
 
 Lihat `35_Roadmap.md`.
 
 ---
 
-## 9. Cara verifikasi
+## 10. Cara verifikasi
 
 ```bash
 cd C:\code\WorkspaceGraph
 npm run typecheck   # ✅ bersih
-npm run qa          # ✅ 126 passed, 0 failed (P0–P5 + security regression)
-npm run lint        # ✅ 0 errors, 175 warnings (debt kualitas, bukan blocker)
+npm test            # ✅ 132 passed / 132 (6 file)
+npm run qa          # ✅ semua fase hijau, exit 0 (runtime · engines · phase2–5 · graph-view · adversarial)
+npm run lint        # ⚠️ 2 errors + 5.534 warnings (debt prettier/strict, bukan blocker)
 npm run build       # ✅ production build sukses
 # optional installer:
 # npm run build:win
@@ -159,17 +202,18 @@ Settings → Security / Automation / Plugins.
 
 ---
 
-## 10. Verdict
+## 11. Verdict
 
 | Pertanyaan | Jawaban |
 |------------|---------|
 | Typecheck bersih? | **Ya** |
-| QA P0–P5? | **Ya** (126/126) |
-| Lint bersih? | **0 errors** (175 warnings debt kualitas) |
+| QA P0–P5? | **Ya** (semua fase hijau, exit 0) |
+| Lint bersih? | **Tidak** — 2 errors + 5.534 warnings (debt prettier) |
 | Build produksi? | **Ya** |
 | Path sandbox konsisten? | **Ya** (semua IPC file terkunci) |
 | XSS preview tertangani? | **Ya** (escape + allowlist URL) |
+| API key aman dari renderer? | **Ya** (scrub + merge-preserve + regression tests) |
 | Blueprint roadmap core? | **Phase 0–5 core delivered** |
 | Siap pakai harian? | **Ya** (vault + AI worker + domain + platform) |
 
-Residual: vector RAG, soft-delete, JS plugin sandbox, cron.
+Residual: vector RAG, soft-delete, JS plugin sandbox, cron, refactor monolith, migrasi QA ke vitest.

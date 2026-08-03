@@ -8,7 +8,7 @@ import { useEditorStore } from '../../store/editorStore'
 import { useWorkspaceStore } from '../../store/workspaceStore'
 import { useGraphStore, type GraphForceSettings } from '../../store/graphStore'
 import { Icon } from '../ui/Icons'
-import { DEFAULT_FORCE_SETTINGS } from './GraphFiltersPanel'
+import { DEFAULT_FORCE_SETTINGS } from './graphShared'
 import type { SimNode, SimLink } from './graphTypes'
 import {
   chargeFor,
@@ -83,9 +83,13 @@ export const LocalGraphCanvas: React.FC = () => {
     updateGraphSettings
   } = useGraphStore()
   const forcesRef = useRef<GraphForceSettings>({ ...DEFAULT_FORCE_SETTINGS })
-  if (graphSettings?.forces) {
-    forcesRef.current = { ...DEFAULT_FORCE_SETTINGS, ...graphSettings.forces }
-  }
+
+  // Sync forces from settings - use useEffect to avoid render-body mutation
+  useEffect(() => {
+    if (graphSettings?.forces) {
+      forcesRef.current = { ...DEFAULT_FORCE_SETTINGS, ...graphSettings.forces }
+    }
+  }, [graphSettings?.forces])
 
   const wrapRef = useRef<HTMLDivElement | null>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
@@ -103,6 +107,8 @@ export const LocalGraphCanvas: React.FC = () => {
   const posCache = useRef<
     Map<string, { x: number; y: number; fx?: number | null; fy?: number | null }>
   >(new Map())
+  const hasFittedRef = useRef(false)
+  const wheelDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
 
   const clampDepth = (d: number): number => Math.min(5, Math.max(1, Math.floor(d) || 1))
   const defaultDepth = clampDepth(graphSettings?.filters.localDepth ?? 1)
@@ -376,6 +382,7 @@ export const LocalGraphCanvas: React.FC = () => {
     })
     return () => {
       unsub()
+      if (rafRef.current) cancelAnimationFrame(rafRef.current)
       if (hoverAnimRafRef.current) cancelAnimationFrame(hoverAnimRafRef.current)
     }
   }, [])
@@ -427,10 +434,10 @@ export const LocalGraphCanvas: React.FC = () => {
       }
       const xs = nodes.map((n) => n.x || 0)
       const ys = nodes.map((n) => n.y || 0)
-      const minX = Math.min(...xs)
-      const maxX = Math.max(...xs)
-      const minY = Math.min(...ys)
-      const maxY = Math.max(...ys)
+      const minX = xs.reduce((a, b) => Math.min(a, b), Infinity)
+      const maxX = xs.reduce((a, b) => Math.max(a, b), -Infinity)
+      const minY = ys.reduce((a, b) => Math.min(a, b), Infinity)
+      const maxY = ys.reduce((a, b) => Math.max(a, b), -Infinity)
       const gw = Math.max(maxX - minX, 40)
       const gh = Math.max(maxY - minY, 40)
       const pad = 36
@@ -448,8 +455,8 @@ export const LocalGraphCanvas: React.FC = () => {
     if (!activeTabPath) {
       setEmptyReason('no-file')
       setStats({ nodes: 0, edges: 0, centerTitle: '' })
-      nodesRef.current = []
-      linksRef.current = []
+      nodesRef.current.length = 0
+      linksRef.current.length = 0
       centerIdRef.current = null
       simRef.current?.stop()
       schedulePaint()
@@ -467,8 +474,8 @@ export const LocalGraphCanvas: React.FC = () => {
         if (!data || !data.centerId) {
           setEmptyReason('not-in-graph')
           setStats({ nodes: 0, edges: 0, centerTitle: activeTabTitle || '' })
-          nodesRef.current = []
-          linksRef.current = []
+          nodesRef.current.length = 0
+          linksRef.current.length = 0
           centerIdRef.current = null
           simRef.current?.stop()
           schedulePaint()
@@ -516,8 +523,16 @@ export const LocalGraphCanvas: React.FC = () => {
             target
           }))
 
-        nodesRef.current = simNodes
-        linksRef.current = simLinks
+        // Mutate in place to preserve d3 simulation reference
+        nodesRef.current.length = 0
+        nodesRef.current.push(...simNodes)
+        linksRef.current.length = 0
+        linksRef.current.push(...simLinks)
+        // Prune posCache entries for nodes no longer in the simulation
+        const activeIds = new Set(simNodes.map((n) => n.id))
+        for (const key of posCache.current.keys()) {
+          if (!activeIds.has(key)) posCache.current.delete(key)
+        }
         setStats({
           nodes: data.nodeCount,
           edges: data.edgeCount,
@@ -533,6 +548,7 @@ export const LocalGraphCanvas: React.FC = () => {
         const baseCharge = Math.max(-180, Math.min(-28, f.charge * 0.78))
 
         simRef.current?.stop()
+        hasFittedRef.current = false
         const sim = d3
           .forceSimulation<SimNode>(simNodes)
           .force(
@@ -599,7 +615,11 @@ export const LocalGraphCanvas: React.FC = () => {
               posCache.current.set(n.id, { x: n.x, y: n.y, fx: n.fx, fy: n.fy })
             }
           }
-          fitView(simNodes, width, height)
+          // Only fit on first settle, not every sim end (avoid camera jumps)
+          if (!hasFittedRef.current) {
+            hasFittedRef.current = true
+            fitView(simNodes, width, height)
+          }
         })
         schedulePaint()
       })()
@@ -645,11 +665,16 @@ export const LocalGraphCanvas: React.FC = () => {
       const my = e.clientY - rect.top
       const t = transformRef.current
       const factor = e.deltaY < 0 ? 1.1 : 1 / 1.1
-      const nextK = Math.max(0.35, Math.min(3.5, t.k * factor))
+      const nextK = Math.max(0.08, Math.min(6, t.k * factor))
       const x = mx - ((mx - t.x) * nextK) / t.k
       const y = my - ((my - t.y) * nextK) / t.k
       transformRef.current = d3.zoomIdentity.translate(x, y).scale(nextK)
-      schedulePaint()
+      // Debounce: hide canvas + sync SVG after scrolling stops (280ms idle)
+      if (wheelDebounceRef.current) clearTimeout(wheelDebounceRef.current)
+      wheelDebounceRef.current = setTimeout(() => {
+        wheelDebounceRef.current = null
+        schedulePaint()
+      }, 280)
     }
 
     const onDown = (e: PointerEvent) => {
@@ -762,6 +787,10 @@ export const LocalGraphCanvas: React.FC = () => {
       canvas.removeEventListener('pointercancel', onUp)
       canvas.removeEventListener('pointerleave', onLeave)
       canvas.removeEventListener('dblclick', onDbl)
+      if (wheelDebounceRef.current) {
+        clearTimeout(wheelDebounceRef.current)
+        wheelDebounceRef.current = null
+      }
     }
   }, [collapsed, hitNode, openTab, schedulePaint, setHoverId, setOpenIntent, setActiveView])
 

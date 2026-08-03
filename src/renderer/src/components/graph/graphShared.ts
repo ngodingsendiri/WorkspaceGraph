@@ -266,6 +266,8 @@ export type GraphDiagCode =
   | 'FILTER_TAG'
   | 'FILTER_SEARCH'
   | 'FILTER_MULTI'
+  | 'FILTER_GHOST_HIDE'
+  | 'FILTER_TYPES_HIDDEN'
   | 'FILTER_EMPTY_UNKNOWN'
   | 'PATH_NONE'
   | 'PATH_FAIL'
@@ -401,6 +403,24 @@ export function diagnoseEmptyFilter(input: {
       title: 'Search filter: tidak ada match',
       cause: `Mode Filter + query “${searchQuery.trim()}” menyembunyikan non-match; 0 cocok`,
       action: 'Hapus search (/ lalu clear), atau ganti mode ke Spotlight',
+      severity: 'warn'
+    }
+  }
+  if (input.existingFilesOnly) {
+    return {
+      code: 'FILTER_GHOST_HIDE',
+      title: 'Semua node adalah ghost (file belum ada)',
+      cause: 'existingFilesOnly aktif dan semua note resolving ke file yang belum dibuat',
+      action: 'Buat file note yang di-link, atau nonaktifkan "Existing files only" di panel P',
+      severity: 'warn'
+    }
+  }
+  if (!input.showTags && !input.showAttachments) {
+    return {
+      code: 'FILTER_TYPES_HIDDEN',
+      title: 'Tags & Attachments disembunyikan',
+      cause: 'showTags=false dan showAttachments=false — semua node termasuk tag/attachment tersembunyi',
+      action: 'Centang Tags / Attachments di panel P (display)',
       severity: 'warn'
     }
   }
@@ -646,8 +666,8 @@ export function readPalette(): Palette {
 }
 
 /** Node radius wrapper (reads degree from SimNode-like object) */
-export function radius(d: { degree?: number }, scale = 1): number {
-  return nodeRadius(d.degree ?? 0, scale, false)
+export function radius(d: { degree?: number }, scale = 1, hubDim = false): number {
+  return nodeRadius(d.degree ?? 0, scale, hubDim)
 }
 
 /** Extract string id from d3 node/link (handles string | SimNode) */
@@ -665,8 +685,9 @@ export function safeTags(n: { tags?: string | string[] }): string[] {
 /** Escape HTML entities for safe DOM insertion */
 export function escapeHtml(s: string): string {
   return s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
+    .replace(/&/g, '&')
+    .replace(/</g, '<')
+    .replace(/>/g, '>')
+    .replace(/"/g, '"')
+    .replace(/'/g, '\'')
 }

@@ -137,7 +137,11 @@ Isolated note.
   // --- GraphEngine ---
   const files = [a, b, g, o, d]
   const gd = graph.buildFromParsedFiles(files)
-  assert(gd.nodeCount === 5, `graph nodes=5 got ${gd.nodeCount}`)
+  // Tag nodes are always built now (#core, #test, #inlineTag, #solo) — count real notes only
+  assert(
+    gd.realNodeCount === 5,
+    `graph real notes=5 got ${gd.realNodeCount} (total ${gd.nodeCount} incl. tags)`
+  )
   const wikiEdges = gd.edges.filter(e => e.type === 'wiki_link')
   assert(wikiEdges.length >= 2, `wiki edges >=2 got ${wikiEdges.length}`)
   // Alpha->Beta, Alpha->Gamma, Beta->Alpha
@@ -191,20 +195,21 @@ Isolated note.
   graph.buildFromParsedFiles(files)
 
   // --- SearchEngine ---
-  search.buildIndex(files)
+  // search.buildIndex / search.search are async — must await or results are Promises
+  await search.buildIndex(files)
   search.setOrphanIds(graph.getOrphanNodeIds())
 
-  const empty = search.search({ query: '', limit: 5 })
+  const empty = await search.search({ query: '', limit: 5 })
   assert(empty.length > 0, 'empty query → recent notes')
   assert(empty[0].title === 'Beta' || empty.some(r => r.title === 'Beta'), 'recent prefers newer updated (Beta 07-21)')
 
-  const qAlpha = search.search({ query: 'Alpha', limit: 10 })
+  const qAlpha = await search.search({ query: 'Alpha', limit: 10 })
   assert(qAlpha.some(r => r.title === 'Alpha'), 'fuzzy find Alpha')
 
-  const byTag = search.search({ query: '#core', limit: 10 })
+  const byTag = await search.search({ query: '#core', limit: 10 })
   assert(byTag.length >= 2 && byTag.every(r => r.tags.some(t => t.toLowerCase() === 'core')), 'tag operator #core')
 
-  const orphansS = search.search({ query: 'orphan:true', limit: 20 })
+  const orphansS = await search.search({ query: 'orphan:true', limit: 20 })
   assert(orphansS.some(r => r.title === 'Lonely'), 'orphan:true finds Lonely')
 
   const tags = search.getAllTags()

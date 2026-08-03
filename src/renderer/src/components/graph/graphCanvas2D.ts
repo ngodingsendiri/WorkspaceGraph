@@ -8,8 +8,6 @@ import {
   resolveObsidianNodeFill,
   edgeDrawBudget,
   labelDrawBudget,
-  resolveLod,
-  nodeRadius,
   edgeKey,
   smooth01,
   lerp,
@@ -45,6 +43,8 @@ export interface DrawContext {
   lod: LodLevel
   /** Whether graph is "large" (for label thinning) */
   large: boolean
+  /** Whether labels are visible */
+  showLabels: boolean
 }
 
 /** Pre-computed hot set (hover neighbors) */
@@ -108,7 +108,8 @@ export function drawCanvas2DScene(dc: DrawContext, hot: HotSet): void {
     flags,
     pulse,
     lod,
-    large
+    large,
+    showLabels
   } = dc
 
   const hotIds = hot.ids
@@ -160,13 +161,12 @@ export function drawCanvas2DScene(dc: DrawContext, hot: HotSet): void {
     const s = e.source as SimNode
     const tg = e.target as SimNode
     if (s.x == null || s.y == null || tg.x == null || tg.y == null) continue
-    const ekEarly = edgeKey(s.id, tg.id)
+    const ek = edgeKey(s.id, tg.id)
     const forceEdge =
-      (pathE != null && pathE.has(ekEarly)) || (focE != null && focE.has(ekEarly))
+      (pathE != null && pathE.has(ek)) || (focE != null && focE.has(ek))
     if (!forceEdge && !inView(s.x, s.y, tx, ty, k, w, h, margin) && !inView(tg.x, tg.y, tx, ty, k, w, h, margin))
       continue
 
-    const ek = ekEarly
     const onPath = pathE != null && pathE.has(ek)
     const onFocus = focE != null && focE.has(ek)
     const isHot = hotIds
@@ -217,8 +217,10 @@ export function drawCanvas2DScene(dc: DrawContext, hot: HotSet): void {
       const dy = tg.y - s.y
       const len = Math.hypot(dx, dy)
       if (len > 8) {
-        const tgHub = dimHubsOn && tg.degree >= thr ? 0.62 : 1
-        const tgR = radius(tg, tgHub) * sizeMul
+        const isTgGhost = Boolean(tg.isGhost || tg.type === 'ghost')
+        const isTgTag = Boolean(tg.isTag || tg.type === 'tag')
+        const isTgHub = !isTgGhost && !isTgTag && tg.degree >= thr && dimHubsOn
+        const tgR = radius(tg, 1, isTgHub) * sizeMul
         const ux = dx / len
         const uy = dy / len
         const ax = tg.x - ux * (tgR + 2 + edgeW * 0.5)
@@ -385,7 +387,7 @@ export function drawCanvas2DScene(dc: DrawContext, hot: HotSet): void {
   ctx.restore()
 
   // ── Labels (screen space) ──
-  const labelsOn = true
+  const labelsOn = showLabels
   if (labelsOn) {
     ctx.save()
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
@@ -441,7 +443,7 @@ export function drawCanvas2DScene(dc: DrawContext, hot: HotSet): void {
       const rWorld = radius(n, dimHubsOn && isHub ? 0.62 : 1) * sizeMul
       const sx = n.x * k + tx + rWorld * k + 6
       const sy = n.y * k + ty
-      if (sx > w + 40 || sy < -20 || sy > h + 20) continue
+      if (sx < -40 || sx > w + 40 || sy < -20 || sy > h + 20) continue
 
       const titleStr = String(n.title || n.relativePath || n.id || '')
       const text = titleStr.length > 28 ? titleStr.slice(0, 27) + '…' : titleStr

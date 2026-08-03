@@ -23,7 +23,6 @@ import {
   DEFAULT_FORCE_SETTINGS,
   OBSIDIAN_SIM,
   resolveObsidianNodeFill,
-  edgeDrawBudget,
   labelDrawBudget,
   resolveLod,
   nodeRadius,
@@ -48,6 +47,11 @@ import {
   safeTags,
   escapeHtml
 } from './graphShared'
+import {
+  computeHotSet,
+  drawCanvas2DScene,
+  type DrawContext,
+} from './graphCanvas2D'
 import { Icon } from '../ui/Icons'
 
 import {
@@ -293,9 +297,12 @@ export const GraphCanvas: React.FC = () => {
   const [selectedTag, setSelectedTag] = useState('all')
   const [searchQuery, setSearchQuery] = useState('')
   const [showFilters, setShowFilters] = useState(false)
+  const showFiltersRef = useRef(showFilters)
+  showFiltersRef.current = showFilters
   const [showTagEdges, setShowTagEdges] = useState(false)
   const [showLabels, setShowLabels] = useState(true)
   const [showLegend, setShowLegend] = useState(false)
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number; node: SimNode } | null>(null)
   const [orphanMode, setOrphanMode] = useState<OrphanMode>('all')
   const [hubMode, setHubMode] = useState<HubMode>('dim')
   const [hubThreshold, setHubThreshold] = useState(12)
@@ -306,6 +313,8 @@ export const GraphCanvas: React.FC = () => {
   const [pathNodeIds, setPathNodeIds] = useState<Set<string> | null>(null)
   const [pathEdgeKeys, setPathEdgeKeys] = useState<Set<string> | null>(null)
   const [pathStatus, setPathStatus] = useState<string | null>(null)
+  const pathStatusRef = useRef(pathStatus)
+  pathStatusRef.current = pathStatus
   const [focusDepth, setFocusDepth] = useState(1)
   const [focusNodeIds, setFocusNodeIds] = useState<Set<string> | null>(null)
   const [focusEdgeKeys, setFocusEdgeKeys] = useState<Set<string> | null>(null)
@@ -339,6 +348,8 @@ export const GraphCanvas: React.FC = () => {
   /** spotlight = dim non-matches; filter = hide non-matches */
   const [searchMode, setSearchMode] = useState<GraphSearchMode>('spotlight')
   const [showTags, setShowTags] = useState(false)
+  const showTagsRef = useRef(showTags)
+  showTagsRef.current = showTags
   const [showAttachments, setShowAttachments] = useState(false)
   const [animateForces, setAnimateForces] = useState(false)
   const spatialRef = useRef(new SpatialHash2D<SimNode>(56))
@@ -597,9 +608,11 @@ export const GraphCanvas: React.FC = () => {
     (cam: { x: number; y: number; k: number } | null | undefined, markHydrated = true) => {
       if (!cam || !Number.isFinite(cam.k) || cam.k <= 0) return false
       if (cam.k < 0.05 || cam.k > 6) return false
-      transformRef.current = d3.zoomIdentity.translate(cam.x, cam.y).scale(cam.k)
+      setCameraTransformRef.current(d3.zoomIdentity.translate(cam.x, cam.y).scale(cam.k), {
+        user: false,
+        save: false
+      })
       if (markHydrated) cameraHydratedRef.current = true
-      requestPaint()
       return true
     },
     [requestPaint]
@@ -961,27 +974,25 @@ export const GraphCanvas: React.FC = () => {
   // Obsidian-like color groups: node id → group color (first match wins)
   const groupColorById = useMemo(() => resolveGroupColors(nodes, colorGroups), [nodes, colorGroups])
 
-  // Keep paint flags in sync
-  viewFlagsRef.current = {
-    searchMatchIds,
-    dimHubs: hubMode === 'dim',
-    hubThreshold,
-    focusedId: focusedNodeId,
-    pathNodeIds,
-    pathEdgeKeys,
-    pathFromId,
-    pathToId,
-    focusNodeIds,
-    focusEdgeKeys,
-    colorBy,
-    perfMode,
-    selectedIds: selectedIds.size > 0 ? selectedIds : null,
-    arrows: displayOpts.arrows,
-    textFade: displayOpts.textFade,
-    nodeSize: displayOpts.nodeSize,
-    lineThickness: displayOpts.lineThickness,
-    groupColors: groupColorById
-  }
+  // Keep paint flags in sync — mutate existing ref to avoid recreation
+  viewFlagsRef.current.searchMatchIds = searchMatchIds
+  viewFlagsRef.current.dimHubs = hubMode === 'dim'
+  viewFlagsRef.current.hubThreshold = hubThreshold
+  viewFlagsRef.current.focusedId = focusedNodeId
+  viewFlagsRef.current.pathNodeIds = pathNodeIds
+  viewFlagsRef.current.pathEdgeKeys = pathEdgeKeys
+  viewFlagsRef.current.pathFromId = pathFromId
+  viewFlagsRef.current.pathToId = pathToId
+  viewFlagsRef.current.focusNodeIds = focusNodeIds
+  viewFlagsRef.current.focusEdgeKeys = focusEdgeKeys
+  viewFlagsRef.current.colorBy = colorBy
+  viewFlagsRef.current.perfMode = perfMode
+  viewFlagsRef.current.selectedIds = selectedIds.size > 0 ? selectedIds : null
+  viewFlagsRef.current.arrows = displayOpts.arrows
+  viewFlagsRef.current.textFade = displayOpts.textFade
+  viewFlagsRef.current.nodeSize = displayOpts.nodeSize
+  viewFlagsRef.current.lineThickness = displayOpts.lineThickness
+  viewFlagsRef.current.groupColors = groupColorById
 
   const nodeOptions = useMemo(
     () =>
@@ -1006,6 +1017,11 @@ export const GraphCanvas: React.FC = () => {
     let w = sized.ready ? sized.w : Math.floor(wrap?.clientWidth || 0)
     let h = sized.ready ? sized.h : Math.floor(wrap?.clientHeight || 0)
     if (w < 8 || h < 8) {
+      // If wrap has no dimensions at all, don't loop — wait for ResizeObserver
+      if (!wrap || wrap.clientWidth < 2 || wrap.clientHeight < 2) {
+        dirtyRef.current = true
+        return
+      }
       w = Math.max(320, Math.floor(window.innerWidth * 0.55))
       h = Math.max(240, Math.floor(window.innerHeight * 0.65))
       dirtyRef.current = true
@@ -1028,16 +1044,8 @@ export const GraphCanvas: React.FC = () => {
     const flags = viewFlagsRef.current
     const lod = resolveLod(simNodes.length, flags.perfMode)
     const large = lod !== 'full' || simNodes.length > 100
-    const margin = lod === 'low' ? 24 : 48
-    const inView = (x: number, y: number) => {
-      const sx = x * t.k + t.x
-      const sy = y * t.k + t.y
-      return sx >= -margin && sx <= w + margin && sy >= -margin && sy <= h + margin
-    }
-    // Min node radius on screen (px) so zoom-out never makes graph "invisible furniture"
-    const minScreenR = 5.5
+
     const kSafe = Math.max(t.k, 0.05)
-    const minWorldR = minScreenR / kSafe
 
     const pathN = flags.pathNodeIds
     const pathE = flags.pathEdgeKeys
@@ -1381,360 +1389,19 @@ export const GraphCanvas: React.FC = () => {
     ctx.setTransform(1, 0, 0, 1, 0, 0)
     ctx.globalAlpha = 1
     ctx.globalCompositeOperation = 'source-over'
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
-    ctx.fillStyle = pal.bg || '#1e1e22'
-    ctx.fillRect(0, 0, w, h)
 
-    ctx.save()
-    ctx.translate(t.x, t.y)
-    ctx.scale(t.k, t.k)
-
-    // Neighbor set for hover dimming (only when strength > 0)
-    let hot: Set<string> | null = null
-    if (hover && hs > 0.02) {
-      hot = new Set([hover])
-      for (const e of simLinks) {
-        const s = nid(e.source)
-        const tg = nid(e.target)
-        if (s === hover) hot.add(tg)
-        if (tg === hover) hot.add(s)
-      }
+    // Delegate to shared Canvas 2D drawing (same code as interactive gesture path)
+    const dc: DrawContext = {
+      ctx, w, h, dpr, pal,
+      tx: t.x, ty: t.y, k: t.k,
+      simNodes, simLinks,
+      hover, hoverStrength: hs,
+      flags, pulse: pathPulseRef.current,
+      lod, large,
+      showLabels: showLabelsRef.current,
     }
-
-    const sel = flags.selectedIds
-    const pulse = pathPulseRef.current
-
-    // Edges (budgeted on large graphs — prioritize path/focus/hover so they never drop)
-    ctx.lineCap = 'round'
-    const lineMul = flags.lineThickness || 1
-    const sizeMul = flags.nodeSize || 1
-    const drawArrows = flags.arrows && t.k >= 0.4 && lod === 'full'
-    const maxEdges = edgeDrawBudget(lod, simLinks.length)
-    const edgePriority = (e: SimLink): number => {
-      const s = e.source as SimNode
-      const tg = e.target as SimNode
-      if (!s?.id || !tg?.id) return 0
-      const ek = edgeKey(s.id, tg.id)
-      if (pathE != null && pathE.has(ek)) return 3
-      if (focE != null && focE.has(ek)) return 2
-      if (hot && (s.id === hover || tg.id === hover)) return 2
-      if (sel && (sel.has(s.id) || sel.has(tg.id))) return 1
-      return 0
-    }
-    const edgesToDraw =
-      simLinks.length <= maxEdges
-        ? simLinks
-        : [...simLinks].sort((a, b) => edgePriority(b) - edgePriority(a)).slice(0, maxEdges)
-    for (const e of edgesToDraw) {
-      const s = e.source as SimNode
-      const tg = e.target as SimNode
-      if (s.x == null || s.y == null || tg.x == null || tg.y == null) continue
-      // Phase 5 frustum: skip edges fully outside viewport (never skip path/focus)
-      const ekEarly = edgeKey(s.id, tg.id)
-      const forceEdge =
-        (pathE != null && pathE.has(ekEarly)) || (focE != null && focE.has(ekEarly))
-      if (!forceEdge && !inView(s.x, s.y) && !inView(tg.x, tg.y)) continue
-      const ek = ekEarly
-      const onPath = pathE != null && pathE.has(ek)
-      const onFocus = focE != null && focE.has(ek)
-      const isHot = hot
-        ? hot.has(s.id) && hot.has(tg.id) && (s.id === hover || tg.id === hover)
-        : false
-      const dimHover = Boolean(hot && !isHot && pathN == null && focN == null)
-      const dimPath = pathN != null && !onPath
-      const dimFocus = pathN == null && focN != null && !onFocus
-      // Spotlight mode only dims; filter mode already removed non-matches
-      const dimSearch =
-        pathN == null &&
-        focN == null &&
-        matchIds != null &&
-        !matchIds.has(s.id) &&
-        !matchIds.has(tg.id)
-      // Soft edge dim: lerp toward muted alpha (never hard-cut)
-      const pathAlpha = onPath ? 0.9 + pulse * 0.08 : 1
-      let edgeAlpha = 1
-      if (dimHover) edgeAlpha = lerp(1, 0.38, hs)
-      else if (dimPath) edgeAlpha = 0.28
-      else if (dimFocus) edgeAlpha = 0.32
-      else if (dimSearch) edgeAlpha = 0.32
-      else if (onPath) edgeAlpha = pathAlpha
-      // Hot edges: slight thickness only (color stays mostly neutral to avoid flash)
-      const edgeW =
-        (onPath
-          ? 1.5 + pulse * 0.2
-          : isHot
-            ? lerp(0.85, 1.2, hs)
-            : e.type === 'wiki_link'
-              ? 0.75
-              : 0.55) * lineMul
-      const baseEdge = e.type === 'tag' ? pal.edgeTag : pal.edge
-      const edgeColor = onPath ? pal.edgeHot : isHot && hs > 0.4 ? pal.edgeHot : baseEdge
-      ctx.beginPath()
-      ctx.moveTo(s.x, s.y)
-      ctx.lineTo(tg.x, tg.y)
-      ctx.strokeStyle = canvasSafeColor(edgeColor, 'rgba(170,175,190,0.38)')
-      // Obsidian: muted edges; dimmed paths go very faint
-      ctx.globalAlpha = Math.max(0.08, Math.min(0.95, edgeAlpha * (onPath ? 1 : 0.7)))
-      ctx.lineWidth = Math.max(edgeW / t.k, 0.6 / t.k)
-      if (e.type === 'tag' && !onPath) ctx.setLineDash([3 / t.k, 4 / t.k])
-      else ctx.setLineDash([])
-      ctx.stroke()
-      // Obsidian-like direction arrows on wikilink edges (source → target)
-      if (drawArrows && e.type !== 'tag' && edgeAlpha > 0.15) {
-        const dx = tg.x - s.x
-        const dy = tg.y - s.y
-        const len = Math.hypot(dx, dy)
-        if (len > 8) {
-          const tgHub = dimHubsOn && tg.degree >= thr ? 0.62 : 1
-          const tgR = radius(tg, tgHub) * sizeMul
-          const ux = dx / len
-          const uy = dy / len
-          const ax = tg.x - ux * (tgR + 2 + edgeW * 0.5)
-          const ay = tg.y - uy * (tgR + 2 + edgeW * 0.5)
-          const aw = (2.6 + edgeW * 1.9) / t.k
-          const ah = aw * 1.7
-          const px = -uy
-          const py = ux
-          ctx.beginPath()
-          ctx.moveTo(ax + ux * ah, ay + uy * ah)
-          ctx.lineTo(ax + px * aw, ay + py * aw)
-          ctx.lineTo(ax - px * aw, ay - py * aw)
-          ctx.closePath()
-          ctx.fillStyle = edgeColor
-          ctx.fill()
-        }
-      }
-    }
-    ctx.setLineDash([])
-    ctx.globalAlpha = 1
-
-    // Nodes — no size pop on hover (that was a major blink source)
-    for (const n of simNodes) {
-      if (n.x == null || n.y == null) continue
-      const onPath = pathN != null && pathN.has(n.id)
-      const onFoc = focN != null && focN.has(n.id)
-      const isSelected = sel != null && sel.has(n.id)
-      // Phase 5 frustum cull (keep path/focus/hover/selection always)
-      if (
-        !onPath &&
-        !onFoc &&
-        !isSelected &&
-        n.id !== hover &&
-        n.id !== focusId &&
-        !inView(n.x, n.y)
-      ) {
-        continue
-      }
-      const isGhost = Boolean(n.isGhost || n.type === 'ghost')
-      const isTag = Boolean(n.isTag || n.type === 'tag')
-      const isAttachment = Boolean(n.isAttachment || n.type === 'attachment')
-      const isHub = !isGhost && !isTag && n.degree >= thr
-      const hubScale = dimHubsOn && isHub ? 0.7 : 1
-      const rBase =
-        (isGhost
-          ? Math.max(2.4, radius(n, 0.9))
-          : isTag || isAttachment
-            ? Math.max(2.4, radius(n, 0.9))
-            : radius(n, hubScale)) * sizeMul
-      // Floor so zoom-out never makes hits invisible
-      const r = Math.max(rBase, minWorldR * 0.85)
-      const col = canvasSafeColor(
-        resolveObsidianNodeFill({
-          isLight: pal.isLight,
-          isGhost,
-          isTag,
-          isAttachment,
-          type: n.type,
-          relativePath: n.relativePath,
-          groupColor: flags.groupColors?.get(n.id) || null,
-          colorBy: colorMode === 'folder' || colorMode === 'type' ? colorMode : 'default'
-        }),
-        pal.colors.default || '#7c6cf0'
-      )
-      const dimHover =
-        Boolean(hot && !hot.has(n.id) && pathN == null && focN == null && !isSelected)
-      const dimPath = pathN != null && !onPath && !isSelected
-      const dimFocus = pathN == null && focN != null && !onFoc && !isSelected
-      const dimSearch =
-        pathN == null && focN == null && matchIds != null && !matchIds.has(n.id) && !isSelected
-      const isFocus = focusId === n.id
-      const isMatch = matchIds != null && matchIds.has(n.id)
-      const isEndpoint =
-        onPath && (n.id === flags.pathFromId || n.id === flags.pathToId || n.id === flags.focusedId)
-      const isHoverNode = n.id === hover && hs > 0.05
-
-      // Dim less aggressively — dark theme made dimmed nodes vanish into bg
-      let alpha = isGhost ? 0.9 : 1
-      if (dimHover) alpha = lerp(1, pal.isLight ? 0.5 : 0.55, hs)
-      else if (dimPath) alpha = pal.isLight ? 0.4 : 0.42
-      else if (dimFocus) alpha = pal.isLight ? 0.42 : 0.45
-      else if (dimSearch) alpha = pal.isLight ? 0.45 : 0.48
-      else if (dimHubsOn && isHub && !isMatch && !isFocus && !onPath && !onFoc && !isSelected)
-        alpha = 0.72
-      if (onPath) alpha = Math.min(1, alpha + pulse * 0.05)
-      ctx.globalAlpha = alpha
-
-      // Soft glow: path/selection only (not full-graph flash on every hover)
-      if (
-        lod === 'full' &&
-        !isGhost &&
-        (onPath || isSelected || isMatch || isHoverNode) &&
-        !dimHover &&
-        !dimPath &&
-        !dimFocus
-      ) {
-        ctx.beginPath()
-        ctx.arc(n.x, n.y, r + (onPath || isSelected ? 4.5 : 2.5), 0, Math.PI * 2)
-        ctx.fillStyle = onPath || isMatch || isSelected ? pal.edgeHot : col
-        const glowA = isHoverNode && !onPath && !isSelected ? 0.08 * hs : pal.isLight ? 0.16 : 0.11
-        ctx.globalAlpha = glowA * alpha
-        ctx.fill()
-        ctx.globalAlpha = alpha
-      }
-
-      // Obsidian: all nodes are circles (tags/attachments only differ by color)
-      ctx.beginPath()
-      ctx.arc(n.x, n.y, r, 0, Math.PI * 2)
-      if (isGhost) {
-        ctx.fillStyle = pal.isLight ? 'rgba(255,255,255,0.35)' : 'rgba(20,22,28,0.4)'
-        ctx.fill()
-        ctx.strokeStyle = col
-        ctx.lineWidth = 1.2 / t.k
-        ctx.setLineDash([2.5 / t.k, 2 / t.k])
-        ctx.stroke()
-        ctx.setLineDash([])
-      } else {
-        ctx.fillStyle = col
-        ctx.fill()
-      }
-      const isPinned = Boolean(n.pinned || (n.fx != null && n.fy != null))
-      const strokeW =
-        isSelected || isEndpoint || isFocus
-          ? 2.8
-          : onPath || isMatch
-            ? 2.2
-            : isPinned
-              ? 2
-              : isHoverNode
-                ? lerp(1, 1.7, hs)
-                : 1
-      if (!isGhost) {
-        ctx.lineWidth = strokeW / t.k
-        ctx.strokeStyle =
-          isSelected || onPath || isFocus || isMatch || isEndpoint
-            ? pal.edgeHot
-            : isPinned
-              ? pal.edgeHot
-              : isHoverNode && hs > 0.5
-                ? pal.edgeHot
-                : pal.nodeStroke
-        ctx.stroke()
-      }
-      // Phase 7: selection ring (solid)
-      if (isSelected) {
-        ctx.beginPath()
-        ctx.arc(n.x, n.y, r + 4.5, 0, Math.PI * 2)
-        ctx.strokeStyle = pal.edgeHot
-        ctx.globalAlpha = 0.85 * alpha
-        ctx.lineWidth = 1.8 / t.k
-        ctx.setLineDash([])
-        ctx.stroke()
-        ctx.globalAlpha = alpha
-      }
-      // Phase 3: pinned ring (skip on low LOD unless hover)
-      if (isPinned && !dimHover && !dimPath && (lod !== 'low' || n.id === hover)) {
-        ctx.beginPath()
-        ctx.arc(n.x, n.y, r + 3.2, 0, Math.PI * 2)
-        ctx.strokeStyle = pal.edgeHot
-        ctx.globalAlpha = 0.55 * alpha
-        ctx.lineWidth = 1.2 / t.k
-        ctx.setLineDash([2.5 / t.k, 2 / t.k])
-        ctx.stroke()
-        ctx.setLineDash([])
-        ctx.globalAlpha = alpha
-      }
-    }
-    ctx.globalAlpha = 1
-    ctx.restore()
-
-    // ── Labels in SCREEN space (Obsidian: zoom out → fade; font size stays readable) ──
-    const labelsOn = showLabelsRef.current
-    if (labelsOn) {
-      ctx.save()
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
-      // Fixed screen font — doesn't fight canvas zoom scale
-      const fontPx = lod === 'low' ? 10 : 11
-      ctx.font = `${fontPx}px Inter,"Segoe UI Variable","Segoe UI",system-ui,sans-serif`
-      ctx.textBaseline = 'middle'
-      ctx.textAlign = 'left'
-      const maxLabels = labelDrawBudget(lod)
-      let labelsDrawn = 0
-
-      for (const n of simNodes) {
-        if (labelsDrawn >= maxLabels) break
-        if (n.x == null || n.y == null) continue
-        const onPath = pathN != null && pathN.has(n.id)
-        const onFoc = focN != null && focN.has(n.id)
-        const isSel = sel != null && sel.has(n.id)
-        if (!onPath && !onFoc && n.id !== hover && !isSel && !inView(n.x, n.y)) continue
-
-        // Per-node zoom fade (high degree stays longer when zoomed out)
-        let zA = labelZoomAlpha(t.k, flags.textFade, n.degree)
-        // Always keep hover / path / focus / match labels visible if zoom allows a bit
-        const forceLabel =
-          n.id === hover ||
-          onPath ||
-          onFoc ||
-          isSel ||
-          n.id === focusId ||
-          (matchIds != null && matchIds.has(n.id))
-        if (forceLabel) zA = Math.max(zA, smooth01(Math.min(1, t.k / 0.35)) * 0.95)
-        if (zA < 0.03) continue
-
-        // LOD thinning — but never hard-drop non-neighbors on hover (that was the blink)
-        if (lod === 'low' && !forceLabel && n.degree < 3) continue
-        if (lod === 'medium' && !forceLabel && n.degree < 2) continue
-        if (large && lod === 'full' && !forceLabel && n.degree < 2) continue
-        labelsDrawn++
-
-        // Soft dim labels outside spotlight (path / focus / search / hover)
-        let spotMul = 1
-        if (pathN != null && !onPath && !forceLabel) spotMul = 0.22
-        else if (pathN == null && focN != null && !onFoc && !forceLabel) spotMul = 0.25
-        else if (
-          pathN == null &&
-          focN == null &&
-          matchIds != null &&
-          !matchIds.has(n.id) &&
-          !forceLabel
-        )
-          spotMul = 0.28
-        else if (hot && !hot.has(n.id) && pathN == null && focN == null)
-          spotMul = lerp(1, 0.28, hs) // dim non-neighbors, don't remove
-
-        const isHub = n.degree >= thr
-        const rWorld = radius(n, dimHubsOn && isHub ? 0.62 : 1) * sizeMul
-        const sx = n.x * t.k + t.x + rWorld * t.k + 6
-        const sy = n.y * t.k + t.y
-        if (sx > w + 40 || sy < -20 || sy > h + 20) continue
-
-        const titleStr = String(n.title || n.relativePath || n.id || '')
-        const text = titleStr.length > 28 ? titleStr.slice(0, 27) + '…' : titleStr
-        const labelAlpha = zA * spotMul * (forceLabel ? 1 : 0.88)
-
-        if (pal.isLight && labelAlpha > 0.25) {
-          const tw = ctx.measureText(text).width
-          ctx.fillStyle = pal.labelBg
-          ctx.globalAlpha = labelAlpha * 0.85
-          ctx.fillRect(sx - 2, sy - 7, tw + 4, 14)
-        }
-        ctx.fillStyle = pal.label
-        ctx.globalAlpha = labelAlpha
-        ctx.fillText(text, sx, sy)
-      }
-      ctx.globalAlpha = 1
-      ctx.restore()
-    }
+    const hotExport = computeHotSet(hover, hs, simLinks)
+    drawCanvas2DScene(dc, hotExport)
     } catch (canvasErr) {
       // Export buffer only — never blank the SVG display path
       console.error('[GraphCanvas] export-canvas paint failed:', canvasErr)
@@ -1781,322 +1448,18 @@ export const GraphCanvas: React.FC = () => {
     const flags = viewFlagsRef.current
     const lod = resolveLod(simNodes.length, flags.perfMode)
     const large = lod !== 'full' || simNodes.length > 100
-    const margin = lod === 'low' ? 24 : 48
-    const inView = (x: number, y: number) => {
-      const sx = x * t.k + t.x
-      const sy = y * t.k + t.y
-      return sx >= -margin && sx <= w + margin && sy >= -margin && sy <= h + margin
-    }
-    const minScreenR = 5.5
-    const kSafe = Math.max(t.k, 0.05)
-    const minWorldR = minScreenR / kSafe
-    const pathN = flags.pathNodeIds
-    const pathE = flags.pathEdgeKeys
-    const focN = flags.focusNodeIds
-    const focE = flags.focusEdgeKeys
-    const focusId = flags.focusedId
-    const colorMode = flags.colorBy
-    const matchIds = flags.searchMatchIds
-    const thr = flags.hubThreshold
-    const dimHubsOn = flags.dimHubs
-    const sel = flags.selectedIds
-    const pulse = pathPulseRef.current
     try {
-      ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
-      ctx.fillStyle = pal.bg || '#1e1e22'
-      ctx.fillRect(0, 0, w, h)
-      ctx.save()
-      ctx.translate(t.x, t.y)
-      ctx.scale(t.k, t.k)
-      let hot: Set<string> | null = null
-      if (hover && hs > 0.02) {
-        hot = new Set([hover])
-        for (const e of simLinks) {
-          const s = nid(e.source)
-          const tg = nid(e.target)
-          if (s === hover) hot.add(tg)
-          if (tg === hover) hot.add(s)
-        }
+      const dc: DrawContext = {
+        ctx, w, h, dpr, pal,
+        tx: t.x, ty: t.y, k: t.k,
+        simNodes, simLinks,
+        hover, hoverStrength: hs,
+        flags, pulse: pathPulseRef.current,
+        lod, large,
+        showLabels: showLabelsRef.current,
       }
-      ctx.lineCap = 'round'
-      const lineMul = flags.lineThickness || 1
-      const sizeMul = flags.nodeSize || 1
-      const drawArrows = flags.arrows && t.k >= 0.4 && lod === 'full'
-      const maxEdges = edgeDrawBudget(lod, simLinks.length)
-      const edgePriority = (e: SimLink): number => {
-        const s = e.source as SimNode
-        const tg = e.target as SimNode
-        if (!s?.id || !tg?.id) return 0
-        const ek = edgeKey(s.id, tg.id)
-        if (pathE != null && pathE.has(ek)) return 3
-        if (focE != null && focE.has(ek)) return 2
-        if (hot && (s.id === hover || tg.id === hover)) return 2
-        if (sel && (sel.has(s.id) || sel.has(tg.id))) return 1
-        return 0
-      }
-      const edgesToDraw =
-        simLinks.length <= maxEdges
-          ? simLinks
-          : [...simLinks].sort((a, b) => edgePriority(b) - edgePriority(a)).slice(0, maxEdges)
-      for (const e of edgesToDraw) {
-        const s = e.source as SimNode
-        const tg = e.target as SimNode
-        if (s.x == null || s.y == null || tg.x == null || tg.y == null) continue
-        const ekEarly = edgeKey(s.id, tg.id)
-        const forceEdge =
-          (pathE != null && pathE.has(ekEarly)) || (focE != null && focE.has(ekEarly))
-        if (!forceEdge && !inView(s.x, s.y) && !inView(tg.x, tg.y)) continue
-        const ek = ekEarly
-        const onPath = pathE != null && pathE.has(ek)
-        const onFocus = focE != null && focE.has(ek)
-        const isHot = hot
-          ? hot.has(s.id) && hot.has(tg.id) && (s.id === hover || tg.id === hover)
-          : false
-        const dimHover = Boolean(hot && !isHot && pathN == null && focN == null)
-        const dimPath = pathN != null && !onPath
-        const dimFocus = pathN == null && focN != null && !onFocus
-        const dimSearch =
-          pathN == null &&
-          focN == null &&
-          matchIds != null &&
-          !matchIds.has(s.id) &&
-          !matchIds.has(tg.id)
-        const pathAlpha = onPath ? 0.9 + pulse * 0.08 : 1
-        let edgeAlpha = 1
-        if (dimHover) edgeAlpha = lerp(1, 0.38, hs)
-        else if (dimPath) edgeAlpha = 0.28
-        else if (dimFocus) edgeAlpha = 0.32
-        else if (dimSearch) edgeAlpha = 0.32
-        else if (onPath) edgeAlpha = pathAlpha
-        const edgeW =
-          (onPath
-            ? 1.5 + pulse * 0.2
-            : isHot
-              ? lerp(0.85, 1.2, hs)
-              : e.type === 'wiki_link'
-                ? 0.75
-                : 0.55) * lineMul
-        const baseEdge = e.type === 'tag' ? pal.edgeTag : pal.edge
-        const edgeColor = onPath ? pal.edgeHot : isHot && hs > 0.4 ? pal.edgeHot : baseEdge
-        ctx.beginPath()
-        ctx.moveTo(s.x, s.y)
-        ctx.lineTo(tg.x, tg.y)
-        ctx.strokeStyle = canvasSafeColor(edgeColor, 'rgba(170,175,190,0.38)')
-        ctx.globalAlpha = Math.max(0.08, Math.min(0.95, edgeAlpha * (onPath ? 1 : 0.7)))
-        ctx.lineWidth = Math.max(edgeW / t.k, 0.6 / t.k)
-        if (e.type === 'tag' && !onPath) ctx.setLineDash([3 / t.k, 4 / t.k])
-        else ctx.setLineDash([])
-        ctx.stroke()
-        if (drawArrows && e.type !== 'tag' && edgeAlpha > 0.15) {
-          const dx = tg.x - s.x
-          const dy = tg.y - s.y
-          const len = Math.hypot(dx, dy)
-          if (len > 8) {
-            const tgHub = dimHubsOn && tg.degree >= thr ? 0.62 : 1
-            const tgR = radius(tg, tgHub) * sizeMul
-            const ux = dx / len
-            const uy = dy / len
-            const ax = tg.x - ux * (tgR + 2 + edgeW * 0.5)
-            const ay = tg.y - uy * (tgR + 2 + edgeW * 0.5)
-            const aw = (2.6 + edgeW * 1.9) / t.k
-            const ah = aw * 1.7
-            const px = -uy
-            const py = ux
-            ctx.beginPath()
-            ctx.moveTo(ax + ux * ah, ay + uy * ah)
-            ctx.lineTo(ax + px * aw, ay + py * aw)
-            ctx.lineTo(ax - px * aw, ay - py * aw)
-            ctx.closePath()
-            ctx.fillStyle = edgeColor
-            ctx.fill()
-          }
-        }
-      }
-      ctx.setLineDash([])
-      ctx.globalAlpha = 1
-      for (const n of simNodes) {
-        if (n.x == null || n.y == null) continue
-        const onPath = pathN != null && pathN.has(n.id)
-        const onFoc = focN != null && focN.has(n.id)
-        const isSelected = sel != null && sel.has(n.id)
-        if (!onPath && !onFoc && !isSelected && n.id !== hover && n.id !== focusId && !inView(n.x, n.y)) continue
-        const isGhost = Boolean(n.isGhost || n.type === 'ghost')
-        const isTag = Boolean(n.isTag || n.type === 'tag')
-        const isAttachment = Boolean(n.isAttachment || n.type === 'attachment')
-        const isHub = !isGhost && !isTag && n.degree >= thr
-        const hubScale = dimHubsOn && isHub ? 0.7 : 1
-        const rBase =
-          (isGhost
-            ? Math.max(2.4, radius(n, 0.9))
-            : isTag || isAttachment
-              ? Math.max(2.4, radius(n, 0.9))
-              : radius(n, hubScale)) * sizeMul
-        const r = Math.max(rBase, minWorldR * 0.85)
-        const col = canvasSafeColor(
-          resolveObsidianNodeFill({
-            isLight: pal.isLight,
-            isGhost,
-            isTag,
-            isAttachment,
-            type: n.type,
-            relativePath: n.relativePath,
-            groupColor: flags.groupColors?.get(n.id) || null,
-            colorBy: colorMode === 'folder' || colorMode === 'type' ? colorMode : 'default'
-          }),
-          pal.colors.default || '#7c6cf0'
-        )
-        const dimHover =
-          Boolean(hot && !hot.has(n.id) && pathN == null && focN == null && !isSelected)
-        const dimPath = pathN != null && !onPath && !isSelected
-        const dimFocus = pathN == null && focN != null && !onFoc && !isSelected
-        const dimSearch =
-          pathN == null && focN == null && matchIds != null && !matchIds.has(n.id) && !isSelected
-        const isFocus = focusId === n.id
-        const isMatch = matchIds != null && matchIds.has(n.id)
-        const isEndpoint =
-          onPath && (n.id === flags.pathFromId || n.id === flags.pathToId || n.id === flags.focusedId)
-        const isHoverNode = n.id === hover && hs > 0.05
-        let alpha = isGhost ? 0.9 : 1
-        if (dimHover) alpha = lerp(1, pal.isLight ? 0.5 : 0.55, hs)
-        else if (dimPath) alpha = pal.isLight ? 0.4 : 0.42
-        else if (dimFocus) alpha = pal.isLight ? 0.42 : 0.45
-        else if (dimSearch) alpha = pal.isLight ? 0.45 : 0.48
-        else if (dimHubsOn && isHub && !isMatch && !isFocus && !onPath && !onFoc && !isSelected)
-          alpha = 0.72
-        if (onPath) alpha = Math.min(1, alpha + pulse * 0.05)
-        ctx.globalAlpha = alpha
-        if (
-          lod === 'full' &&
-          !isGhost &&
-          (onPath || isSelected || isMatch || isHoverNode) &&
-          !dimHover &&
-          !dimPath &&
-          !dimFocus
-        ) {
-          ctx.beginPath()
-          ctx.arc(n.x, n.y, r + (onPath || isSelected ? 4.5 : 2.5), 0, Math.PI * 2)
-          ctx.fillStyle = onPath || isMatch || isSelected ? pal.edgeHot : col
-          const glowA = isHoverNode && !onPath && !isSelected ? 0.08 * hs : pal.isLight ? 0.16 : 0.11
-          ctx.globalAlpha = glowA * alpha
-          ctx.fill()
-          ctx.globalAlpha = alpha
-        }
-        ctx.beginPath()
-        ctx.arc(n.x, n.y, r, 0, Math.PI * 2)
-        if (isGhost) {
-          ctx.fillStyle = pal.isLight ? 'rgba(255,255,255,0.35)' : 'rgba(20,22,28,0.4)'
-          ctx.fill()
-          ctx.strokeStyle = col
-          ctx.lineWidth = 1.2 / t.k
-          ctx.setLineDash([2.5 / t.k, 2 / t.k])
-          ctx.stroke()
-          ctx.setLineDash([])
-        } else {
-          ctx.fillStyle = col
-          ctx.fill()
-        }
-        const isPinned = Boolean(n.pinned || (n.fx != null && n.fy != null))
-        const strokeW =
-          isSelected || isEndpoint || isFocus
-            ? 2.8
-            : onPath || isMatch
-              ? 2.2
-              : isPinned
-                ? 2
-                : isHoverNode
-                  ? lerp(1, 1.7, hs)
-                  : 1
-        if (!isGhost) {
-          ctx.lineWidth = strokeW / t.k
-          ctx.strokeStyle =
-            isSelected || onPath || isFocus || isMatch || isEndpoint
-              ? pal.edgeHot
-              : isPinned
-                ? pal.edgeHot
-                : isHoverNode && hs > 0.5
-                  ? pal.edgeHot
-                  : pal.nodeStroke
-          ctx.stroke()
-        }
-        if (isSelected) {
-          ctx.beginPath()
-          ctx.arc(n.x, n.y, r + 4.5, 0, Math.PI * 2)
-          ctx.strokeStyle = pal.edgeHot
-          ctx.globalAlpha = 0.85 * alpha
-          ctx.lineWidth = 1.8 / t.k
-          ctx.setLineDash([])
-          ctx.stroke()
-          ctx.globalAlpha = alpha
-        }
-        if (isPinned && !dimHover && !dimPath && (lod !== 'low' || n.id === hover)) {
-          ctx.beginPath()
-          ctx.arc(n.x, n.y, r + 3.2, 0, Math.PI * 2)
-          ctx.strokeStyle = pal.edgeHot
-          ctx.globalAlpha = 0.55 * alpha
-          ctx.lineWidth = 1.2 / t.k
-          ctx.setLineDash([2.5 / t.k, 2 / t.k])
-          ctx.stroke()
-          ctx.setLineDash([])
-          ctx.globalAlpha = alpha
-        }
-      }
-      ctx.globalAlpha = 1
-      ctx.restore()
-      const labelsOn = showLabelsRef.current
-      if (labelsOn) {
-        ctx.save()
-        ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
-        const fontPx = lod === 'low' ? 10 : 11
-        ctx.font = `${fontPx}px Inter,"Segoe UI Variable","Segoe UI",system-ui,sans-serif`
-        ctx.textBaseline = 'middle'
-        ctx.textAlign = 'left'
-        const maxLabels = labelDrawBudget(lod)
-        let labelsDrawn = 0
-        for (const n of simNodes) {
-          if (labelsDrawn >= maxLabels) break
-          if (n.x == null || n.y == null) continue
-          const onPath = pathN != null && pathN.has(n.id)
-          const onFoc = focN != null && focN.has(n.id)
-          const isSel = sel != null && sel.has(n.id)
-          if (!onPath && !onFoc && n.id !== hover && !isSel && !inView(n.x, n.y)) continue
-          let zA = labelZoomAlpha(t.k, flags.textFade, n.degree)
-          const forceLabel =
-            n.id === hover || onPath || onFoc || isSel || n.id === focusId ||
-            (matchIds != null && matchIds.has(n.id))
-          if (forceLabel) zA = Math.max(zA, smooth01(Math.min(1, t.k / 0.35)) * 0.95)
-          if (zA < 0.03) continue
-          if (lod === 'low' && !forceLabel && n.degree < 3) continue
-          if (lod === 'medium' && !forceLabel && n.degree < 2) continue
-          if (large && lod === 'full' && !forceLabel && n.degree < 2) continue
-          labelsDrawn++
-          let spotMul = 1
-          if (pathN != null && !onPath && !forceLabel) spotMul = 0.22
-          else if (pathN == null && focN != null && !onFoc && !forceLabel) spotMul = 0.25
-          else if (pathN == null && focN == null && matchIds != null && !matchIds.has(n.id) && !forceLabel)
-            spotMul = 0.28
-          else if (hot && !hot.has(n.id) && pathN == null && focN == null)
-            spotMul = lerp(1, 0.28, hs)
-          const isHub = n.degree >= thr
-          const rWorld = radius(n, dimHubsOn && isHub ? 0.62 : 1) * sizeMul
-          const sx = n.x * t.k + t.x + rWorld * t.k + 6
-          const sy = n.y * t.k + t.y
-          if (sx > w + 40 || sy < -20 || sy > h + 20) continue
-          const titleStr = String(n.title || n.relativePath || n.id || '')
-          const text = titleStr.length > 28 ? titleStr.slice(0, 27) + '…' : titleStr
-          const labelAlpha = zA * spotMul * (forceLabel ? 1 : 0.88)
-          if (pal.isLight && labelAlpha > 0.25) {
-            const tw = ctx.measureText(text).width
-            ctx.fillStyle = pal.labelBg
-            ctx.globalAlpha = labelAlpha * 0.85
-            ctx.fillRect(sx - 2, sy - 7, tw + 4, 14)
-          }
-          ctx.fillStyle = pal.label
-          ctx.globalAlpha = labelAlpha
-          ctx.fillText(text, sx, sy)
-        }
-        ctx.globalAlpha = 1
-        ctx.restore()
-      }
+      const hot = computeHotSet(hover, hs, simLinks)
+      drawCanvas2DScene(dc, hot)
     } catch (err) {
       console.error('[GraphCanvas] drawCanvas2D failed:', err)
       // Reset flag AND DOM — without DOM reset, canvas stays visible with SVG hidden
@@ -2187,10 +1550,10 @@ export const GraphCanvas: React.FC = () => {
         hasAutoFitRef.current = true
         hadSavedCameraRef.current = true
       } else {
-        transformRef.current = d3.zoomIdentity
+        setCameraTransformRef.current(d3.zoomIdentity, { user: false, save: false })
       }
     } else {
-      transformRef.current = d3.zoomIdentity
+      setCameraTransformRef.current(d3.zoomIdentity, { user: false, save: false })
     }
 
     void fetchGraph().finally(() => {
@@ -2255,7 +1618,7 @@ export const GraphCanvas: React.FC = () => {
         nodesRef.current.length > 0 &&
         canAutoFitCamera()
       ) {
-        requestAnimationFrame(() => {
+        kickRafs.push(requestAnimationFrame(() => {
           try {
             if (!canAutoFitCamera()) return
             fitViewRef.current?.(false)
@@ -2265,7 +1628,7 @@ export const GraphCanvas: React.FC = () => {
           } catch {
             /* ignore */
           }
-        })
+        }))
       }
     }
 
@@ -2277,6 +1640,7 @@ export const GraphCanvas: React.FC = () => {
     )
 
     let ro: ResizeObserver | null = null
+    const kickRafs: number[] = []
     const wrap = wrapRef.current
     if (wrap && typeof ResizeObserver !== 'undefined') {
       // Resize: re-paint; fit only if never fitted and user hasn't panned
@@ -2286,6 +1650,7 @@ export const GraphCanvas: React.FC = () => {
 
     return () => {
       for (const t of timers) clearTimeout(t)
+      for (const r of kickRafs) cancelAnimationFrame(r)
       ro?.disconnect()
       if (wheelDebounceRef.current) {
         clearTimeout(wheelDebounceRef.current)
@@ -2366,15 +1731,15 @@ export const GraphCanvas: React.FC = () => {
     const all = nodesRef.current
     if (all.length === 0) return null
 
-    // Rebuild spatial index when sim moved nodes
-    if (spatialDirtyRef.current || all.length > 80) {
-      if (spatialDirtyRef.current) {
-        spatialRef.current.rebuild(all)
-        spatialDirtyRef.current = false
-      }
+    // Rebuild spatial index only when nodes have moved significantly or first time
+    // Use a threshold to avoid rebuilding on every tiny movement
+    const shouldRebuild = spatialDirtyRef.current || all.length > 80
+    if (shouldRebuild) {
+      spatialRef.current.rebuild(all)
+      spatialDirtyRef.current = false
     }
     const candidates =
-      all.length > 80 ? spatialRef.current.query(x, y, 36 * sizeMul) : all
+      all.length > 80 ? spatialRef.current.query(x, y, 80) : all
 
     let best: SimNode | null = null
     let bestD = Infinity
@@ -2490,6 +1855,45 @@ export const GraphCanvas: React.FC = () => {
       }
     }
 
+    // Skip rebuild if node set hasn't changed (e.g. spotlight searchQuery change)
+    const newIds = filteredNodes.map((n) => n.id)
+    const prevIds = nodesRef.current.map((n) => n.id)
+    if (
+      newIds.length === prevIds.length &&
+      newIds.every((id, i) => id === prevIds[i])
+    ) {
+      // Still update links if edges changed
+      const idSet = new Set(newIds)
+      const simLinks: SimLink[] = []
+      for (const e of filteredEdges) {
+        const src = typeof e.source === 'string' ? e.source : String((e as { source?: string }).source || '')
+        const tgt = typeof e.target === 'string' ? e.target : String((e as { target?: string }).target || '')
+        if (!src || !tgt || src === tgt) continue
+        if (!idSet.has(src) || !idSet.has(tgt)) continue
+        simLinks.push({
+          id: e.id || `${src}->${tgt}`,
+          type: e.type || 'wiki_link',
+          weight: typeof e.weight === 'number' ? e.weight : 1,
+          source: src,
+          target: tgt
+        })
+      }
+      linksRef.current = simLinks
+      // Update the simulation's internal link force so physics matches visible edges
+      const sim = simRef.current
+      if (sim) {
+        const linkF = sim.force('link') as d3.ForceLink<SimNode, SimLink> | null
+        if (linkF) {
+          linkF.links(simLinks).id((d) => d.id)
+          sim.alpha(Math.max(sim.alpha(), 0.15)).restart()
+        }
+      }
+      schedulePaint()
+      return () => {
+        if (sizeRetry) clearTimeout(sizeRetry)
+      }
+    }
+
     try {
       const f0 = forcesRef.current
       const prevById = new Map(nodesRef.current.map((n) => [n.id, n]))
@@ -2548,6 +1952,11 @@ export const GraphCanvas: React.FC = () => {
 
       nodesRef.current = simNodes
       linksRef.current = simLinks
+      // Prune posCache entries for nodes no longer in the simulation
+      const activeIds = new Set(simNodes.map((n) => n.id))
+      for (const key of posCache.current.keys()) {
+        if (!activeIds.has(key)) posCache.current.delete(key)
+      }
       setStats({ nodes: simNodes.length, edges: simLinks.length })
       setPinnedCount(simNodes.filter((n) => n.pinned || n.fx != null).length)
 
@@ -2633,7 +2042,8 @@ export const GraphCanvas: React.FC = () => {
       activeSim.on('tick', () => {
         tick++
         // Spatial hash invalidation for large-graph hit tests
-        if (tick % 4 === 0) spatialDirtyRef.current = true
+        // Only mark dirty when simulation is actively moving (high alpha)
+        if (activeSim.alpha() > 0.3 && tick % 16 === 0) spatialDirtyRef.current = true
         if (tick % paintEvery === 0 || activeSim.alpha() < 0.05) {
           if (interactiveCanvasRef.current) {
             drawCanvas2DRef.current()
@@ -2644,12 +2054,15 @@ export const GraphCanvas: React.FC = () => {
         if (tick % 12 === 0) {
           for (const node of nodesRef.current) {
             if (node.x != null && node.y != null) {
-              posCache.current.set(node.id, {
-                x: node.x,
-                y: node.y,
-                fx: node.fx,
-                fy: node.fy
-              })
+              const existing = posCache.current.get(node.id)
+              if (existing) {
+                existing.x = node.x
+                existing.y = node.y
+                existing.fx = node.fx
+                existing.fy = node.fy
+              } else {
+                posCache.current.set(node.id, { x: node.x, y: node.y, fx: node.fx, fy: node.fy })
+              }
             }
           }
         }
@@ -2657,12 +2070,15 @@ export const GraphCanvas: React.FC = () => {
       activeSim.on('end', () => {
         for (const node of nodesRef.current) {
           if (node.x != null && node.y != null) {
-            posCache.current.set(node.id, {
-              x: node.x,
-              y: node.y,
-              fx: node.fx,
-              fy: node.fy
-            })
+            const existing = posCache.current.get(node.id)
+            if (existing) {
+              existing.x = node.x
+              existing.y = node.y
+              existing.fx = node.fx
+              existing.fy = node.fy
+            } else {
+              posCache.current.set(node.id, { x: node.x, y: node.y, fx: node.fx, fy: node.fy })
+            }
           }
         }
         // Fit only if never fitted / no vault camera / user hasn't panned (BUG-2)
@@ -2672,7 +2088,7 @@ export const GraphCanvas: React.FC = () => {
           fitView(false)
         }
         requestAnimationFrame(() => {
-          if (!pointerGestureRef.current) ensureGraphVisibleRef.current('sim-end')
+          if (!pointerGestureRef.current && !animateForcesRef.current) ensureGraphVisibleRef.current('sim-end')
         })
         // Obsidian-like continuous gentle motion
         if (animateForcesRef.current) {
@@ -2691,6 +2107,11 @@ export const GraphCanvas: React.FC = () => {
 
       return () => {
         if (sizeRetry) clearTimeout(sizeRetry)
+        // Clean up simulation event listeners to prevent memory leaks
+        if (activeSim) {
+          activeSim.on('tick', null)
+          activeSim.on('end', null)
+        }
         // Do NOT stop sim on soft re-run — next effect call owns it.
         // Only stop on unmount (detected via cleanup when deps change to empty later).
       }
@@ -2789,10 +2210,10 @@ export const GraphCanvas: React.FC = () => {
       }
       const xs = simNodes.map((n) => n.x as number)
       const ys = simNodes.map((n) => n.y as number)
-      const minX = Math.min(...xs)
-      const maxX = Math.max(...xs)
-      const minY = Math.min(...ys)
-      const maxY = Math.max(...ys)
+      const minX = xs.reduce((a, b) => Math.min(a, b), Infinity)
+      const maxX = xs.reduce((a, b) => Math.max(a, b), -Infinity)
+      const minY = ys.reduce((a, b) => Math.min(a, b), Infinity)
+      const maxY = ys.reduce((a, b) => Math.max(a, b), -Infinity)
       const gw = Math.max(maxX - minX, 40)
       const gh = Math.max(maxY - minY, 40)
       const pad = 48
@@ -2932,7 +2353,7 @@ export const GraphCanvas: React.FC = () => {
         hadSavedCamera: hadSavedCameraRef.current
       })
       console.warn(formatGraphDiag(diag))
-      transformRef.current = d3.zoomIdentity
+      setCameraTransformRef.current(d3.zoomIdentity, { user: false, save: false })
       fitView(false)
       hasAutoFitRef.current = true
       setGraphDiag(diag)
@@ -3219,6 +2640,7 @@ export const GraphCanvas: React.FC = () => {
         clearTimeout(wheelDebounceRef.current)
         wheelDebounceRef.current = null
       }
+      setCtxMenu(null)
       pointers.set(e.pointerId, { x: e.clientX, y: e.clientY })
 
       if (pointers.size >= 2) {
@@ -3383,6 +2805,14 @@ export const GraphCanvas: React.FC = () => {
       schedulePaint()
     }
 
+    const onContextMenu = (e: MouseEvent) => {
+      e.preventDefault()
+      e.stopImmediatePropagation()
+      const hit = hitNodeRef.current(e.clientX, e.clientY)
+      if (!hit) { setCtxMenu(null); return }
+      setCtxMenu({ x: e.clientX, y: e.clientY, node: hit })
+    }
+
     const bind = (el: HTMLDivElement) => {
       wrapEl = el
       el.style.touchAction = 'none'
@@ -3394,6 +2824,7 @@ export const GraphCanvas: React.FC = () => {
       el.addEventListener('pointerleave', onLeave)
       el.addEventListener('wheel', onWheel, { passive: false })
       el.addEventListener('dblclick', onDbl)
+      el.addEventListener('contextmenu', onContextMenu)
 
       ;(window as unknown as { __wgGraph?: object }).__wgGraph = {
         getTransform: () => {
@@ -3434,6 +2865,7 @@ export const GraphCanvas: React.FC = () => {
       wrapEl.removeEventListener('pointerleave', onLeave)
       wrapEl.removeEventListener('wheel', onWheel)
       wrapEl.removeEventListener('dblclick', onDbl)
+      wrapEl.removeEventListener('contextmenu', onContextMenu)
       wrapEl = null
       try {
         delete (window as unknown as { __wgGraph?: object }).__wgGraph
@@ -3804,8 +3236,8 @@ export const GraphCanvas: React.FC = () => {
   const handleClearFocus = useCallback(() => {
     setFocusNodeIds(null)
     setFocusEdgeKeys(null)
-    if (pathStatus?.startsWith('Focus')) setPathStatus(null)
-  }, [pathStatus])
+    if (pathStatusRef.current?.startsWith('Focus')) setPathStatus(null)
+  }, [])
 
   const buildViewSnapshot = useCallback((): GraphViewSnapshot => {
     const t = transformRef.current
@@ -4134,11 +3566,9 @@ export const GraphCanvas: React.FC = () => {
       }
       if (e.key === 'p' || e.key === 'P') {
         e.preventDefault()
-        setShowFilters((v) => {
-          const next = !v
-          flashAction(next ? 'Settings terbuka' : 'Settings ditutup')
-          return next
-        })
+        const next = !showFiltersRef.current
+        setShowFilters(next)
+        flashAction(next ? 'Settings terbuka' : 'Settings ditutup')
         return
       }
       if (e.key === '/') {
@@ -4233,27 +3663,38 @@ export const GraphCanvas: React.FC = () => {
       // A = toggle animate forces
       if (e.key === 'a' || e.key === 'A') {
         e.preventDefault()
-        setAnimateForces((v) => {
-          const next = !v
-          void updateGraphSettings({ display: { animateForces: next } })
-          setPathStatus(next ? 'Animate ON' : 'Animate OFF')
-          return next
-        })
+        const next = !animateForcesRef.current
+        setAnimateForces(next)
+        void updateGraphSettings({ display: { animateForces: next } })
+        setPathStatus(next ? 'Animate ON' : 'Animate OFF')
         return
       }
       // T = toggle tags
       if (e.key === 't' || e.key === 'T') {
         e.preventDefault()
-        setShowTags((v) => {
-          const next = !v
-          void updateGraphSettings({ display: { showTags: next } })
-          setPathStatus(next ? 'Tags ON' : 'Tags OFF')
-          return next
-        })
+        const next = !showTagsRef.current
+        setShowTags(next)
+        void updateGraphSettings({ display: { showTags: next } })
+        setPathStatus(next ? 'Tags ON' : 'Tags OFF')
+        return
+      }
+      // Delete = delete selected non-ghost nodes
+      if (e.key === 'Delete' || e.key === 'Backspace') {
+        const ids = [...selectedIdsRef.current]
+        if (ids.length === 0) return
+        e.preventDefault()
+        const targets = nodesRef.current.filter(
+          (n) => ids.includes(n.id) && !n.isGhost && n.type !== 'ghost' && !n.isTag && n.type !== 'tag' && n.path
+        )
+        if (targets.length === 0) { setPathStatus('No deletable nodes selected'); return }
+        if (!window.confirm(`Delete ${targets.length} file(s)?`)) return
+        for (const n of targets) void window.api.deleteFile(n.path)
+        setSelectedIds(new Set())
+        setPathStatus(`Deleted ${targets.length} file(s)`)
         return
       }
 
-  }, [activeView, handleClearPath, handleClearFocus, fitView, handleReheatAndFit, handleSaveLayout, handleExportPng, schedulePaint, scheduleSaveCamera, zoomBy, updateGraphSettings, openTab, setActiveView, flashAction, selectedIds])
+  }, [activeView, handleClearPath, handleClearFocus, fitView, handleReheatAndFit, handleSaveLayout, handleExportPng, schedulePaint, scheduleSaveCamera, zoomBy, updateGraphSettings, openTab, setActiveView, flashAction])
 
   useEffect(() => {
     if (activeView !== 'graph') return
@@ -4261,8 +3702,19 @@ export const GraphCanvas: React.FC = () => {
     return () => window.removeEventListener('keydown', onKey)
   }, [activeView, onKey])
 
+  // Close context menu on outside click
+  useEffect(() => {
+    if (!ctxMenu) return
+    const close = (e: MouseEvent) => {
+      const menu = document.querySelector('.ctx-menu')
+      if (menu && !menu.contains(e.target as Node)) setCtxMenu(null)
+    }
+    window.addEventListener('mousedown', close)
+    return () => window.removeEventListener('mousedown', close)
+  }, [ctxMenu])
+
   return (
-    <div className="graph-container" role="application" aria-label="Knowledge graph" tabIndex={0} onKeyDown={onKey as unknown as React.KeyboardEventHandler<HTMLDivElement>}>
+    <div className="graph-container" role="application" aria-label="Knowledge graph" tabIndex={0}>
       <div className="graph-toolbar">
         <span className="graph-toolbar-stats">
           {stats.nodes} notes · {stats.edges} links
@@ -4332,13 +3784,11 @@ export const GraphCanvas: React.FC = () => {
           <button
             type="button"
             className={`graph-chip graph-chip-icon ${showFilters ? 'active' : ''}`}
-            onClick={() =>
-              setShowFilters((p) => {
-                const next = !p
-                flashAction(next ? 'Settings terbuka' : 'Settings ditutup')
-                return next
-              })
-            }
+            onClick={() => {
+              const next = !showFiltersRef.current
+              setShowFilters(next)
+              flashAction(next ? 'Settings terbuka' : 'Settings ditutup')
+            }}
             title="Graph settings panel (P)"
             aria-label="Graph settings"
             aria-expanded={showFilters}
@@ -4632,7 +4082,7 @@ export const GraphCanvas: React.FC = () => {
                 display: { showLabels: true }
               })
               requestAnimationFrame(() => {
-                transformRef.current = d3.zoomIdentity
+                setCameraTransformRef.current(d3.zoomIdentity, { user: true, save: true })
                 hasAutoFitRef.current = false
                 fitViewRef.current?.(false)
                 hasAutoFitRef.current = true
@@ -4674,7 +4124,7 @@ export const GraphCanvas: React.FC = () => {
               type="button"
               className="graph-chip"
               onClick={() => {
-                transformRef.current = d3.zoomIdentity
+                setCameraTransformRef.current(d3.zoomIdentity, { user: true, save: true })
                 fitView(true, null, { silent: false })
                 setGraphDiag(null)
               }}
@@ -4754,6 +4204,50 @@ export const GraphCanvas: React.FC = () => {
         }}
       />
       </div>{/* .graph-stage */}
+
+      {ctxMenu && (
+        <div
+          className="ctx-menu"
+          style={{ position: 'fixed', left: ctxMenu.x, top: ctxMenu.y, zIndex: 9999 }}
+          onContextMenu={(e) => e.preventDefault()}
+        >
+          {!ctxMenu.node.isGhost && ctxMenu.node.type !== 'ghost' && ctxMenu.node.path && (
+            <button type="button" onClick={() => {
+              void openTab(ctxMenu.node.path)
+              setActiveView('editor')
+              setCtxMenu(null)
+            }}>Open</button>
+          )}
+          {ctxMenu.node.title && (
+            <button type="button" onClick={() => {
+              navigator.clipboard.writeText(ctxMenu.node.path || ctxMenu.node.title || '')
+              flashAction('Path copied')
+              setCtxMenu(null)
+            }}>Copy path</button>
+          )}
+          <button type="button" onClick={() => {
+            const n = ctxMenu.node
+            const isPinned = Boolean(n.pinned || (n.fx != null && n.fy != null))
+            if (isPinned) {
+              n.fx = null; n.fy = null; n.pinned = false
+            } else {
+              n.pinned = true
+            }
+            posCache.current.set(n.id, { x: n.x!, y: n.y!, fx: n.fx, fy: n.fy })
+            setPinnedCount(nodesRef.current.filter((nd) => nd.pinned || nd.fx != null).length)
+            simRef.current?.alpha(0.3).restart()
+            schedulePaint()
+            setCtxMenu(null)
+          }}>{(ctxMenu.node.pinned || (ctxMenu.node.fx != null)) ? 'Unpin' : 'Pin'}</button>
+          {!ctxMenu.node.isGhost && ctxMenu.node.type !== 'ghost' && !ctxMenu.node.isTag && ctxMenu.node.type !== 'tag' && ctxMenu.node.path && (
+            <button type="button" className="danger" onClick={() => {
+              if (!window.confirm(`Delete "${ctxMenu.node.title || ctxMenu.node.path}"?`)) return
+              void window.api.deleteFile(ctxMenu.node.path)
+              setCtxMenu(null)
+            }}>Delete</button>
+          )}
+        </div>
+      )}
     </div>
   )
 }
