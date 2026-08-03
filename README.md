@@ -1,10 +1,19 @@
-﻿<div align="center">
+<div align="center">
+
+<img src="build/icon.png" alt="WorkspaceGraph" width="120" />
 
 # WorkspaceGraph
 
 **A local-first knowledge graph & AI workspace — built like Obsidian, powered by semantic RAG.**
 
-[Download](#installation) · [Features](#features) · [AI Setup](#ai-setup) · [Development](#development)
+![CI](https://img.shields.io/github/actions/workflow/status/ngodingsendiri/WorkspaceGraph/ci.yml?branch=main&label=CI&logo=github)
+![Version](https://img.shields.io/github/package-json/v/ngodingsendiri/WorkspaceGraph?label=version)
+![License](https://img.shields.io/github/license/ngodingsendiri/WorkspaceGraph)
+![Platform](https://img.shields.io/badge/Windows%20%7C%20macOS%20%7C%20Linux-ready-blue)
+![Tests](https://img.shields.io/badge/tests-302%20passed-brightgreen)
+![Electron](https://img.shields.io/badge/Electron-39-47848F?logo=electron)
+
+[Download](#installation) · [Features](#features) · [Screenshots](#screenshots) · [AI Setup](#ai-setup) · [Development](#development)
 
 </div>
 
@@ -14,7 +23,19 @@
 
 WorkspaceGraph is an **Electron desktop application** that turns a folder of Markdown files into a living knowledge graph. Think Obsidian — but with a built-in AI assistant that uses your own notes as context through a full Retrieval-Augmented Generation (RAG) pipeline, entirely on your machine.
 
-Your data never leaves your computer. The AI reads your vault, not the cloud.
+> 🔒 **Your data never leaves your computer.** The AI reads your vault, not the cloud. API keys are encrypted locally with `safeStorage` and never exposed to the renderer.
+
+---
+
+## Screenshots
+
+| Graph View | Editor (live preview) |
+|---|---|
+| ![Graph View](docs/screenshots/graph.png) | ![Editor](docs/screenshots/editor.png) |
+
+| Dashboard | Welcome |
+|---|---|
+| ![Dashboard](docs/screenshots/dashboard.png) | ![Welcome](docs/screenshots/welcome.png) |
 
 ---
 
@@ -30,13 +51,13 @@ Your data never leaves your computer. The AI reads your vault, not the cloud.
 - WikiLink edges + tag edges
 - Local graph (neighbors of a single note)
 - Ghost nodes for unresolved links
-- Filter by type, tag, degree
+- Filter by type, tag, degree, orphan, hub
 
 ### 🤖 AI Assistant (Multi-provider)
 - Chat with your vault — AI gets relevant context automatically
-- Supports: **Gemini, Claude, OpenAI, Ollama (local), OpenRouter**
+- Supports: **Gemini, Claude, OpenAI, Ollama (local), OpenRouter, Grok**
 - Agent roles: General, Writer, Researcher, Curator, Planner
-- Tool use: AI can read and propose edits to your notes
+- Tool use: AI can read and propose edits to your notes (approve/reject UI)
 
 ### 🔍 Hybrid Search (FTS + Semantic)
 - SQLite FTS5 full-text search (keyword)
@@ -53,22 +74,42 @@ Your data never leaves your computer. The AI reads your vault, not the cloud.
 - AI maintains its own index/sop/log notes in `AI Memory/`
 - Memory grows over time, making the AI smarter about your specific vault
 
+### 🧩 Templates, Tasks & Domains
+- Built-in templates: project, task, people, daily, SOP, and more
+- Domain overview with checkbox tracking
+- Automations & declarative plugins
+
 ---
 
 ## Installation
 
-### Prerequisites
-- [Node.js](https://nodejs.org/) v18+
+### 📦 From GitHub Releases (recommended)
+
+Grab the installer for your OS from the [Releases page](https://github.com/ngodingsendiri/WorkspaceGraph/releases):
+
+| OS | File | Notes |
+|----|------|-------|
+| **Windows** | `WorkspaceGraph-<version>-setup.exe` | NSIS installer, x64 |
+| **macOS** | `WorkspaceGraph-<version>.dmg` | Drag to Applications |
+| **Linux** | `WorkspaceGraph-<version>.AppImage` | `chmod +x` then run |
+
+> Installers are produced automatically from CI when a version tag is pushed (`v*.*.*`). No installer for your platform yet? [Build from source](#build-from-source) — it takes ~2 minutes.
+
+### 🔨 Build from source
+
+#### Prerequisites
+- [Node.js](https://nodejs.org/) v20+ (CI uses 22)
 - [Git](https://git-scm.com/)
 
-### Build from source
-
 ```bash
-git clone https://github.com/your-username/WorkspaceGraph.git
+git clone https://github.com/ngodingsendiri/WorkspaceGraph.git
 cd WorkspaceGraph
 npm install
-npm run dev          # development mode
-npm run build        # production build
+npm run dev          # development mode with HMR
+npm run build        # production build (out/)
+npm run build:win    # Windows installer (dist/)
+npm run build:mac    # macOS dmg
+npm run build:linux  # Linux AppImage
 ```
 
 ---
@@ -84,6 +125,7 @@ Go to **Settings → AI Providers** and configure at least one provider:
 | **OpenAI** | OpenAI API key from [platform.openai.com](https://platform.openai.com) |
 | **Ollama** | [Ollama](https://ollama.com) running locally (free, fully offline) |
 | **OpenRouter** | OpenRouter API key — access 100+ models |
+| **Grok** | xAI API key or import from the local CLI (`auth.json`) |
 
 ### Recommended free setup
 1. Install [Ollama](https://ollama.com) → `ollama pull llama3.2`
@@ -134,6 +176,7 @@ Your Vault/
 ```bash
 npm run dev          # Electron dev server with HMR
 npm run typecheck    # TypeScript check (node + web)
+npm test             # Vitest unit tests (302 tests)
 npm run lint         # ESLint
 npm run build        # Production build
 ```
@@ -147,11 +190,15 @@ npm run build        # Production build
 | Graph engine | Custom WikiLink parser + force-layout |
 | Search | SQLite FTS5 + Fuse.js |
 | Semantic RAG | `@xenova/transformers` (ONNX / WebAssembly) |
-| AI providers | Gemini / Claude / OpenAI / Ollama / OpenRouter |
+| AI providers | Gemini / Claude / OpenAI / Ollama / OpenRouter / Grok |
 | File watching | chokidar |
+
+### Quality gates (CI)
+
+Every push runs: **typecheck → lint → 302 vitest tests (with coverage) → production build**. All checks must pass on `main` before a release is cut.
 
 ---
 
 ## License
 
-MIT — do whatever you want, attribution appreciated.
+[MIT](LICENSE) — do whatever you want, attribution appreciated.
