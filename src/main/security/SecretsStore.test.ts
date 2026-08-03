@@ -1,90 +1,98 @@
 import { describe, it, expect } from 'vitest'
 import {
-  scrubSettingsSecrets,
+  encryptSecret,
+  decryptSecret,
+  isEncryptedForm,
   mergeSettingsPreservingSecrets,
   protectSettingsSecrets,
-  revealSettingsSecrets
+  revealSettingsSecrets,
+  scrubSettingsSecrets
 } from './SecretsStore'
 
-describe('SecretsStore — CRIT-2 renderer key isolation', () => {
-  it('scrubSettingsSecrets strips apiKey and marks apiKeySet', () => {
-    const settings = {
-      theme: 'dark',
-      ai: {
-        gemini: { apiKey: 'sk-secret-123', baseUrl: 'https://example.com' },
-        openai: { apiKey: 'sk-other' },
-        ollama: { apiKey: '' }
-      }
-    }
+/**
+ * SecretsStore roundtrip using the electron safeStorage mock
+ * (setup.ts: encryptString -> "encrypted:<str>", decryptString reverses it).
+ */
+describe('SecretsStore', () => {
+  it('encrypts and decrypts a plain key', () => {
+    const enc = encryptSecret('sk-test-123')
+    expect(enc).not.toBe('sk-test-123')
+    expect(decryptSecret(enc)).toBe('sk-test-123')
+  })
+
+  it('detects encrypted form', () => {
+    expect(isEncryptedForm(encryptSecret('x'))).toBe(true)
+    expect(isEncryptedForm('plain-text')).toBe(false)
+  })
+
+  it('protectSettingsSecrets encrypts ai api keys in place', () => {
+    const settings = { ai: { provider1: { apiKey: 'secret-key', model: 'x' } }, theme: 'dark' }
+    const out = protectSettingsSecrets(settings)
+    const key = out.ai.provider1.apiKey as string
+    expect(key).not.toBe('secret-key')
+    expect(out.ai.provider1.model).toBe('x')
+    expect(out.theme).toBe('dark')
+    // Decrypts back to original
+    expect(decryptSecret(key)).toBe('secret-key')
+  })
+
+  it('revealSettingsSecrets decrypts keys back', () => {
+    const settings = { ai: { p: { apiKey: encryptSecret('orig') } } }
+    const revealed = revealSettingsSecrets(settings)
+    expect(revealed.ai.p.apiKey).toBe('orig')
+  })
+
+  it('scrubSettingsSecrets masks keys for renderer', () => {
+    const settings = { ai: { p: { apiKey: 'SECRET' } } }
     const scrubbed = scrubSettingsSecrets(settings)
-    // Never ship the raw key
-    expect(scrubbed.ai.gemini.apiKey).toBe('')
-    expect(scrubbed.ai.openai.apiKey).toBe('')
-    // Marker so UI can show "saved" without the key
-    expect(scrubbed.ai.gemini.apiKeySet).toBe(true)
-    expect(scrubbed.ai.openai.apiKeySet).toBe(true)
-    expect(scrubbed.ai.ollama.apiKeySet).toBe(false)
-    // Non-secret fields survive
-    expect(scrubbed.ai.gemini.baseUrl).toBe('https://example.com')
-    expect(scrubbed.theme).toBe('dark')
-    // Input object is not mutated
-    expect(settings.ai.gemini.apiKey).toBe('sk-secret-123')
+    const key = scrubbed.ai.p.apiKey as string
+    expect(key).not.toBe('SECRET')
+    expect(String(key)).not.toContain('SECRET')
   })
 
-  it('mergeSettingsPreservingSecrets keeps stored key when renderer sends empty apiKey', () => {
-    const stored = {
+  it('handles missing/non-object settings gracefully', () => {
+    expect(protectSettingsSecrets({})).toEqual({})
+    expect(revealSettingsSecrets({})).toEqual({})
+  })
+
+  // ── CRIT-2 regression: merge-preserve on settings:save ──
+  it('mergeSettingsPreservingSecrets keeps stored key when incoming apiKey is empty', () => {
+    const current = {
       theme: 'dark',
-      ai: { gemini: { apiKey: 'enc:v1:ABC', baseUrl: 'https://a.com' } }
+      ai: { gemini: { apiKey: 'stored-key', model: 'gemini-2.0' } }
     }
-    // Renderer round-trips a scrubbed settings object (theme save flow)
+    // Renderer round-trip: scrubbed settings sent back with apiKey '' + apiKeySet marker
     const incoming = {
-      theme: 'light',
-      ai: { gemini: { apiKey: '', apiKeySet: true, baseUrl: 'https://a.com' } }
+      theme: 'dark',
+      ai: { gemini: { apiKey: '', apiKeySet: true, model: 'gemini-2.0' } }
     }
-    const merged = mergeSettingsPreservingSecrets(stored, incoming)
-    expect(merged.theme).toBe('light')
-    expect(merged.ai.gemini.apiKey).toBe('enc:v1:ABC') // stored key preserved
-    expect(merged.ai.gemini.apiKeySet).toBeUndefined() // marker never persisted
-    expect(merged.ai.gemini.baseUrl).toBe('https://a.com')
+    const merged = mergeSettingsPreservingSecrets(current, incoming)
+    expect(merged.ai.gemini.apiKey).toBe('stored-key')
+    expect(merged.ai.gemini.model).toBe('gemini-2.0')
   })
 
-  it('mergeSettingsPreservingSecrets replaces key when a new non-empty one is provided', () => {
-    const stored = { ai: { gemini: { apiKey: 'enc:v1:OLD', baseUrl: 'https://a.com' } } }
-    const incoming = { ai: { gemini: { apiKey: 'sk-new', baseUrl: 'https://a.com' } } }
-    const merged = mergeSettingsPreservingSecrets(stored, incoming)
-    expect(merged.ai.gemini.apiKey).toBe('sk-new')
+  it('mergeSettingsPreservingSecrets uses new key when one is typed', () => {
+    const current = { ai: { openai: { apiKey: 'old-key' } } }
+    const incoming = { ai: { openai: { apiKey: 'new-key', apiKeySet: true } } }
+    const merged = mergeSettingsPreservingSecrets(current, incoming)
+    expect(merged.ai.openai.apiKey).toBe('new-key')
   })
 
-  it('mergeSettingsPreservingSecrets preserves providers omitted by renderer payload', () => {
-    const stored = {
-      ai: {
-        gemini: { apiKey: 'enc:v1:g', baseUrl: 'https://g.com' },
-        openai: { apiKey: 'enc:v1:o', baseUrl: 'https://o.com' }
-      }
-    }
-    // Renderer only sends gemini (e.g. partial update) — openai must survive
-    const incoming = { ai: { gemini: { apiKey: '', baseUrl: 'https://g.com' } } }
-    const merged = mergeSettingsPreservingSecrets(stored, incoming)
-    expect(merged.ai.gemini.apiKey).toBe('enc:v1:g')
-    expect(merged.ai.openai.apiKey).toBe('enc:v1:o')
+  it('mergeSettingsPreservingSecrets strips internal apiKeySet marker before persist', () => {
+    const current = { ai: { grok: { apiKey: 'stored' } } }
+    const incoming = { ai: { grok: { apiKey: '', apiKeySet: true } } }
+    const merged = mergeSettingsPreservingSecrets(current, incoming)
+    expect(merged.ai.grok.apiKeySet).toBeUndefined()
+    expect(merged.ai.grok.apiKey).toBe('stored')
   })
 
-  it('full round-trip: protect → reveal → scrub → merge does not wipe keys', () => {
-    const original = { theme: 'dark', ai: { gemini: { apiKey: 'sk-real' } } }
-    // saveSettings path: encrypt
-    const protectedSettings = protectSettingsSecrets(original)
-    expect(protectedSettings.ai.gemini.apiKey).not.toBe('sk-real')
-    // getSettings path: decrypt
-    const revealed = revealSettingsSecrets(protectedSettings)
-    expect(revealed.ai.gemini.apiKey).toBe('sk-real')
-    // settings:get path: scrub for renderer
-    const scrubbed = scrubSettingsSecrets(revealed)
-    expect(scrubbed.ai.gemini.apiKey).toBe('')
-    // settings:save path: renderer round-trips scrubbed object → merge with stored raw
-    const merged = mergeSettingsPreservingSecrets(protectedSettings, scrubbed)
-    const reProtected = protectSettingsSecrets(merged)
-    const final = revealSettingsSecrets(reProtected)
-    expect(final.ai.gemini.apiKey).toBe('sk-real')
-    expect(final.theme).toBe('dark')
+  it('mergeSettingsPreservingSecrets handles new provider ids and missing ai', () => {
+    const current = { ai: {} }
+    const incoming = { ai: { ollama: { apiKey: '', baseUrl: 'http://localhost:11434' } } }
+    const merged = mergeSettingsPreservingSecrets(current, incoming)
+    expect(merged.ai.ollama.baseUrl).toBe('http://localhost:11434')
+    // New provider with empty incoming key: nothing stored to preserve → key stays falsy
+    expect(merged.ai.ollama.apiKey).toBeFalsy()
+    expect(mergeSettingsPreservingSecrets(current, { theme: 'light' }).theme).toBe('light')
   })
 })

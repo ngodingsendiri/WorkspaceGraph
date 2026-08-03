@@ -14,12 +14,14 @@
 | Pemeriksaan | Hasil aktual |
 |---|---|
 | `npm run typecheck` | ✅ bersih |
-| `npm test` (vitest) | ✅ **132 passed / 132** (6 file: Workspace, Markdown, Graph, Search, Embedding, Secrets) |
-| `npm run qa` | ✅ **semua fase hijau** (runtime · engines · phase2–5 · graph-view · adversarial, exit 0) |
-| `npm run lint` | ⚠️ 2 errors + 5.534 warnings (5.230 fixable prettier) — **debt kualitas, bukan blocker** |
+| `npm test` (vitest) | ✅ **295 passed / 295** (14 file: Workspace, Markdown, Graph, GraphDeep, GraphLayout, Search, Template, Domain, Embedding, AgentTools, PathSandbox, SecretsStore, sourceContracts, runtimeSqliteFts) |
+| `npm run qa` | ✅ **= `vitest run`** (single test system, 295 check, exit 0) |
+| `npm run lint` | ⚠️ 0 errors + 299 warnings (style debt) — **bukan blocker** |
 | `npm run build` | ✅ production build sukses (diverifikasi sebelumnya) |
 
-> **Catatan penting:** klaim versi dokumen lama (`126/126 QA`, `0 errors, 175 warnings`) **tidak lagi akurat** — `npm run qa` sempat merah (2 kegagalan + fase-fase tersembunyi di balik crash rantai), dan sekarang sudah hijau kembali setelah perbaikan 2026-08-03 (lihat §2).
+> **QA kini satu sistem:** seluruh script `scripts/qa-*.mjs` (17 file, dua sistem test paralel) telah **dimigrasi ke vitest** dan dihapus. CI (`npx vitest run --coverage` dengan `include: ['src/**/*.test.ts']`) otomatis meng-cover semua asersi — QA tidak bisa basi lagi.
+>
+> **Catatan jujur:** asersi *source-contract* & *engine-behavior* lama (≈460 check) dikonsolidasi ke vitest (295 check — redundansi statis dibuang, paritas tetap via test dua arah). Satu-satunya yang tidak dipindahkan: **uji behavioral IPC berurutan** (`qa-api-sequential.mjs` memanggil handler nyata via `InternalAPI`). Vitest berjalan di environment node tanpa Electron, jadi pengujian alur IPC end-to-end kini **manual/EDR** (launch app + CDP), sedangkan kontrak *statis* (semua 77 kanal: preload↔main dua arah) dijamin `sourceContracts.test.ts`.
 
 ---
 
@@ -41,12 +43,12 @@
 
 ## 2. Perbaikan kritis 2026-08-03 (dari audit mendalam)
 
-### CRIT-1 — QA suite merah → hijau ✅
-`npm run qa` gagal 2 kasus di `scripts/qa-runtime.mjs` (padahal dokumen lama mengklaim 126/126):
+### CRIT-1 — QA suite merah → hijau → satu sistem (vitest) ✅
+Dua kegagalan ditemukan di QA runtime lama:
 1. **`graph nodes=5 got 9`** — `buildFromParsedFiles()` sekarang selalu membangun tag node; asersi QA lama tidak diupdate.
 2. **Crash `TypeError`** — `search.search()` async dipanggil tanpa `await` di script QA.
 
-Karena crash di fase pertama, seluruh rantai `&&` berhenti → angka "126/126" tidak pernah terverifikasi ulang. Diperbaiki: `await` ditambahkan, asersi memakai `realNodeCount`, dan kegagalan tersembunyi di fase berikutnya ikut dituntaskan (`qa-phase2` "backlink operator" regex `backlinks?:`, 3 asersi statis usang di `qa-graph-view`).
+Karena crash di fase pertama, rantai `&&` berhenti → angka klaim lama tidak pernah terverifikasi ulang. Perbaikan 2026-08-03 menuntaskan 8 kegagalan QA standalone (`await` pada search async, `realNodeCount` untuk tag node, asersi statis disinkronkan pasca-refactor canvas2D/IPC). **Kemudian seluruh QA dimigrasi ke vitest** — asersi source-contract & runtime dipindah ke `src/**/*.test.ts`, 17 script `.mjs` dihapus, dan `package.json` menunjuk `qa` → `vitest run`. CI kini menguji semuanya tanpa esbuild atau rantai script terpisah.
 
 ### CRIT-2 — API key plaintext bocor ke renderer → ditutup total ✅
 `settings:get` sebelumnya mengembalikan **key terdekripsi** ke proses renderer. Sekarang:
@@ -60,7 +62,7 @@ Karena crash di fase pertama, seluruh rantai `&&` berhenti → angka "126/126" t
 
 ### Regresi yang terbongkar & diperbaiki
 - `WorkspaceEngine.test.ts`: asersi usang yang mengasumsikan seeding template gagal.
-- `scripts/qa-phase2.mjs`, `scripts/qa-graph-view.mjs`: asersi statis tidak sinkron dengan kode pasca-refactor `GraphCanvas`.
+- Asersi statis QA lama yang tidak sinkron dengan kode pasca-refactor `GraphCanvas`/canvas2D (kini sudah dipindah ke `src/main/qa/sourceContracts.test.ts` dan disinkronkan).
 
 ---
 
@@ -177,8 +179,8 @@ Karena crash di fase pertama, seluruh rantai `&&` berhenti → angka "126/126" t
 - Vector hybrid search
 - Scheduled automation
 - Full plugin code sandbox
-- Monolith: `src/main/ipc/index.ts` (±1.280 baris) & `GraphCanvas.tsx` (±4.257 baris) → refactor ke modul/hook
-- Migrasi `scripts/qa-*.mjs` ke vitest (dua sistem test paralel mudah melenceng — lihat CRIT-1)
+- Monolith: `GraphCanvas.tsx` (±4.257 baris) → refactor ke modul/hook (IPC sudah dipecah ke `src/main/ipc/handlers/*`, 2026-08-03)
+- Behavioral IPC end-to-end (alur handler nyata via `InternalAPI`) → verifikasi manual/EDR (sebelumnya `qa-api-sequential.mjs`)
 
 Lihat `35_Roadmap.md`.
 
@@ -189,9 +191,11 @@ Lihat `35_Roadmap.md`.
 ```bash
 cd C:\code\WorkspaceGraph
 npm run typecheck   # ✅ bersih
-npm test            # ✅ 132 passed / 132 (6 file)
-npm run qa          # ✅ semua fase hijau, exit 0 (runtime · engines · phase2–5 · graph-view · adversarial)
-npm run lint        # ⚠️ 2 errors + 5.534 warnings (debt prettier/strict, bukan blocker)
+npm test            # ✅ 295 passed / 295 (14 file)
+npm run qa          # ✅ = vitest run, exit 0
+npm run qa:graph    # ✅ subset graph (GraphEngine + Deep + LayoutStore)
+npm run qa:security # ✅ subset keamanan (PathSandbox + SecretsStore)
+npm run lint        # ⚠️ 0 errors + 299 warnings (style debt, bukan blocker)
 npm run build       # ✅ production build sukses
 # optional installer:
 # npm run build:win
@@ -207,8 +211,8 @@ Settings → Security / Automation / Plugins.
 | Pertanyaan | Jawaban |
 |------------|---------|
 | Typecheck bersih? | **Ya** |
-| QA P0–P5? | **Ya** (semua fase hijau, exit 0) |
-| Lint bersih? | **Tidak** — 2 errors + 5.534 warnings (debt prettier) |
+| QA P0–P5? | **Ya** (295 check di vitest, satu sistem, exit 0) |
+| Lint bersih? | **Tidak** — 0 errors + 299 warnings (style debt) |
 | Build produksi? | **Ya** |
 | Path sandbox konsisten? | **Ya** (semua IPC file terkunci) |
 | XSS preview tertangani? | **Ya** (escape + allowlist URL) |
@@ -216,4 +220,4 @@ Settings → Security / Automation / Plugins.
 | Blueprint roadmap core? | **Phase 0–5 core delivered** |
 | Siap pakai harian? | **Ya** (vault + AI worker + domain + platform) |
 
-Residual: vector RAG, soft-delete, JS plugin sandbox, cron, refactor monolith, migrasi QA ke vitest.
+Residual: vector RAG, soft-delete, JS plugin sandbox, cron, refactor monolith `GraphCanvas.tsx`.
