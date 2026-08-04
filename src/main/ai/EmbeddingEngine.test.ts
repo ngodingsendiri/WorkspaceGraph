@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { EmbeddingEngine } from './EmbeddingEngine'
+import { EmbeddingEngine, chunkText } from './EmbeddingEngine'
 import fs from 'fs'
 import path from 'path'
 import { tmpdir } from 'os'
@@ -20,6 +20,36 @@ describe('EmbeddingEngine', () => {
   afterEach(() => {
     vi.restoreAllMocks()
     engine.clear()
+  })
+
+  describe('chunkText', () => {
+    it('splits long text into multiple chunks', () => {
+      const text = 'word '.repeat(300)
+      const chunks = chunkText(text, 480, 60)
+      expect(chunks.length).toBeGreaterThan(1)
+      // Reassembling keeps all content (overlap may duplicate a few chars)
+      const joined = chunks.join('')
+      expect(joined.length).toBeGreaterThan(text.length - 80)
+    })
+
+    it('prefers paragraph boundaries over hard cuts', () => {
+      // Paragraph break sits inside the first window — chunk must break there
+      const text = 'x'.repeat(400) + '\n\n' + 'y'.repeat(400)
+      const chunks = chunkText(text, 480, 60)
+      expect(chunks[0].includes('\n\n')).toBe(true)
+    })
+
+    it('does not emit empty or <20-char fragments', () => {
+      const text = 'a'.repeat(2000)
+      const chunks = chunkText(text, 480, 60)
+      expect(chunks.length).toBeGreaterThan(1)
+      for (const c of chunks) expect(c.trim().length).toBeGreaterThan(20)
+    })
+
+    it('returns a single chunk for short text', () => {
+      // Must still pass the >20-char minimum filter
+      expect(chunkText('# Hi\n\nThis is a short note with enough words.')).toHaveLength(1)
+    })
   })
 
   describe('init', () => {

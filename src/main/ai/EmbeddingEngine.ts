@@ -55,17 +55,33 @@ function bufferToFloat32(buf: Buffer): Float32Array {
   return new Float32Array(ab)
 }
 
-function chunkText(text: string, size = CHUNK_SIZE, overlap = CHUNK_OVERLAP): string[] {
+/**
+ * Split text into chunks on paragraph/sentence boundaries when possible.
+ * A hard cut mid-sentence produces low-quality embeddings and ugly snippets;
+ * stepping back to the nearest break keeps each chunk self-contained.
+ */
+export function chunkText(text: string, size = CHUNK_SIZE, overlap = CHUNK_OVERLAP): string[] {
   const chunks: string[] = []
   let start = 0
   while (start < text.length) {
-    chunks.push(text.slice(start, start + size))
-    start += size - overlap
-    if (start + overlap >= text.length) break
+    let end = Math.min(text.length, start + size)
+    if (end < text.length) {
+      const window = text.slice(start, end)
+      // Prefer paragraph break, then line break, then sentence end inside the window
+      const para = window.lastIndexOf('\n\n')
+      const line = para >= 0 ? -1 : window.lastIndexOf('\n')
+      const sent = para < 0 && line < 0 ? Math.max(window.lastIndexOf('. '), window.lastIndexOf('? '), window.lastIndexOf('! '), window.lastIndexOf('.\n')) : -1
+      const breakAt = Math.max(para, line, sent)
+      // Only step back if the break is past the middle — avoids tiny fragments
+      if (breakAt > size * 0.35) end = start + breakAt + (para >= 0 ? 2 : 1)
+    }
+    const piece = text.slice(start, end)
+    if (piece.trim().length > 20) chunks.push(piece)
+    if (end >= text.length) break
+    const next = end - overlap
+    start = next > start ? next : start + 1
   }
-  const tail = text.slice(Math.max(0, text.length - size))
-  if (tail && tail !== chunks[chunks.length - 1]) chunks.push(tail)
-  return chunks.filter((c) => c.trim().length > 20)
+  return chunks
 }
 
 interface LocalChunkEntry {
@@ -340,14 +356,29 @@ export class EmbeddingEngine {
       qv = out.data as Float32Array
     }
 
+    // Small lexical boost so notes whose *title* matches the query rank above
+    // coincidentally-similar content (cheap hybrid signal, no extra model call).
+    const titleBoost = (filePath: string): number => {
+      const base = filePath.replace(/\\/g, '/').split('/').pop() || ''
+      const title = base.replace(/\.md$/i, '').toLowerCase()
+      const terms = query.toLowerCase().split(/\s+/).filter((t) => t.length > 2)
+      return terms.some((t) => title.includes(t)) ? 0.06 : 0
+    }
+
     const scored = this.index
       .map((e) => ({ filePath: e.filePath, chunk: e.chunk, score: dotProduct(qv, e.vector) }))
+      .map((e) => ({ ...e, score: e.score + titleBoost(e.filePath) }))
       .sort((a, b) => b.score - a.score)
+
+    // Adaptive threshold: relative to the top hit instead of a hard 0.25, so a
+    // low-similarity query still returns its best candidates rather than nothing.
+    const topScore = scored[0]?.score ?? 0
+    const minScore = topScore > 0.25 ? Math.max(0.22, topScore * 0.6) : 0.15
 
     const seen = new Set<string>()
     const out: SemanticHit[] = []
     for (const item of scored) {
-      if (item.score < 0.25) break
+      if (item.score < minScore) break
       const k = item.filePath.replace(/\\/g, '/')
       if (!seen.has(k)) {
         seen.add(k)

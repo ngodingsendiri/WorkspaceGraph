@@ -57,7 +57,7 @@ export interface ContextPackage {
   activeFile?: { path: string; title: string; content: string }
   graphNeighbors?: { title: string; path: string; type: string }[]
   backlinks?: { title: string; path: string }[]
-  relevantFiles: { title: string; path: string; snippet: string; tier: string }[]
+  relevantFiles: { title: string; path: string; snippet: string; tier: string; score?: number }[]
   citations: { title: string; path: string }[]
   systemRules: string[]
   formattedContext: string
@@ -72,6 +72,32 @@ function estimateTokens(text: string): number {
 /** Slightly higher to leave room for AI Memory L1 + active note */
 const DEFAULT_TOKEN_BUDGET = 3600
 
+/**
+ * Per-role context profiles: how much context each persona may pull in and how
+ * it splits the budget across retrieval tiers. Researcher needs more source
+ * material; writer/planner can stay lean so the model focuses on the active note.
+ */
+export interface RoleProfile {
+  /** Total token budget for the context package */
+  budget: number
+  /** Max related/search docs pulled in (retrieval tiers) */
+  searchFiles: number
+  searchChars: number
+  /** Max semantic (vector) hits + snippet length */
+  semanticFiles: number
+  semanticChars: number
+  /** Max system folder notes (Rules/SOP/Templates) */
+  systemCap: number
+}
+
+export const ROLE_PROFILES: Record<AgentRole, RoleProfile> = {
+  general: { budget: 3600, searchFiles: 4, searchChars: 500, semanticFiles: 4, semanticChars: 500, systemCap: 1 },
+  writer: { budget: 3400, searchFiles: 3, searchChars: 450, semanticFiles: 3, semanticChars: 450, systemCap: 2 },
+  researcher: { budget: 4600, searchFiles: 6, searchChars: 550, semanticFiles: 6, semanticChars: 550, systemCap: 2 },
+  curator: { budget: 4000, searchFiles: 5, searchChars: 500, semanticFiles: 5, semanticChars: 500, systemCap: 1 },
+  planner: { budget: 3200, searchFiles: 3, searchChars: 450, semanticFiles: 3, semanticChars: 450, systemCap: 2 }
+}
+
 export class ContextEngine {
   constructor(
     private workspaceEngine: WorkspaceEngine,
@@ -82,7 +108,7 @@ export class ContextEngine {
     query: string,
     activeFilePath?: string,
     agentRole: AgentRole = 'general',
-    tokenBudget = DEFAULT_TOKEN_BUDGET
+    tokenBudget = ROLE_PROFILES[agentRole]?.budget ?? DEFAULT_TOKEN_BUDGET
   ): ContextPackage {
     const relevantFiles: ContextPackage['relevantFiles'] = []
     const citations: { title: string; path: string }[] = []
@@ -91,6 +117,7 @@ export class ContextEngine {
     let graphNeighbors: ContextPackage['graphNeighbors'] = []
     let backlinks: ContextPackage['backlinks'] = []
     let usedTokens = 0
+    const profile = ROLE_PROFILES[agentRole] || ROLE_PROFILES.general
 
     const addCitation = (title: string, p: string) => {
       if (!citations.some((c) => c.path === p)) citations.push({ title, path: p })
@@ -101,7 +128,11 @@ export class ContextEngine {
       filePath: string,
       tier: string,
       maxChars: number,
-      minPriority: number
+      minPriority: number,
+      /** Optional FTS/Fuse preview — use the matched window instead of file head */
+      preview?: string,
+      /** Optional retrieval score (FTS/Fuse 0..100) — used by the async rerank */
+      score?: number
     ): boolean => {
       const norm = filePath.replace(/\\/g, '/')
       if (seenPaths.has(norm)) return false
@@ -113,12 +144,12 @@ export class ContextEngine {
       try {
         const content = this.workspaceEngine.readFile(filePath).content
         const cap = Math.min(maxChars, remaining * 4)
-        const snippet = content.slice(0, cap).trim()
+        const snippet = (preview && preview.trim() ? preview : content).slice(0, cap).trim()
         const cost = estimateTokens(snippet) + 20
         if (cost > remaining && minPriority > 0) return false
 
         seenPaths.add(norm)
-        relevantFiles.push({ title, path: filePath, snippet, tier })
+        relevantFiles.push({ title, path: filePath, snippet, tier, score })
         addCitation(title, filePath)
         usedTokens += Math.min(cost, remaining)
         return true
@@ -170,7 +201,8 @@ export class ContextEngine {
     const rootEarly = this.workspaceEngine.getState().rootPath
     if (rootEarly) {
       const memPaths = listAiMemoryPaths(rootEarly)
-      // Cap: index first, then up to 4 more memory notes
+      // Cap: index first, then up to profile-driven number of memory notes
+      const memCap = Math.max(2, profile.searchFiles + 1)
       let memAdded = 0
       for (const abs of memPaths) {
         const base = path.basename(abs)
@@ -178,7 +210,7 @@ export class ContextEngine {
         if (tryAddSnippet(path.basename(abs, '.md'), abs, 'ai-memory', maxChars, 0)) {
           memAdded++
         }
-        if (memAdded >= 5 || usedTokens >= tokenBudget * 0.45) break
+        if (memAdded >= memCap || usedTokens >= tokenBudget * 0.45) break
       }
     }
 
@@ -196,7 +228,7 @@ export class ContextEngine {
       const ordered = [...systemNotes].sort(
         (a, b) => this.pathPriority(a.path) - this.pathPriority(b.path)
       )
-      const cap = roleWantsRules ? 2 : 1
+      const cap = roleWantsRules ? Math.max(profile.systemCap, 2) : profile.systemCap
       for (const n of ordered.slice(0, cap)) {
         tryAddSnippet(n.title, n.path, 'system', 500, 0)
       }
@@ -210,13 +242,14 @@ export class ContextEngine {
 
     // ——— 7. FTS / Fuse hybrid search ———
     if (query.trim()) {
-      const searchResults = this.searchEngine.searchSync({ query, limit: 6 })
+      const searchResults = this.searchEngine.searchSync({ query, limit: 8 })
       let added = 0
       for (const res of searchResults) {
         const prio = this.pathPriority(res.path)
-        const maxChars = prio <= 2 ? 600 : 400
-        if (tryAddSnippet(res.title, res.path, 'search', maxChars, 2)) added++
-        if (added >= 4 || usedTokens >= tokenBudget * 0.9) break
+        const maxChars = prio <= 2 ? Math.max(600, profile.searchChars) : profile.searchChars
+        // Use the FTS/Fuse match window as the snippet — far more useful than the file head
+        if (tryAddSnippet(res.title, res.path, 'search', maxChars, 2, res.preview, res.score)) added++
+        if (added >= profile.searchFiles || usedTokens >= tokenBudget * 0.9) break
       }
     }
 
@@ -301,15 +334,16 @@ export class ContextEngine {
     query: string,
     activeFilePath?: string,
     agentRole: AgentRole = 'general',
-    tokenBudget = DEFAULT_TOKEN_BUDGET
+    tokenBudget = ROLE_PROFILES[agentRole]?.budget ?? DEFAULT_TOKEN_BUDGET
   ): Promise<ContextPackage> {
     // Build the base synchronous package first
     const pkg = this.buildContextPackage(query, activeFilePath, agentRole, tokenBudget)
+    const profile = ROLE_PROFILES[agentRole] || ROLE_PROFILES.general
 
     // If semantic search is ready and we have budget left, augment with vector hits
     if (embeddingEngine.isReady && query.trim()) {
       try {
-        const hits = await embeddingEngine.search(query, 5)
+        const hits = await embeddingEngine.search(query, profile.semanticFiles + 2)
         const seenPaths = new Set(pkg.relevantFiles.map((f) => f.path.replace(/\\/g, '/')))
         if (activeFilePath) seenPaths.add(activeFilePath.replace(/\\/g, '/'))
 
@@ -321,33 +355,58 @@ export class ContextEngine {
           if (seenPaths.has(norm)) continue
           if (budgetLeft < 80) break
 
-          const cap = Math.min(500, budgetLeft * 4)
+          const cap = Math.min(profile.semanticChars, budgetLeft * 4)
           const snippet = hit.chunk.slice(0, cap).trim()
           const cost = Math.ceil(snippet.length / 4) + 20
           if (cost > budgetLeft) continue
 
           const title = hit.filePath.split(/[/\\]/).pop()?.replace(/\.md$/i, '') || 'Note'
-          semanticAdditions.push({ title, path: hit.filePath, snippet, tier: 'semantic' })
+          semanticAdditions.push({ title, path: hit.filePath, snippet, tier: 'semantic', score: hit.score })
           if (!pkg.citations.some((c) => c.path === hit.filePath)) {
             pkg.citations.push({ title, path: hit.filePath })
           }
           seenPaths.add(norm)
           budgetLeft -= cost
+          if (semanticAdditions.length >= profile.semanticFiles) break
         }
 
         if (semanticAdditions.length > 0) {
-          // Insert semantic results right after ai-memory tier, before search tier
-          const aiMemIdx = pkg.relevantFiles.findLastIndex((f) => f.tier === 'ai-memory')
-          pkg.relevantFiles.splice(aiMemIdx + 1, 0, ...semanticAdditions)
+          /**
+           * Rerank: interleave semantic + FTS hits by score so the model sees
+           * the most relevant material first, not just insertion order by tier.
+           * Normalize both onto 0..1 (FTS score is 0..100, semantic cosine ~0..1)
+           * and blend: FTS weight 0.55, semantic 0.45 — neither source dominates.
+           */
+          const W_FTS = 0.55
+          const W_SEM = 0.45
+          const searchHits = pkg.relevantFiles
+            .filter((x) => x.tier === 'search')
+            .map((f) => ({ f, score: (W_FTS * ((f.score ?? 50) / 100)) }))
+          const merged = [
+            ...searchHits,
+            ...semanticAdditions.map((f) => ({ f, score: W_SEM * (f.score ?? 0.5) }))
+          ]
+          merged.sort((a, b) => b.score - a.score)
 
-          // Rebuild formattedContext to include new files
-          const semSection = semanticAdditions
-            .map((f) => `\n[SEMANTIC] "${f.title}" (${f.path})\n${f.snippet}`)
-            .join('\n')
-          pkg.formattedContext = pkg.formattedContext.replace(
-            '=== END OF WORKSPACE CONTEXT ===',
-            `\n=== SEMANTIC MATCHES ===\n${semSection}\n=== END OF WORKSPACE CONTEXT ===`
-          )
+          // Rebuild the search+semantic slice of relevantFiles (keep graph/AI-memory tiers intact)
+          const nonSearch = pkg.relevantFiles.filter((f) => f.tier !== 'search')
+          const reranked = [...nonSearch, ...merged.map((m) => m.f)]
+
+          // Rebuild formattedContext from the new order. Split on the END marker
+          // (always present) so the head never carries it — avoids a duplicated
+          // marker when the base package had no search tier yet.
+          pkg.relevantFiles = reranked
+          const head = pkg.formattedContext.split('=== END OF WORKSPACE CONTEXT ===')[0]
+          const parts = [head]
+          if (reranked.length > 0) {
+            parts.push('\nRelated documents (priority order):')
+            for (const f of reranked) {
+              parts.push(`\n[${f.tier.toUpperCase()}] "${f.title}" (${f.path})`)
+              parts.push(f.snippet)
+            }
+          }
+          parts.push('=== END OF WORKSPACE CONTEXT ===\n')
+          pkg.formattedContext = parts.join('\n')
           pkg.tokenEstimate = estimateTokens(pkg.formattedContext)
         }
       } catch (err) {
