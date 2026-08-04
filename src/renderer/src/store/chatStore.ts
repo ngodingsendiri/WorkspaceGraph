@@ -5,6 +5,14 @@ export interface CitationItem {
   path: string
 }
 
+/** Post-generation grounding check from AIMiddleware (⚠ = weak evidence). */
+export interface CitationVerification {
+  path: string
+  title: string
+  supported: boolean
+  score: number
+}
+
 export interface WriteProposalItem {
   id: string
   tool: string
@@ -29,6 +37,8 @@ export interface ChatMessage {
   tokensUsed?: number
   /** Estimated tokens injected as workspace context for this reply. */
   contextTokens?: number
+  /** Per-citation grounding check emitted with the final done chunk. */
+  verifications?: CitationVerification[]
 }
 
 export interface ProviderItem {
@@ -279,7 +289,8 @@ export const useChatStore = create<ChatStore>((set, get) => ({
                     chunk.tokensUsed !== undefined && m.tokensUsed !== undefined
                       ? m.tokensUsed + chunk.tokensUsed
                       : chunk.tokensUsed ?? m.tokensUsed,
-                  contextTokens: chunk.contextTokens ?? m.contextTokens
+                  contextTokens: chunk.contextTokens ?? m.contextTokens,
+                  verifications: (chunk.verifications as CitationVerification[]) || m.verifications
                 }
               }),
               isGenerating: !chunk.done,
@@ -439,7 +450,8 @@ Mulai: list_dir "" lalu read_note "AI Memory/00 Index.md".`
           role: m.role,
           content: m.content,
           timestamp: m.timestamp,
-          citations: m.citations
+          citations: m.citations,
+          verifications: m.verifications
         }))
       })
       set({ conversationId: id })

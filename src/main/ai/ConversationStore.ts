@@ -12,6 +12,8 @@ export interface StoredMessage {
   content: string
   timestamp: string
   citations?: { title: string; path: string }[]
+  /** Grounding check persisted alongside citations so reloads keep the ⚠ hints. */
+  verifications?: { path: string; title: string; supported: boolean; score: number }[]
 }
 
 export interface StoredConversation {

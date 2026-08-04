@@ -237,6 +237,7 @@ export interface API {
       error?: string
       tokensUsed?: number
       contextTokens?: number
+      verifications?: { path: string; title: string; supported: boolean; score: number }[]
     }) => void,
     activeFilePath?: string,
     useContext?: boolean,

@@ -28,6 +28,7 @@ import {
   type ToolResult
 } from './AgentTools'
 import { KERNEL_SYSTEM_PROMPT } from './WorkspaceMemory'
+import { verifyCitations, type CitationVerification } from './CitationVerifier'
 
 export type StreamEvent = AIStreamChunk & {
   citations?: { title: string; path: string }[]
@@ -36,6 +37,8 @@ export type StreamEvent = AIStreamChunk & {
   round?: number
   /** Estimated tokens injected as workspace context (from ContextEngine). */
   contextTokens?: number
+  /** Post-generation grounding check: which citations the answer actually draws on. */
+  verifications?: CitationVerification[]
 }
 
 const MAX_TOOL_ROUNDS = 4
@@ -444,6 +447,22 @@ export class AIMiddleware {
     let lastCitations = citations
     // contextTokens are emitted once per STREAM (not per tool round).
     let contextMetaSent = false
+    // Accumulated streamed text across ALL tool rounds — used for the citation
+    // grounding check right before the final done chunk.
+    let lastFullText = ''
+    let verifications: CitationVerification[] | undefined
+    const getVerifications = (): CitationVerification[] | undefined => {
+      if (verifications === undefined && lastFullText && lastCitations.length > 0) {
+        try {
+          verifications = verifyCitations(lastFullText, lastCitations, (p) =>
+            workspaceEngine.readFile(p).content
+          )
+        } catch {
+          verifications = undefined
+        }
+      }
+      return verifications
+    }
 
     // Timeout guard (~3 min total)
     const started = Date.now()
@@ -514,6 +533,7 @@ export class AIMiddleware {
         if (timedOut || (requestId && this.isCancelled(requestId))) return
         if (chunk.error) streamError = chunk.error
         fullText += chunk.content || ''
+        lastFullText += chunk.content || ''
         // Don't mark done until tool loop finishes (unless error)
         if (chunk.error) {
           onChunk({
@@ -569,13 +589,25 @@ export class AIMiddleware {
       }
 
       if (!enableTools) {
-        onChunk({ content: '', done: true, citations: lastCitations, proposals: allProposals })
+        onChunk({
+          content: '',
+          done: true,
+          citations: lastCitations,
+          proposals: allProposals,
+          verifications: getVerifications()
+        })
         return
       }
 
       const actions = parseToolActions(fullText)
       if (actions.length === 0) {
-        onChunk({ content: '', done: true, citations: lastCitations, proposals: allProposals })
+        onChunk({
+          content: '',
+          done: true,
+          citations: lastCitations,
+          proposals: allProposals,
+          verifications: getVerifications()
+        })
         return
       }
 
@@ -590,7 +622,13 @@ export class AIMiddleware {
         })
       }
       if (known.length === 0) {
-        onChunk({ content: '', done: true, citations: lastCitations, proposals: allProposals })
+        onChunk({
+          content: '',
+          done: true,
+          citations: lastCitations,
+          proposals: allProposals,
+          verifications: getVerifications()
+        })
         return
       }
 
@@ -666,7 +704,13 @@ export class AIMiddleware {
 
       // Only writes → stop so user can Apply (still OK if reads failed)
       if (readActions.length === 0) {
-        onChunk({ content: '', done: true, citations: lastCitations, proposals: allProposals })
+        onChunk({
+          content: '',
+          done: true,
+          citations: lastCitations,
+          proposals: allProposals,
+          verifications: getVerifications()
+        })
         return
       }
 
@@ -691,7 +735,8 @@ export class AIMiddleware {
       content: '\n\n*(max tool rounds reached)*\n',
       done: true,
       citations: lastCitations,
-      proposals: allProposals
+      proposals: allProposals,
+      verifications: getVerifications()
     })
   }
 }

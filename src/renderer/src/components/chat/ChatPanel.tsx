@@ -5,6 +5,7 @@ import { useWorkspaceStore } from '../../store/workspaceStore'
 import { Icon } from '../ui/Icons'
 import { confirmDialog } from '../ui/Dialog'
 import { usePanelWidth } from '../../hooks/usePanelWidth'
+import { renderStreamingMarkdown } from './streamingMarkdown'
 
 type ChatListItem = { id: string; title?: string; updatedAt?: string }
 
@@ -71,7 +72,17 @@ function ChatMessageBody({
     }
   }, [content, streaming])
 
-  if (streaming || !html) {
+  if (streaming) {
+    // Progressive render in renderer (no IPC churn per chunk) — replaces the old
+    // plain pre-wrapped text. Escaped here; final done render takes over below.
+    return (
+      <div
+        className="chat-msg-md md-content chat-msg-streaming"
+        dangerouslySetInnerHTML={{ __html: renderStreamingMarkdown(content) }}
+      />
+    )
+  }
+  if (!html) {
     return <div className="chat-msg-plain">{content}</div>
   }
   // markdown:render escapes raw HTML — safe to inject
@@ -685,17 +696,30 @@ export const ChatPanel: React.FC = () => {
                   {msg.citations && msg.citations.length > 0 && (
                     <div className="chat-citations">
                       <span className="chat-citations-label">refs</span>
-                      {msg.citations.map((c) => (
-                        <button
-                          key={c.path}
-                          type="button"
-                          className="chat-citation-chip"
-                          onClick={() => void openCitation(c.path)}
-                          title={c.path}
-                        >
-                          [[{c.title}]]
-                        </button>
-                      ))}
+                      {msg.citations.map((c) => {
+                        const v = msg.verifications?.find((x) => x.path === c.path)
+                        const weak = v !== undefined && !v.supported
+                        return (
+                          <button
+                            key={c.path}
+                            type="button"
+                            className={`chat-citation-chip${weak ? ' is-weak' : ''}`}
+                            onClick={() => void openCitation(c.path)}
+                            title={
+                              weak
+                                ? `${c.path}\n⚠ klaim jawaban lemah terhadap isi catatan ini`
+                                : c.path
+                            }
+                          >
+                            [[{c.title}]]{weak ? ' ⚠' : ''}
+                          </button>
+                        )
+                      })}
+                      {msg.verifications?.some((x) => !x.supported) && (
+                        <span className="chat-citations-weak-hint" title="Cek manual catatan sebelum mempercayai klaim">
+                          ⚠ beberapa ref lemah
+                        </span>
+                      )}
                     </div>
                   )}
 

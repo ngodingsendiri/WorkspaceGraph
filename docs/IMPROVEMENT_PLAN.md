@@ -3,8 +3,8 @@
 **Dibuat:** 2026-08-04 · Berbasis audit 2 siklus (ContextEngine/EmbeddingEngine + audit menyeluruh)
 **Status baseline:** 329 test lulus · typecheck node+web bersih · build produksi OK
 
-> ✅ **Eksekusi 2026-08-04:** P0 (4/4) + P1 (6/6) + P2-2 + P2-3 + P2-4 + P2-5 **selesai dan tervalidasi** — 339 test lulus (17 file, 2× run stabil), typecheck bersih.
-> Sisa: P2-1 (streaming MD), P2-6 (verifikasi sitasi), dan P3 (fitur & arsitektur besar) — lihat bagian masing-masing.
+> ✅ **Eksekusi 2026-08-04 (1):** P0 (4/4) + P1 (6/6) + P2-2 + P2-3 + P2-4 + P2-5 **selesai** — 339 test (17 file, 2× stabil), typecheck bersih. Commit `0d6cb6d` di-push.
+> ✅ **Eksekusi 2026-08-04 (2):** P2-1 (streaming MD) + P2-6 (verifikasi sitasi) + P3-2 (E2E IPC) **selesai dan tervalidasi** — **362 test lulus (20 file, 2× run stabil), typecheck node+web bersih.**
 
 ---
 
@@ -71,8 +71,9 @@
 
 ## FASE P2 — Produk & UX
 
-### P2-1. Streaming Markdown di chat
-Saat ini pesan streaming dirender plain (pre-wrapped) untuk hindari IPC churn; hasil akhir baru di-markdown-kan. Penyempurnaan: render markdown parsial ringan (bold/italic/code) via library kecil di renderer (mis. `marked` + sanitizer) untuk streaming, fallback ke `markdown:render` saat done.
+### P2-1. Streaming Markdown di chat — ✅ FIXED
+**File:** `src/renderer/src/components/chat/streamingMarkdown.ts` (+ test)
+**Fix:** renderer progresif di thread UI (tanpa IPC churn) — escape HTML dulu (output AI tak tepercaya), tutup konstruk yang belum selesai (`**bold`, fence, bracket), render heading/list/kode/link/wikilink; saat `done` di-replace render penuh via `markdown:render`. Link dibatasi http/https/mailto (no `javascript:`). 9 test baru (escape, progresif, CRLF, wikilink, link aman).
 
 ### P2-2. Token usage & estimasi biaya — ✅ FIXED
 `AIStreamChunk.tokensUsed` (provider) + `contextTokens` (ContextEngine) di-plumb dari provider → AIMiddleware → preload → chatStore → ChatPanel (ditampilkan di baris role: `· N tok · ctx ~M`). Grok/OpenAI/OpenRouter pakai `stream_options.include_usage`; token di-akumulasi antar tool round.
@@ -86,8 +87,9 @@ Search box filter judul (case-insensitive) di drawer riwayat; daftar tidak lagi 
 ### P2-5. Hybrid search BM25 + vector di SearchEngine — ✅ FIXED
 `search()` async kini memanggil `embeddingEngine.search` saat siap, dedupe by path, min-max normalize per sumber + blend 0.6/0.4, termasuk kasus keyword kosong (semantic-only). `source: 'semantic'` ditambah ke tipe. 3 test baru.
 
-### P2-6. Verifikasi sitasi (anti-halusinasi)
-Context sudah menyediakan citations; tambahkan heuristik: klaim model tanpa bukti dari context ditandai "(tidak didukung context)" — atau minimal tool `search` menambahkan citation otomatis (sudah ada sebagian).
+### P2-6. Verifikasi sitasi (anti-halusinasi) — ✅ FIXED
+**File:** `src/main/ai/CitationVerifier.ts` (+ test), `AIMiddleware.ts`, `chatStore.ts`, `ConversationStore.ts`, `ChatPanel.tsx`
+**Fix:** heuristik grounding pasca-generasi — bandingkan kosakata signifikan jawaban vs isi file tersitasi (score = overlap / total term, threshold 0.08, boost saat judul catatan disebut). Jawaban pendek (<8 term) tak pernah di-flag (hindari false positive). Verifikasi dihitung sekali per stream sebelum done (memoized), budget baca global 60KB agar tidak memblokir main process. UI: chip `refs` yang lemah diberi `⚠` + hint. 5 test baru.
 
 ---
 
@@ -96,8 +98,9 @@ Context sudah menyediakan citations; tambahkan heuristik: klaim model tanpa bukt
 ### P3-1. Refactor `GraphCanvas.tsx` monolith (±4.257 baris)
 Pecah ke modul: physics (forces), render (d3), interaksi (pan/zoom/click), UI overlay (filter/search/legend). Target: komponen <800 baris + hook `useGraphSimulation`/`useGraphInteraction`.
 
-### P3-2. Behavioral IPC end-to-end tests
-`qa-api-sequential.mjs` dihapus saat migrasi vitest; alur handler nyata via `InternalAPI` kini manual. Pulihkan sebagai test vitest dengan mock `ipcMain` atau test terpisah `electron-mock-ipc`.
+### P3-2. Behavioral IPC end-to-end tests — ✅ FIXED
+**File:** `src/main/qa/ipcHandlers.e2e.test.ts`
+**Fix:** register handler NYATA (files, chat, search, workspace) terhadap mock `ipcMain` capture-only (via `vi.hoisted`), lalu invoke berurutan seperti renderer: `workspace:getState` → `file:create`/`file:read` → `file:write` (+ konflik mtime) → `markdown:render` (escape) → `search:query` → siklus `chat:newId/save/list/load/delete` → PathSandbox tolak akses luar vault. 7 test.
 
 ### P3-3. Soft-delete / trash
 Folder `.trash/` + tombol restore di file tree; delete pindah ke trash dulu (bisa di-skip config).

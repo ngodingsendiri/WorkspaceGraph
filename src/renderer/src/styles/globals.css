@@ -2545,6 +2545,20 @@ html:not([data-theme]) {
 .chat-citation-chip:hover {
   border-color: var(--color-primary);
 }
+.chat-citation-chip.is-weak {
+  color: var(--color-warning, #c4923a);
+  background: color-mix(in srgb, var(--color-warning, #c4923a) 14%, var(--bg-hover));
+  border-color: color-mix(in srgb, var(--color-warning, #c4923a) 45%, transparent);
+}
+.chat-citation-chip.is-weak:hover {
+  border-color: var(--color-warning, #c4923a);
+}
+.chat-citations-weak-hint {
+  width: 100%;
+  font-size: 10px;
+  color: var(--color-warning, #c4923a);
+  opacity: 0.9;
+}
 
 /* Assistant content: streaming plain-text vs rendered markdown (via markdown:render) */
 .chat-msg-plain {
