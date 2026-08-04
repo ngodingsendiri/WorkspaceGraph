@@ -1,6 +1,41 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
 
+/**
+ * Track in-flight AI streams so a stream that never emits `done` (provider hang
+ * / main-process crash) cannot leak its IPC listener + channel forever.
+ */
+const STREAM_WATCHDOG_MS = 200_000 // above AIMiddleware's 180s timeout
+
+type AiStreamChunkPayload = {
+  content: string
+  done: boolean
+  citations?: { title: string; path: string }[]
+  proposals?: unknown[]
+  toolStatus?: string
+  round?: number
+  error?: string
+  tokensUsed?: number
+  contextTokens?: number
+}
+
+const streamWatchdogs = new Map<
+  string,
+  {
+    channel: string
+    handler: (_: unknown, chunk: AiStreamChunkPayload) => void
+    timer: ReturnType<typeof setTimeout>
+  }
+>()
+
+function cleanupStream(requestId: string): void {
+  const reg = streamWatchdogs.get(requestId)
+  if (!reg) return
+  clearTimeout(reg.timer)
+  ipcRenderer.removeListener(reg.channel, reg.handler)
+  streamWatchdogs.delete(requestId)
+}
+
 const api = {
   // Dialog
   openFolder: () => ipcRenderer.invoke('dialog:openFolder'),
@@ -112,15 +147,7 @@ const api = {
   ) => ipcRenderer.invoke('ai:sendMessage', { request, activeFilePath, useContext, agentRole }),
   streamAIMessage: (
     request: unknown,
-    onChunk: (chunk: {
-      content: string
-      done: boolean
-      citations?: { title: string; path: string }[]
-      proposals?: unknown[]
-      toolStatus?: string
-      round?: number
-      error?: string
-    }) => void,
+    onChunk: (chunk: AiStreamChunkPayload) => void,
     activeFilePath?: string,
     useContext?: boolean,
     agentRole?: string,
@@ -128,24 +155,15 @@ const api = {
   ) => {
     const requestId = Math.random().toString(36).slice(2)
     const channel = `ai:stream:${requestId}`
-    const handler = (
-      _: unknown,
-      chunk: {
-        content: string
-        done: boolean
-        citations?: { title: string; path: string }[]
-        proposals?: unknown[]
-        toolStatus?: string
-        round?: number
-        error?: string
-      }
-    ) => {
+    const handler: (_: unknown, chunk: AiStreamChunkPayload) => void = (_, chunk) => {
       onChunk(chunk)
-      if (chunk.done) {
-        ipcRenderer.removeListener(channel, handler)
-      }
+      if (chunk.done) cleanupStream(requestId)
     }
     ipcRenderer.on(channel, handler)
+    // Watchdog: if main never sends `done` and never rejects (provider hang,
+    // crash), drop the listener so IPC channels cannot leak across streams.
+    const timer = setTimeout(() => cleanupStream(requestId), STREAM_WATCHDOG_MS)
+    streamWatchdogs.set(requestId, { channel, handler, timer })
     ipcRenderer
       .invoke('ai:streamMessage', {
         requestId,
@@ -161,11 +179,16 @@ const api = {
           done: true,
           error: err?.message || String(err)
         })
-        ipcRenderer.removeListener(channel, handler)
+        cleanupStream(requestId)
       })
     return requestId
   },
-  cancelAIStream: (requestId: string) => ipcRenderer.invoke('ai:cancelStream', requestId),
+  cancelAIStream: (requestId: string) => {
+    // Release the renderer-side listener so cancel always cleans up, even if the
+    // main-process stream never emits a final `done` chunk.
+    cleanupStream(requestId)
+    return ipcRenderer.invoke('ai:cancelStream', requestId)
+  },
   applyWriteProposal: (proposalId: string) => ipcRenderer.invoke('ai:applyProposal', proposalId),
   rejectWriteProposal: (proposalId: string) => ipcRenderer.invoke('ai:rejectProposal', proposalId),
   listWriteProposals: () => ipcRenderer.invoke('ai:listProposals'),

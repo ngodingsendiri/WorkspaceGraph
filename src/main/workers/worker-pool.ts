@@ -61,7 +61,7 @@ export interface SearchResult {
   tags: string[]
   preview?: string
   matchedField: 'title' | 'content' | 'tag' | 'path' | 'backlink'
-  source?: 'fts' | 'fuse' | 'meta'
+  source?: 'fts' | 'fuse' | 'meta' | 'semantic'
 }
 
 class WorkerWrapper {

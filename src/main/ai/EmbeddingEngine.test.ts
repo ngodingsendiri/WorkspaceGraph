@@ -39,6 +39,14 @@ describe('EmbeddingEngine', () => {
       expect(chunks[0].includes('\n\n')).toBe(true)
     })
 
+    it('breaks paragraphs on CRLF vaults (\r\n\r\n)', () => {
+      // Windows vault: paragraph separator is \r\n\r\n — must chunk at the boundary
+      const text = 'x'.repeat(400) + '\r\n\r\n' + 'y'.repeat(400)
+      const chunks = chunkText(text, 480, 60)
+      expect(chunks.length).toBeGreaterThan(1)
+      expect(chunks[0].includes('\n\n')).toBe(true)
+    })
+
     it('does not emit empty or <20-char fragments', () => {
       const text = 'a'.repeat(2000)
       const chunks = chunkText(text, 480, 60)

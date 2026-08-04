@@ -235,6 +235,8 @@ export interface API {
       toolStatus?: string
       round?: number
       error?: string
+      tokensUsed?: number
+      contextTokens?: number
     }) => void,
     activeFilePath?: string,
     useContext?: boolean,

@@ -61,12 +61,15 @@ function bufferToFloat32(buf: Buffer): Float32Array {
  * stepping back to the nearest break keeps each chunk self-contained.
  */
 export function chunkText(text: string, size = CHUNK_SIZE, overlap = CHUNK_OVERLAP): string[] {
+  // Normalize CRLF so paragraph breaks (\n\n) are found on Windows vaults too —
+  // lastIndexOf('\n\n') never matches '\r\n\r\n'.
+  const normalized = String(text).replace(/\r\n/g, '\n')
   const chunks: string[] = []
   let start = 0
-  while (start < text.length) {
-    let end = Math.min(text.length, start + size)
-    if (end < text.length) {
-      const window = text.slice(start, end)
+  while (start < normalized.length) {
+    let end = Math.min(normalized.length, start + size)
+    if (end < normalized.length) {
+      const window = normalized.slice(start, end)
       // Prefer paragraph break, then line break, then sentence end inside the window
       const para = window.lastIndexOf('\n\n')
       const line = para >= 0 ? -1 : window.lastIndexOf('\n')
@@ -75,9 +78,9 @@ export function chunkText(text: string, size = CHUNK_SIZE, overlap = CHUNK_OVERL
       // Only step back if the break is past the middle — avoids tiny fragments
       if (breakAt > size * 0.35) end = start + breakAt + (para >= 0 ? 2 : 1)
     }
-    const piece = text.slice(start, end)
+    const piece = normalized.slice(start, end)
     if (piece.trim().length > 20) chunks.push(piece)
-    if (end >= text.length) break
+    if (end >= normalized.length) break
     const next = end - overlap
     start = next > start ? next : start + 1
   }
@@ -286,7 +289,12 @@ export class EmbeddingEngine {
         this.indexedPaths.delete(norm)
         this.deleteFromDb(activeDb, filePath)
       } else {
-        return
+        // No DB — keep the mtime check in-memory so changed files still re-index
+        // (previously it returned early and a modified file was never re-indexed).
+        const existing = this.index.find((e) => e.filePath.replace(/\\/g, '/') === norm)
+        if (existing && existing.mtime >= mtime) return
+        this.index = this.index.filter((e) => e.filePath.replace(/\\/g, '/') !== norm)
+        this.indexedPaths.delete(norm)
       }
     }
 

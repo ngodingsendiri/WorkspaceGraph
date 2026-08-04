@@ -25,6 +25,10 @@ export interface ChatMessage {
   citations?: CitationItem[]
   proposals?: WriteProposalItem[]
   toolStatus?: string
+  /** Total tokens used by this completion (provider-reported, streaming). */
+  tokensUsed?: number
+  /** Estimated tokens injected as workspace context for this reply. */
+  contextTokens?: number
 }
 
 export interface ProviderItem {
@@ -95,6 +99,16 @@ function mergeProposals(
  */
 const HISTORY_MAX_TURNS = 8
 const HISTORY_MAX_CHARS = 60_000
+
+/**
+ * Conversations the user deleted this session. A stream's completion handler
+ * fires `saveCurrentChat()` un-awaited — without this tombstone, a save that
+ * fires AFTER the delete could re-create the chat file.
+ */
+const deletedChatIds = new Set<string>()
+/** Latest saveCurrentChat invocation — deleteChat awaits it so the delete always
+ * lands after any in-flight save (same-id resurrection race). */
+let lastSavePromise: Promise<void> | null = null
 
 export function buildHistoryWindow(
   messages: ChatMessage[],
@@ -258,7 +272,14 @@ export const useChatStore = create<ChatStore>((set, get) => ({
                   content,
                   citations: chunk.citations || m.citations,
                   proposals: mergeProposals(m.proposals, chunk.proposals as WriteProposalItem[]),
-                  toolStatus: chunk.toolStatus || m.toolStatus
+                  toolStatus: chunk.toolStatus || m.toolStatus,
+                  // Tool loops are separate completions — accumulate so the shown
+                  // count is the total, not just the last round.
+                  tokensUsed:
+                    chunk.tokensUsed !== undefined && m.tokensUsed !== undefined
+                      ? m.tokensUsed + chunk.tokensUsed
+                      : chunk.tokensUsed ?? m.tokensUsed,
+                  contextTokens: chunk.contextTokens ?? m.contextTokens
                 }
               }),
               isGenerating: !chunk.done,
@@ -296,6 +317,10 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     if (id) {
       await window.api.cancelAIStream(id)
       set({ isGenerating: false, activeStreamId: null, lastToolStatus: 'Cancelled' })
+      // cancelAIStream drops the renderer listener immediately, so the main
+      // process's trailing `*(cancelled)*` done chunk never reaches us — save the
+      // partial transcript here so cancelled chats are still persisted.
+      void get().saveCurrentChat()
     }
   },
 
@@ -305,7 +330,11 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       pendingProposals: [],
       conversationId: null,
       lastToolStatus: '',
-      lastKernelStatus: ''
+      lastKernelStatus: '',
+      // A stream could still be running (programmatic clear) — drop its state so
+      // the UI doesn't stay "generating" and Cancel doesn't target a dead id.
+      isGenerating: false,
+      activeStreamId: null
     }),
 
   applyProposal: async (id: string) => {
@@ -392,25 +421,31 @@ Mulai: list_dir "" lalu read_note "AI Memory/00 Index.md".`
   },
 
   saveCurrentChat: async () => {
-    const { messages, agentRole, conversationId } = get()
-    if (messages.length === 0) return
-    const id = conversationId || (await window.api.newChatId())
-    const title = messages.find((m) => m.role === 'user')?.content.slice(0, 60) || 'Conversation'
-    await window.api.saveChat({
-      id,
-      title,
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-      agentRole,
-      messages: messages.map((m) => ({
-        id: m.id,
-        role: m.role,
-        content: m.content,
-        timestamp: m.timestamp,
-        citations: m.citations
-      }))
-    })
-    set({ conversationId: id })
+    const run = (async () => {
+      const { messages, agentRole, conversationId } = get()
+      if (messages.length === 0) return
+      const id = conversationId || (await window.api.newChatId())
+      // Tombstone check — never resurrect a chat the user deleted this session.
+      if (deletedChatIds.has(id)) return
+      const title = messages.find((m) => m.role === 'user')?.content.slice(0, 60) || 'Conversation'
+      await window.api.saveChat({
+        id,
+        title,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        agentRole,
+        messages: messages.map((m) => ({
+          id: m.id,
+          role: m.role,
+          content: m.content,
+          timestamp: m.timestamp,
+          citations: m.citations
+        }))
+      })
+      set({ conversationId: id })
+    })()
+    lastSavePromise = run
+    await run
   },
 
   loadChat: async (id: string) => {
@@ -428,9 +463,17 @@ Mulai: list_dir "" lalu read_note "AI Memory/00 Index.md".`
 
   deleteChat: async (id: string) => {
     try {
+      // Wait for any in-flight save so the delete always lands last — a pending
+      // saveCurrentChat (stream done) must not re-write the file after deletion.
+      await lastSavePromise?.catch(() => undefined)
       const res = await window.api.deleteChat(id)
-      if (res?.ok && get().conversationId === id) {
-        set({ conversationId: null, activeStreamId: null })
+      if (res?.ok) {
+        // Tombstone so a saveCurrentChat that fires AFTER the delete cannot
+        // write the file back under the same id.
+        deletedChatIds.add(id)
+        if (get().conversationId === id) {
+          set({ conversationId: null, activeStreamId: null })
+        }
       }
       return { ok: Boolean(res?.ok), error: res?.error }
     } catch (err) {
@@ -443,9 +486,12 @@ Mulai: list_dir "" lalu read_note "AI Memory/00 Index.md".`
     if (get().isGenerating) return
     const lastUser = [...get().messages].reverse().find((m) => m.role === 'user')
     if (!lastUser || !lastUser.content.trim()) return
-    // Drop the failed assistant reply so the retry starts from the same prompt
-    const idx = get().messages.findIndex((m) => m.id === lastUser.id)
-    if (idx >= 0) set({ messages: get().messages.slice(0, idx + 1) })
+    // Drop the failed assistant reply so the retry starts from the same prompt.
+    // Use lastIndexOf — duplicate ids (loaded history) must truncate at the LAST
+    // occurrence, not the first.
+    const msgs = get().messages
+    const idx = msgs.map((m) => m.id).lastIndexOf(lastUser.id)
+    if (idx >= 0) set({ messages: msgs.slice(0, idx + 1) })
     await get().sendMessage(lastUser.content, activeFilePath)
   }
 }))

@@ -4,6 +4,7 @@ import { indexDatabase } from './IndexDatabase'
 import { graphEngine } from './GraphEngine'
 import { getSearchIndexWorker } from '../workers/worker-pool'
 import type { IndexEntry, SearchResult } from '../workers/worker-pool'
+import { embeddingEngine } from '../ai/EmbeddingEngine'
 
 export interface SearchOptions {
   query: string
@@ -11,6 +12,22 @@ export interface SearchOptions {
   filterType?: string
   filterTag?: string
   searchIn?: ('title' | 'content' | 'tags' | 'path')[]
+}
+
+/**
+ * Scale a score list onto 0..1 (best → 1, worst → 0) so keyword (0-100) and
+ * semantic (cosine 0..1) results can be blended fairly in hybrid search.
+ */
+function minMaxNormalize(scores: number[]): number[] {
+  if (scores.length === 0) return []
+  let min = Infinity
+  let max = -Infinity
+  for (const s of scores) {
+    if (s < min) min = s
+    if (s > max) max = s
+  }
+  if (max === min) return scores.map(() => 1)
+  return scores.map((s) => (s - min) / (max - min))
 }
 
 export class SearchEngine {
@@ -356,6 +373,45 @@ export class SearchEngine {
         results.push(r)
         seen.add(r.id)
         if (results.length >= limit) break
+      }
+    }
+
+    // Hybrid: blend keyword (FTS/Fuse) results with semantic hits so a strong
+    // vector match can surface even when the keyword signal is weak — including
+    // notes that match ONLY semantically (empty keyword results). Falls back to
+    // keyword-only when the embedding engine is not ready.
+    if (embeddingEngine.isReady) {
+      try {
+        const semHits = await embeddingEngine.search(q, limit)
+        const semResults: SearchResult[] = []
+        for (const hit of semHits) {
+          const entry = this.getEntryByPath(hit.filePath)
+          if (!entry || seen.has(entry.id)) continue
+          semResults.push({
+            id: entry.id,
+            title: entry.title,
+            path: entry.path,
+            relativePath: entry.relativePath,
+            score: hit.score,
+            type: entry.type,
+            tags: entry.tags,
+            preview: hit.chunk.slice(0, 220).replace(/\n/g, ' ').trim(),
+            matchedField: 'content',
+            source: 'semantic'
+          })
+          seen.add(entry.id)
+        }
+        if (semResults.length > 0) {
+          const kwNorm = minMaxNormalize(results.map((r) => r.score))
+          const semNorm = minMaxNormalize(semResults.map((r) => r.score))
+          const pool = [
+            ...results.map((r, i) => ({ r, s: 0.6 * kwNorm[i] })),
+            ...semResults.map((r, i) => ({ r, s: 0.4 * semNorm[i] }))
+          ].sort((a, b) => b.s - a.s)
+          return pool.slice(0, limit).map((p) => p.r)
+        }
+      } catch {
+        /* keyword-only fallback */
       }
     }
 

@@ -69,6 +69,23 @@ function estimateTokens(text: string): number {
   return Math.ceil((text || '').length / 4)
 }
 
+/**
+ * Scale a score list onto 0..1 (best → 1, worst → 0) so two retrieval sources
+ * with different raw scales (FTS 0-100 vs cosine 0..1) can be blended fairly.
+ * A single-item or flat list maps every element to 1 (no discrimination).
+ */
+function minMaxNormalize(scores: number[]): number[] {
+  if (scores.length === 0) return []
+  let min = Infinity
+  let max = -Infinity
+  for (const s of scores) {
+    if (s < min) min = s
+    if (s > max) max = s
+  }
+  if (max === min) return scores.map(() => 1)
+  return scores.map((s) => (s - min) / (max - min))
+}
+
 /** Slightly higher to leave room for AI Memory L1 + active note */
 const DEFAULT_TOKEN_BUDGET = 3600
 
@@ -372,42 +389,79 @@ export class ContextEngine {
 
         if (semanticAdditions.length > 0) {
           /**
-           * Rerank: interleave semantic + FTS hits by score so the model sees
-           * the most relevant material first, not just insertion order by tier.
-           * Normalize both onto 0..1 (FTS score is 0..100, semantic cosine ~0..1)
-           * and blend: FTS weight 0.55, semantic 0.45 — neither source dominates.
+           * Rerank: interleave FTS + semantic hits by normalized score so the
+           * model sees the most relevant material first. FTS scores live in a
+           * compressed band (60-80 of 100) while semantic cosine is 0..1, so a
+           * raw blend makes FTS always win. Min-max normalization per source
+           * puts each source's best hit at 1.0 — a strong semantic match can
+           * then outrank a weak keyword hit, and vice versa.
            */
           const W_FTS = 0.55
           const W_SEM = 0.45
           const searchHits = pkg.relevantFiles
             .filter((x) => x.tier === 'search')
-            .map((f) => ({ f, score: (W_FTS * ((f.score ?? 50) / 100)) }))
+            .map((f) => ({ f, score: f.score ?? 50 }))
+          const ftsNorm = minMaxNormalize(searchHits.map((h) => h.score))
+          const semNorm = minMaxNormalize(semanticAdditions.map((f) => f.score ?? 0.5))
           const merged = [
-            ...searchHits,
-            ...semanticAdditions.map((f) => ({ f, score: W_SEM * (f.score ?? 0.5) }))
-          ]
-          merged.sort((a, b) => b.score - a.score)
+            ...searchHits.map((h, i) => ({ f: h.f, score: W_FTS * ftsNorm[i] })),
+            ...semanticAdditions.map((f, i) => ({ f, score: W_SEM * semNorm[i] }))
+          ].sort((a, b) => b.score - a.score)
 
-          // Rebuild the search+semantic slice of relevantFiles (keep graph/AI-memory tiers intact)
+          // Governance tiers stay pinned on top (AI Memory + Rules/SOP are always
+          // relevant); everything else competes by relevance with a small tier
+          // bonus so a strong semantic hit CAN rise above wikilink/backlink.
           const nonSearch = pkg.relevantFiles.filter((f) => f.tier !== 'search')
-          const reranked = [...nonSearch, ...merged.map((m) => m.f)]
-
-          // Rebuild formattedContext from the new order. Split on the END marker
-          // (always present) so the head never carries it — avoids a duplicated
-          // marker when the base package had no search tier yet.
-          pkg.relevantFiles = reranked
-          const head = pkg.formattedContext.split('=== END OF WORKSPACE CONTEXT ===')[0]
-          const parts = [head]
-          if (reranked.length > 0) {
-            parts.push('\nRelated documents (priority order):')
-            for (const f of reranked) {
-              parts.push(`\n[${f.tier.toUpperCase()}] "${f.title}" (${f.path})`)
-              parts.push(f.snippet)
-            }
+          const pinned = nonSearch.filter(
+            (f) => f.tier === 'ai-memory' || f.tier === 'system'
+          )
+          const rest = nonSearch.filter(
+            (f) => f.tier !== 'ai-memory' && f.tier !== 'system'
+          )
+          const TIER_BONUS: Record<string, number> = {
+            wikilink: 0.08,
+            backlink: 0.05,
+            semantic: 0.03,
+            search: 0
           }
-          parts.push('=== END OF WORKSPACE CONTEXT ===\n')
-          pkg.formattedContext = parts.join('\n')
-          pkg.tokenEstimate = estimateTokens(pkg.formattedContext)
+          const pool = [
+            ...rest.map((f) => ({ f, score: TIER_BONUS[f.tier] ?? 0 })),
+            ...merged
+          ].sort((a, b) => b.score - a.score)
+
+          // Head without the OLD related-docs section — keeps the base build's
+          // header/active-note/rules intact while avoiding a duplicated listing.
+          let head = pkg.formattedContext.split('\nRelated documents (priority order):')[0]
+          const assemble = (files: typeof pkg.relevantFiles): { text: string; tokens: number } => {
+            const parts = [head]
+            if (files.length > 0) {
+              parts.push('\nRelated documents (priority order):')
+              for (const f of files) {
+                parts.push(`\n[${f.tier.toUpperCase()}] "${f.title}" (${f.path})`)
+                parts.push(f.snippet)
+              }
+            }
+            parts.push('=== END OF WORKSPACE CONTEXT ===\n')
+            const text = parts.join('\n')
+            return { text, tokens: estimateTokens(text) }
+          }
+
+          let reranked = [...pinned, ...pool.map((m) => m.f)]
+          let built = assemble(reranked)
+          // Enforce the token budget AFTER rerank — drop the least relevant files
+          // from the end until the package fits the profile budget.
+          while (built.tokens > tokenBudget && reranked.length > 0) {
+            reranked = reranked.slice(0, -1)
+            built = assemble(reranked)
+          }
+          // Keep the header's reported estimate in sync with the real package.
+          // Rebuild head ONCE with the final estimate before assembling — a
+          // whole-string replace could corrupt a snippet containing the phrase.
+          head = head.replace(/estimate used ~\d+/, `estimate used ~${built.tokens}`)
+          built = assemble(reranked)
+          pkg.relevantFiles = reranked
+          pkg.formattedContext = built.text
+          pkg.tokenEstimate = built.tokens
         }
       } catch (err) {
         console.warn('[ContextEngine] Semantic search failed, falling back to FTS only:', err)

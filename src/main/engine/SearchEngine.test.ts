@@ -1,6 +1,7 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'
 import { SearchEngine } from './SearchEngine'
 import { MarkdownEngine } from './MarkdownEngine'
+import { embeddingEngine } from '../ai/EmbeddingEngine'
 
 describe('SearchEngine', () => {
   let search: SearchEngine
@@ -115,6 +116,56 @@ describe('SearchEngine', () => {
     it('finds fuzzy matches', async () => {
       const results = await search.search({ query: 'TypeScrpt', limit: 10 }) // typo
       expect(results.length).toBeGreaterThanOrEqual(0)
+    })
+
+    it('blends semantic hits into keyword results (hybrid)', async () => {
+      const isReadySpy = vi.spyOn(embeddingEngine, 'isReady', 'get').mockReturnValue(true)
+      const searchSpy = vi
+        .spyOn(embeddingEngine, 'search')
+        .mockResolvedValue([
+          { filePath: '/vault/A.md', chunk: 'vector hit on A', score: 0.85 }
+        ])
+
+      const results = await search.search({ query: 'TypeScript', limit: 10 })
+      // A appears once, sourced from semantic, and is merged into results
+      expect(results.some((r) => r.title === 'A')).toBe(true)
+      expect(results.filter((r) => r.title === 'A')).toHaveLength(1)
+      isReadySpy.mockRestore()
+      searchSpy.mockRestore()
+    })
+
+    it('returns semantic-only results when keyword search finds nothing', async () => {
+      const isReadySpy = vi.spyOn(embeddingEngine, 'isReady', 'get').mockReturnValue(true)
+      const searchSpy = vi
+        .spyOn(embeddingEngine, 'search')
+        .mockResolvedValue([
+          { filePath: '/vault/A.md', chunk: 'only semantic match on A', score: 0.8 }
+        ])
+
+      // Query that matches no keyword — hybrid must still surface the vector hit.
+      const results = await search.search({ query: 'zzz-no-keyword-match', limit: 10 })
+      expect(results.some((r) => r.title === 'A')).toBe(true)
+      isReadySpy.mockRestore()
+      searchSpy.mockRestore()
+    })
+
+    it('does not duplicate entries already returned by keyword search', async () => {
+      const isReadySpy = vi.spyOn(embeddingEngine, 'isReady', 'get').mockReturnValue(true)
+      // A is already a keyword hit — semantic must not add a second entry
+      const searchSpy = vi
+        .spyOn(embeddingEngine, 'search')
+        .mockResolvedValue([
+          { filePath: '/vault/B.md', chunk: 'vector hit on B', score: 0.9 }
+        ])
+
+      const results = await search.search({ query: 'TypeScript', limit: 10 })
+      expect(results.filter((r) => r.title === 'B')).toHaveLength(1)
+      isReadySpy.mockRestore()
+      searchSpy.mockRestore()
+    })
+
+    afterEach(() => {
+      vi.restoreAllMocks()
     })
   })
 

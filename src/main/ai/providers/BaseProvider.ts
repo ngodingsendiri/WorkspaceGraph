@@ -25,6 +25,8 @@ export interface AIStreamChunk {
   done: boolean
   model?: string
   error?: string
+  /** Total tokens used by this completion (streamed usage, when provider reports it). */
+  tokensUsed?: number
 }
 
 export interface ProviderCapabilities {

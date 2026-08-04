@@ -13,7 +13,29 @@ type ChatListItem = { id: string; title?: string; updatedAt?: string }
  * main). Streaming messages render as plain pre-wrapped text to avoid IPC churn per
  * chunk. Results cached by content so history re-renders are cheap.
  */
+/**
+ * Bounded markdown cache (LRU) — long chats + history loads would otherwise grow
+ * this Map without limit for the whole renderer session.
+ */
+const MD_CACHE_MAX = 200
 const mdCache = new Map<string, string>()
+function mdCacheGet(key: string): string | undefined {
+  const v = mdCache.get(key)
+  if (v !== undefined) {
+    // Refresh recency so hot messages survive eviction.
+    mdCache.delete(key)
+    mdCache.set(key, v)
+  }
+  return v
+}
+function mdCacheSet(key: string, value: string): void {
+  if (mdCache.has(key)) mdCache.delete(key)
+  mdCache.set(key, value)
+  if (mdCache.size > MD_CACHE_MAX) {
+    const oldest = mdCache.keys().next().value
+    if (oldest !== undefined) mdCache.delete(oldest)
+  }
+}
 function ChatMessageBody({
   content,
   streaming
@@ -21,13 +43,14 @@ function ChatMessageBody({
   content: string
   streaming: boolean
 }): React.ReactElement {
-  const [html, setHtml] = useState<string | null>(() =>
-    mdCache.get(content) !== undefined ? (mdCache.get(content) as string) : null
-  )
+  const [html, setHtml] = useState<string | null>(() => {
+    const c = mdCacheGet(content)
+    return c !== undefined ? c : null
+  })
 
   useEffect(() => {
     if (streaming || !content) return
-    const cached = mdCache.get(content)
+    const cached = mdCacheGet(content)
     if (cached !== undefined) {
       setHtml(cached)
       return
@@ -37,7 +60,7 @@ function ChatMessageBody({
       .renderMarkdown(content)
       .then((h) => {
         if (cancelled) return
-        mdCache.set(content, h)
+        mdCacheSet(content, h)
         setHtml(h)
       })
       .catch(() => {
@@ -116,6 +139,7 @@ export const ChatPanel: React.FC = () => {
   const [applyOk, setApplyOk] = useState(true)
   const [history, setHistory] = useState<ChatListItem[]>([])
   const [showHistory, setShowHistory] = useState(false)
+  const [historyQuery, setHistoryQuery] = useState('')
   const [copyFlash, setCopyFlash] = useState<string | null>(null)
 
   const messagesEndRef = useRef<HTMLDivElement>(null)
@@ -130,7 +154,7 @@ export const ChatPanel: React.FC = () => {
   const refreshHistory = useCallback(async () => {
     try {
       const list = (await window.api.listChats()) as ChatListItem[]
-      setHistory(Array.isArray(list) ? list.slice(0, 20) : [])
+      setHistory(Array.isArray(list) ? list : [])
     } catch {
       setHistory([])
     }
@@ -486,8 +510,7 @@ export const ChatPanel: React.FC = () => {
         )}
       </div>
 
-      {/* History drawer */}
-      {showHistory && (
+      {/* History drawer */}        {showHistory && (
         <div className="chat-history">
           <div className="chat-history-head">
             <span>Riwayat chat</span>
@@ -499,10 +522,24 @@ export const ChatPanel: React.FC = () => {
               Muat ulang
             </button>
           </div>
+          <input
+            className="chat-history-search"
+            placeholder="Cari chat…"
+            value={historyQuery}
+            onChange={(e) => setHistoryQuery(e.target.value)}
+            aria-label="Cari riwayat chat"
+          />
           {history.length === 0 ? (
             <div className="chat-history-empty">Belum ada chat tersimpan.</div>
           ) : (
-            history.map((h) => (
+            history
+              .filter((h) =>
+                historyQuery.trim()
+                  ? (h.title || '').toLowerCase().includes(historyQuery.trim().toLowerCase())
+                  : true
+              )
+              .slice(0, 20)
+              .map((h) => (
               <div key={h.id} className="chat-history-item">
                 <button
                   type="button"
@@ -630,6 +667,8 @@ export const ChatPanel: React.FC = () => {
               <div key={msg.id} className={`chat-message ${msg.role}`}>
                 <div className="message-role">
                   {msg.role === 'user' ? 'you' : 'kernel'} · {msg.timestamp}
+                  {msg.tokensUsed ? ` · ${msg.tokensUsed} tok` : ''}
+                  {msg.contextTokens ? ` · ctx ~${msg.contextTokens}` : ''}
                   {msg.toolStatus ? ` · ${msg.toolStatus}` : ''}
                 </div>
                 <div className={`message-bubble ${isErr ? 'is-error' : ''}`}>

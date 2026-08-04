@@ -110,41 +110,94 @@ describe('ContextEngine.buildContextPackageAsync rerank', () => {
     vi.restoreAllMocks()
   })
 
-  it('orders semantic above weak FTS hits when the vector score is strong', async () => {
+  it('interleaves a strong semantic hit above a weak FTS hit (realistic scores)', async () => {
     const { ctx, searchEngine } = makeFakes()
-    // Weak keyword hit: score 40/100 → normalized FTS weight 0.55*0.4 = 0.22
+    // Realistic FTS band: top hit 80, weaker hit 62 (SearchEngine: 80 + rank*-2).
     searchEngine.searchSync = vi.fn(() => [
       {
         id: '1',
+        title: 'Strong Keyword Note',
+        path: '/vault/Strong.md',
+        relativePath: 'Strong.md',
+        score: 80,
+        type: 'note',
+        tags: [],
+        preview: 'strong keyword match',
+        matchedField: 'content',
+        source: 'fts'
+      },
+      {
+        id: '2',
         title: 'Weak Keyword Note',
         path: '/vault/Weak.md',
         relativePath: 'Weak.md',
-        score: 40,
+        score: 62,
         type: 'note',
         tags: [],
-        preview: 'keyword match',
+        preview: 'weak keyword match',
         matchedField: 'content',
         source: 'fts'
       }
     ]) as never
 
-    // Strong semantic hit: cosine ~0.9 → semantic weight 0.45*0.9 = 0.405 > 0.22
+    // Realistic semantic cosine ~0.6 → min-max maps it to 1.0 (single hit).
     const isReadySpy = vi.spyOn(embeddingEngine, 'isReady', 'get').mockReturnValue(true)
     const searchSpy = vi
       .spyOn(embeddingEngine, 'search')
       .mockResolvedValue([
-        { filePath: '/vault/Semantic.md', chunk: 'highly relevant vector chunk', score: 0.9 }
+        { filePath: '/vault/Semantic.md', chunk: 'highly relevant vector chunk', score: 0.6 }
       ])
 
     const pkg = await ctx.buildContextPackageAsync('query', undefined, 'general')
     const semIdx = pkg.relevantFiles.findIndex((f) => f.tier === 'semantic')
-    const searchIdx = pkg.relevantFiles.findIndex((f) => f.tier === 'search')
+    const searchFiles = pkg.relevantFiles
+      .map((f, i) => ({ f, i }))
+      .filter((x) => x.f.tier === 'search')
 
-    // Both present, and semantic (strong) ranks before the weak FTS hit
+    // Semantic (0.45) outranks the weaker FTS hit (0.55 * 0 = 0) but stays below
+    // the strong FTS hit (0.55 * 1 = 0.55) — real interleave, not FTS-always-first.
     expect(semIdx).toBeGreaterThanOrEqual(0)
-    expect(searchIdx).toBeGreaterThanOrEqual(0)
-    expect(semIdx).toBeLessThan(searchIdx)
+    expect(searchFiles.length).toBe(2)
+    expect(semIdx).toBeGreaterThan(searchFiles[0].i) // below strong FTS
+    expect(semIdx).toBeLessThan(searchFiles[1].i) // above weak FTS
     expect(pkg.formattedContext).toContain('[SEMANTIC]')
+    isReadySpy.mockRestore()
+    searchSpy.mockRestore()
+  })
+
+  it('does not duplicate the related-documents section when reranking', async () => {
+    const { ctx, searchEngine } = makeFakes()
+    searchEngine.searchSync = vi.fn(() => [
+      {
+        id: '1',
+        title: 'Keyword Hit',
+        path: '/vault/Keyword.md',
+        relativePath: 'Keyword.md',
+        score: 80,
+        type: 'note',
+        tags: [],
+        preview: 'keyword window snippet',
+        matchedField: 'content',
+        source: 'fts'
+      }
+    ]) as never
+
+    const isReadySpy = vi.spyOn(embeddingEngine, 'isReady', 'get').mockReturnValue(true)
+    const searchSpy = vi
+      .spyOn(embeddingEngine, 'search')
+      .mockResolvedValue([
+        { filePath: '/vault/Semantic.md', chunk: 'semantic chunk body', score: 0.55 }
+      ])
+
+    const pkg = await ctx.buildContextPackageAsync('query', undefined, 'general')
+    const marker = 'Related documents (priority order):'
+    const markerCount = pkg.formattedContext.split(marker).length - 1
+    const searchCount = pkg.formattedContext.split('[SEARCH] "Keyword Hit"').length - 1
+    const endMarkerCount = pkg.formattedContext.split('=== END OF WORKSPACE CONTEXT ===').length - 1
+
+    expect(markerCount).toBe(1)
+    expect(searchCount).toBe(1)
+    expect(endMarkerCount).toBe(1)
     isReadySpy.mockRestore()
     searchSpy.mockRestore()
   })

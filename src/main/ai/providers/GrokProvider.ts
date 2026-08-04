@@ -274,16 +274,20 @@ export class GrokProvider extends BaseProvider {
           messages,
           temperature: request.temperature,
           stream: true,
+          // Request usage so the final chunk reports total tokens (OpenAI-compat).
+          stream_options: { include_usage: true } as never,
           ...(request.maxTokens ? { max_tokens: request.maxTokens } : {})
         },
         { signal }
       )
+      let tokensUsed: number | undefined
       for await (const chunk of stream) {
         if (signal?.aborted) return
         const text = chunk.choices[0]?.delta?.content || ''
         if (text) onChunk({ content: text, done: false, model })
+        if (chunk.usage?.total_tokens) tokensUsed = chunk.usage.total_tokens
       }
-      onChunk({ content: '', done: true, model })
+      onChunk({ content: '', done: true, model, tokensUsed })
     }
 
     try {

@@ -34,6 +34,8 @@ export type StreamEvent = AIStreamChunk & {
   proposals?: WriteProposal[]
   toolStatus?: string
   round?: number
+  /** Estimated tokens injected as workspace context (from ContextEngine). */
+  contextTokens?: number
 }
 
 const MAX_TOOL_ROUNDS = 4
@@ -235,13 +237,18 @@ export class AIMiddleware {
     useContext: boolean,
     agentRole: AgentRole,
     enableTools: boolean
-  ): Promise<{ systemPrompt: string; citations: { title: string; path: string }[] }> {
+  ): Promise<{
+    systemPrompt: string
+    citations: { title: string; path: string }[]
+    contextTokens?: number
+  }> {
     // Kernel layer always present
     let systemPrompt = KERNEL_SYSTEM_PROMPT
     if (request.systemPrompt) {
       systemPrompt += '\n\n' + request.systemPrompt
     }
     let citations: { title: string; path: string }[] = []
+    let contextTokens: number | undefined
 
     if (useContext && request.messages.length > 0) {
       const lastUserMsg = request.messages[request.messages.length - 1]
@@ -255,6 +262,7 @@ export class AIMiddleware {
           )
           systemPrompt += '\n\n' + ctxPackage.formattedContext
           citations = ctxPackage.citations
+          contextTokens = ctxPackage.tokenEstimate
           if (process.env.WG_DEBUG_CONTEXT === '1') {
             console.log(
               `[AI context] tokens~${ctxPackage.tokenEstimate} files=${ctxPackage.relevantFiles.length} citations=${citations.length} semantic=${ctxPackage.relevantFiles.filter((f) => f.tier === 'semantic').length}`
@@ -272,7 +280,7 @@ export class AIMiddleware {
       systemPrompt += '\n\n' + TOOLS_SYSTEM_PROMPT
     }
 
-    return { systemPrompt, citations }
+    return { systemPrompt, citations, contextTokens }
   }
 
   /** @deprecated Use buildSystemPromptAsync in streaming path */
@@ -365,7 +373,8 @@ export class AIMiddleware {
         agentRole,
         enableTools,
         requestId,
-        signal
+        signal,
+        controller
       )
     } finally {
       if (requestId) this.abortControllers.delete(requestId)
@@ -380,7 +389,8 @@ export class AIMiddleware {
     agentRole: AgentRole,
     enableTools: boolean,
     requestId: string | undefined,
-    signal: AbortSignal | undefined
+    signal: AbortSignal | undefined,
+    controller: AbortController | undefined
   ): Promise<void> {
     let provider: BaseProvider
     try {
@@ -416,7 +426,7 @@ export class AIMiddleware {
       // Don't force-switch (user may have paid tier) — just note in first chunk if fails
     }
 
-    const { systemPrompt, citations } = await this.buildSystemPromptAsync(
+    const { systemPrompt, citations, contextTokens } = await this.buildSystemPromptAsync(
       request,
       activeFilePath,
       useContext,
@@ -432,6 +442,8 @@ export class AIMiddleware {
 
     const allProposals: WriteProposal[] = []
     let lastCitations = citations
+    // contextTokens are emitted once per STREAM (not per tool round).
+    let contextMetaSent = false
 
     // Timeout guard (~3 min total)
     const started = Date.now()
@@ -466,8 +478,40 @@ export class AIMiddleware {
         stream: true
       }
 
-      await provider.streamMessage(req, (chunk) => {
-        if (requestId && this.isCancelled(requestId)) return
+      // Watchdog: a provider stream that stalls must not hang the chat forever.
+      // The round-level TIMEOUT_MS guard above only runs BETWEEN rounds — a stuck
+      // stream would otherwise keep isGenerating=true indefinitely.
+      const remainingMs = TIMEOUT_MS - (Date.now() - started)
+      if (remainingMs <= 0) {
+        onChunk({
+          content: '\n\n*(timeout — stream stalled)*\n',
+          done: true,
+          error: 'Stream timed out',
+          citations: lastCitations,
+          proposals: allProposals,
+          round
+        })
+        return
+      }
+      let timedOut = false
+      let watchdogTimer: ReturnType<typeof setTimeout> | undefined
+      const watchdog = new Promise<void>((resolve) => {
+        watchdogTimer = setTimeout(() => {
+          timedOut = true
+          controller?.abort()
+          onChunk({
+            content: '\n\n*(timeout — stream stalled)*\n',
+            done: true,
+            error: 'Stream timed out',
+            citations: lastCitations,
+            proposals: allProposals,
+            round
+          })
+          resolve()
+        }, remainingMs)
+      })
+      const streamPromise = provider.streamMessage(req, (chunk) => {
+        if (timedOut || (requestId && this.isCancelled(requestId))) return
         if (chunk.error) streamError = chunk.error
         fullText += chunk.content || ''
         // Don't mark done until tool loop finishes (unless error)
@@ -485,9 +529,21 @@ export class AIMiddleware {
           content: chunk.content,
           done: false,
           citations: lastCitations,
-          round
+          round,
+          // Surface context token estimate once per stream (first chunk).
+          contextTokens: contextMetaSent ? undefined : contextTokens,
+          tokensUsed: chunk.tokensUsed
         })
+        contextMetaSent = true
       }, signal)
+      await Promise.race([streamPromise, watchdog])
+      if (watchdogTimer) clearTimeout(watchdogTimer)
+      if (Date.now() - started > TIMEOUT_MS) {
+        // Watchdog won — timeout chunk already emitted (or stream finished past
+        // budget). Stop cleanly; the done marker is already on the wire.
+        if (requestId) this.clearCancel(requestId)
+        return
+      }
 
       // Soft-cancel: provider may still finish network; stop loop cleanly with marker
       if (requestId && this.isCancelled(requestId)) {
