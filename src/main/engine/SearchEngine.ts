@@ -67,7 +67,7 @@ export class SearchEngine {
     }
   }
 
-  private initFuseLocal() {
+  private initFuseLocal(): void {
     this.fuse = new Fuse(Array.from(this.index.values()), {
       keys: [
         { name: 'title', weight: 0.4 },

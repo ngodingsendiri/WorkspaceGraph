@@ -1,6 +1,6 @@
 import { ipcMain, shell } from 'electron'
 import fs from 'fs'
-import { workspaceEngine } from '../../engine/WorkspaceEngine'
+import { workspaceEngine, isTrashPath } from '../../engine/WorkspaceEngine'
 import { markdownEngine } from '../../engine/MarkdownEngine'
 import { assertPathInVault } from '../../security/PathSandbox'
 import {
@@ -63,7 +63,11 @@ export function registerFileHandlers(): void {
     'file:write',
     async (
       _,
-      { filePath, content, expectedMtime }: { filePath: string; content: string; expectedMtime?: number }
+      {
+        filePath,
+        content,
+        expectedMtime
+      }: { filePath: string; content: string; expectedMtime?: number }
     ) => {
       const root = requireOpenVault()
       assertPathInVault(filePath, root)
@@ -104,10 +108,38 @@ export function registerFileHandlers(): void {
   ipcMain.handle('file:delete', async (_, filePath: string) => {
     const root = requireOpenVault()
     assertPathInVault(filePath, root)
+    const settings = workspaceEngine.getSettings()
+    const trashEnabled = settings.trashEnabled !== false
+    if (trashEnabled && !isTrashPath(filePath)) {
+      const trashPath = workspaceEngine.moveToTrash(filePath)
+      handleFileRemove(filePath)
+      debounceEmit()
+      return { ok: true, trashed: true, trashPath }
+    }
     workspaceEngine.deleteFile(filePath)
     handleFileRemove(filePath)
     debounceEmit()
-    return true
+    return { ok: true, trashed: false }
+  })
+
+  ipcMain.handle('file:restore', async (_, filePath: string) => {
+    const root = requireOpenVault()
+    assertPathInVault(filePath, root)
+    const restoredPath = workspaceEngine.restoreFromTrash(filePath)
+    const state = workspaceEngine.getState()
+    if (state.rootPath) {
+      markSelfWrite(restoredPath)
+      syncSingleFile(restoredPath, state.rootPath)
+      debounceEmit()
+    }
+    return { ok: true, path: restoredPath }
+  })
+
+  ipcMain.handle('file:emptyTrash', async () => {
+    requireOpenVault()
+    const count = workspaceEngine.emptyTrash()
+    debounceEmit()
+    return { ok: true, count }
   })
 
   ipcMain.handle(

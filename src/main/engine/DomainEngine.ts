@@ -164,7 +164,7 @@ export class DomainEngine {
     }
 
     // Sort recent first
-    const byUpdated = (a: DomainItem, b: DomainItem) =>
+    const byUpdated = (a: DomainItem, b: DomainItem): number =>
       String(b.updatedAt || '').localeCompare(String(a.updatedAt || ''))
     projects.sort(byUpdated)
     tasks.sort(byUpdated)

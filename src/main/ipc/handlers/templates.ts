@@ -51,8 +51,7 @@ export function registerTemplateHandlers(): void {
       const tpl = templateEngine.getTemplate(templateId, state.rootPath)
       if (!tpl) return { ok: false, error: 'Template not found' }
 
-      const safeTitle =
-        (title || 'Untitled').replace(/[<>:"/\\|?*]/g, '-').trim() || 'Untitled'
+      const safeTitle = (title || 'Untitled').replace(/[<>:"/\\|?*]/g, '-').trim() || 'Untitled'
       const content = templateEngine.render(tpl.body, {
         title: safeTitle,
         filename: safeTitle,

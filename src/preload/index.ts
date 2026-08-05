@@ -48,7 +48,7 @@ const api = {
   getWorkspaceState: () => ipcRenderer.invoke('workspace:getState'),
   getRecentWorkspaces: () => ipcRenderer.invoke('workspace:getRecent'),
   onWorkspaceUpdated: (callback: (state: unknown) => void) => {
-    const handler = (_: unknown, state: unknown) => callback(state)
+    const handler = (_: unknown, state: unknown): void => callback(state)
     ipcRenderer.on('workspace:updated', handler)
     return () => ipcRenderer.removeListener('workspace:updated', handler)
   },
@@ -58,6 +58,8 @@ const api = {
   writeFile: (filePath: string, content: string, expectedMtime?: number) =>
     ipcRenderer.invoke('file:write', { filePath, content, expectedMtime }),
   deleteFile: (filePath: string) => ipcRenderer.invoke('file:delete', filePath),
+  restoreFile: (filePath: string) => ipcRenderer.invoke('file:restore', filePath),
+  emptyTrash: () => ipcRenderer.invoke('file:emptyTrash'),
   createFile: (filePath: string, content?: string) =>
     ipcRenderer.invoke('file:create', { filePath, content }),
   createFolder: (folderPath: string) => ipcRenderer.invoke('file:createFolder', folderPath),
@@ -109,7 +111,7 @@ const api = {
   getOutgoingLinks: (nodeIdOrPath: string) => ipcRenderer.invoke('graph:getOutgoing', nodeIdOrPath),
   resolveWikiLink: (target: string) => ipcRenderer.invoke('graph:resolveLink', target),
   onGraphUpdated: (callback: (data: unknown) => void) => {
-    const handler = (_: unknown, data: unknown) => callback(data)
+    const handler = (_: unknown, data: unknown): void => callback(data)
     ipcRenderer.on('graph:updated', handler)
     return () => ipcRenderer.removeListener('graph:updated', handler)
   },
@@ -130,6 +132,11 @@ const api = {
   testAIProvider: (providerId?: string) => ipcRenderer.invoke('ai:testProvider', providerId),
   importGrokCli: () => ipcRenderer.invoke('ai:importGrokCli'),
   getEmbeddingStatus: () => ipcRenderer.invoke('ai:embeddingStatus'),
+  onEmbeddingProgress: (callback: (payload: unknown) => void) => {
+    const handler = (_: unknown, payload: unknown): void => callback(payload)
+    ipcRenderer.on('embedding:progress', handler)
+    return () => ipcRenderer.removeListener('embedding:progress', handler)
+  },
   configureAIProvider: (
     providerId: string,
     apiKey?: string,
@@ -224,6 +231,14 @@ const api = {
   listPlugins: () => ipcRenderer.invoke('plugins:list'),
   listPluginCommands: () => ipcRenderer.invoke('plugins:commands'),
   reloadPlugins: () => ipcRenderer.invoke('plugins:reload'),
+  runPluginCommand: (pluginId: string, commandId: string, args?: Record<string, unknown>) =>
+    ipcRenderer.invoke('plugins:runCommand', { pluginId, commandId, args }),
+  revokePluginPermissions: (pluginId: string) => ipcRenderer.invoke('plugins:revoke', pluginId),
+  onPluginNotify: (callback: (payload: { message: string }) => void) => {
+    const handler = (_: unknown, payload: { message: string }): void => callback(payload)
+    ipcRenderer.on('plugin:notify', handler)
+    return () => ipcRenderer.removeListener('plugin:notify', handler)
+  },
 
   getApiHealth: () => ipcRenderer.invoke('api:health'),
   getSecurityStatus: () => ipcRenderer.invoke('security:status'),
@@ -245,8 +260,8 @@ if (process.contextIsolated) {
     console.error(error)
   }
 } else {
-  // @ts-ignore
+  // @ts-ignore -- electronAPI is defined by @electron-toolkit/preload at runtime; types are unavailable in this sandbox
   window.electron = electronAPI
-  // @ts-ignore
+  // @ts-ignore -- the full Api shape lives in index.d.ts; the runtime object is assembled here without a literal type
   window.api = api
 }

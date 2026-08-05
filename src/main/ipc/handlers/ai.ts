@@ -25,11 +25,33 @@ import {
   loadSettingsIntoProviders
 } from '../shared'
 
+// Idempotency guard: registerAIHandlers may run more than once (startup + e2e
+// test harness), and each run would stack another onProgress listener on the
+// singleton engine. Only the first registration wires the broadcast.
+let progressBroadcastWired = false
+
+function wireEmbeddingProgressBroadcast(): void {
+  if (progressBroadcastWired) return
+  progressBroadcastWired = true
+  // Push live indexing progress to all windows (dashboard progress badge,
+  // status bar). App-lifetime listener; unsubscribing is unnecessary.
+  embeddingEngine.onProgress((current, total, stage) => {
+    const status = embeddingEngine.getStatus()
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!win.isDestroyed()) {
+        win.webContents.send('embedding:progress', { current, total, stage, status })
+      }
+    }
+  })
+}
+
 export function registerAIHandlers(): void {
   // --- AI Embedding Status ---
   ipcMain.handle('ai:embeddingStatus', async () => {
     return embeddingEngine.getStatus()
   })
+
+  wireEmbeddingProgressBroadcast()
 
   // --- AI Handlers ---
   ipcMain.handle('ai:getProviders', async () => {
@@ -167,7 +189,7 @@ export function registerAIHandlers(): void {
       if (activeFilePath) assertPathInVault(activeFilePath, requireOpenVault())
       const toolsAllowed = Boolean(enableTools) && perms.aiTools
       const win = BrowserWindow.fromWebContents(event.sender)
-      const send = (chunk: unknown) => {
+      const send = (chunk: unknown): void => {
         if (win && !win.isDestroyed()) {
           win.webContents.send(`ai:stream:${requestId}`, chunk)
         }

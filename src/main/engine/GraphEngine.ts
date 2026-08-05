@@ -1074,7 +1074,7 @@ export class GraphEngine {
   ): Map<string, Set<string>> {
     const includeGhosts = Boolean(options?.includeGhosts)
     const adj = new Map<string, Set<string>>()
-    const ensure = (id: string) => {
+    const ensure = (id: string): void => {
       if (!adj.has(id)) adj.set(id, new Set())
     }
     const allowed = (id: string): boolean => {
@@ -1193,7 +1193,7 @@ export class GraphEngine {
     }
     nodeIds.reverse()
 
-    const edgeKey = (a: string, b: string) => (a < b ? `${a}|${b}` : `${b}|${a}`)
+    const edgeKey = (a: string, b: string): string => (a < b ? `${a}|${b}` : `${b}|${a}`)
     const edgeKeys: string[] = []
     for (let i = 0; i < nodeIds.length - 1; i++) {
       edgeKeys.push(edgeKey(nodeIds[i], nodeIds[i + 1]))
@@ -1251,7 +1251,7 @@ export class GraphEngine {
       }
       layer = next
     }
-    const edgeKey = (a: string, b: string) => (a < b ? `${a}|${b}` : `${b}|${a}`)
+    const edgeKey = (a: string, b: string): string => (a < b ? `${a}|${b}` : `${b}|${a}`)
     const edgeKeys: string[] = []
     for (const e of this.edges.values()) {
       if (e.type !== 'wiki_link' && !(options?.includeTagEdges && e.type === 'tag')) continue

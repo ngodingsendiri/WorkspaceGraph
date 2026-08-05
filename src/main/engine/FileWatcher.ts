@@ -34,7 +34,7 @@ export class FileWatcher extends EventEmitter {
       }
     })
 
-    const emitEvent = (type: FileEvent, filePath: string) => {
+    const emitEvent = (type: FileEvent, filePath: string): void => {
       const relativePath = this.rootPath
         ? path.relative(this.rootPath, filePath).replace(/\\/g, '/')
         : filePath

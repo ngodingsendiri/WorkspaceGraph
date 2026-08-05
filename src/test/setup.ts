@@ -1,6 +1,7 @@
 import { vi } from 'vitest'
 import fs from 'fs'
 import path from 'path'
+import type { ParsedMarkdown } from '../main/engine/MarkdownEngine'
 
 // Mock electron modules
 vi.mock('electron', () => ({
@@ -74,7 +75,7 @@ export function createMockParsedMarkdown(
     wikiLinks: Array<{ target: string; alias?: string }>
     headings: Array<{ level: number; text: string }>
   }> = {}
-) {
+): ParsedMarkdown {
   const id = overrides.id || 'test-id-' + Math.random().toString(36).slice(2)
   return {
     id,

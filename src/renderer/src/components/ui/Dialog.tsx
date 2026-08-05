@@ -58,7 +58,10 @@ function close(value: boolean | string | null): void {
   d?.resolve(value)
 }
 
-function openDialog(mode: ActiveDialog['mode'], options: DialogOptions): Promise<boolean | string | null> {
+function openDialog(
+  mode: ActiveDialog['mode'],
+  options: DialogOptions
+): Promise<boolean | string | null> {
   return new Promise((resolve) => {
     active = { mode, options, resolve }
     notify()
@@ -66,16 +69,19 @@ function openDialog(mode: ActiveDialog['mode'], options: DialogOptions): Promise
 }
 
 /** Promise-based replacement for window.confirm — resolves true/false. */
+// eslint-disable-next-line react-refresh/only-export-components -- imperative dialog API, not a component
 export function confirmDialog(options: DialogOptions): Promise<boolean> {
   return openDialog('confirm', options) as Promise<boolean>
 }
 
 /** Promise-based replacement for window.alert — resolves after user clicks OK. */
+// eslint-disable-next-line react-refresh/only-export-components -- imperative dialog API, not a component
 export function alertDialog(options: DialogOptions): Promise<void> {
   return openDialog('alert', options).then(() => undefined)
 }
 
 /** Promise-based replacement for window.prompt — resolves string, or null on cancel. */
+// eslint-disable-next-line react-refresh/only-export-components -- imperative dialog API, not a component
 export function promptDialog(options: PromptOptions): Promise<string | null> {
   return new Promise((resolve) => {
     active = {
@@ -89,7 +95,7 @@ export function promptDialog(options: PromptOptions): Promise<string | null> {
   })
 }
 
-function DialogView({ dialog }: { dialog: ActiveDialog }) {
+function DialogView({ dialog }: { dialog: ActiveDialog }): React.JSX.Element {
   const [value, setValue] = useState(dialog.initialValue ?? '')
   const inputRef = useRef<HTMLInputElement>(null)
   const okRef = useRef<HTMLButtonElement>(null)

@@ -4,7 +4,7 @@ import path from 'path'
 import { tmpdir } from 'os'
 import crypto from 'crypto'
 import { GraphEngine } from './GraphEngine'
-import { MarkdownEngine } from './MarkdownEngine'
+import { MarkdownEngine, type ParsedMarkdown } from './MarkdownEngine'
 
 /**
  * Deep / adversarial GraphEngine behaviors ported from the QA chain
@@ -25,18 +25,24 @@ describe('GraphEngine deep behaviors', () => {
   afterEach(() => {
     try {
       fs.rmSync(tmp, { recursive: true, force: true })
-    } catch {}
+    } catch {
+      /* ignore */
+    }
   })
 
-  const write = (rel: string, body: string) => {
+  const write = (rel: string, body: string): ParsedMarkdown => {
     const p = path.join(tmp, rel)
     fs.mkdirSync(path.dirname(p), { recursive: true })
     fs.writeFileSync(p, body, 'utf8')
     return md.parseFile(p, body, tmp)
   }
 
-  const idOf = (filePath: string) =>
-    crypto.createHash('sha256').update(filePath.replace(/\\/g, '/').toLowerCase()).digest('hex').slice(0, 24)
+  const idOf = (filePath: string): string =>
+    crypto
+      .createHash('sha256')
+      .update(filePath.replace(/\\/g, '/').toLowerCase())
+      .digest('hex')
+      .slice(0, 24)
 
   it('preserves backlinks after editing a note (no wipe)', () => {
     const a = write('Knowledge/A.md', '# Alpha\n[[Beta]] [[Gamma]]\n')
@@ -78,7 +84,8 @@ describe('GraphEngine deep behaviors', () => {
     expect(after.nodes.some((n) => n.id === bNode.id)).toBe(false)
     expect(
       after.edges.every(
-        (e) => after.nodes.some((n) => n.id === e.source) && after.nodes.some((n) => n.id === e.target)
+        (e) =>
+          after.nodes.some((n) => n.id === e.source) && after.nodes.some((n) => n.id === e.target)
       )
     ).toBe(true)
   })
@@ -112,8 +119,8 @@ describe('GraphEngine deep behaviors', () => {
   it('getNeighbors excludes self and default excludes ghosts', () => {
     write('Knowledge/A.md', '# A\n[[Missing]]\n')
     write('Knowledge/B.md', '# B\n[[A]]\n')
-    const files = [path.join(tmp, 'Knowledge', 'A.md'), path.join(tmp, 'Knowledge', 'B.md')].map((p) =>
-      md.parseFile(p, fs.readFileSync(p, 'utf8'), tmp)
+    const files = [path.join(tmp, 'Knowledge', 'A.md'), path.join(tmp, 'Knowledge', 'B.md')].map(
+      (p) => md.parseFile(p, fs.readFileSync(p, 'utf8'), tmp)
     )
     graph.buildFromParsedFiles(files)
     const a = graph.getNodeByPath(path.join(tmp, 'Knowledge', 'A.md'))!
@@ -130,7 +137,7 @@ describe('GraphEngine deep behaviors', () => {
       return md.parseFile(p, fs.readFileSync(p, 'utf8'), tmp)
     })
     const gd = graph.buildFromParsedFiles(files)
-    expect((gd.ghostNodeCount || 0)).toBeGreaterThanOrEqual(2)
+    expect(gd.ghostNodeCount || 0).toBeGreaterThanOrEqual(2)
     expect(gd.nodes.filter((n) => n.isGhost).length).toBeGreaterThanOrEqual(2)
     expect(gd.nodes.some((n) => n.isGhost && n.id === 'ghost:missingnote')).toBe(true)
 
@@ -138,7 +145,7 @@ describe('GraphEngine deep behaviors', () => {
     graph.updateNodeAndEdges(miss)
     const after = graph.getGraphData()
     expect(after.nodes.some((n) => n.title === 'MissingNote' && !n.isGhost)).toBe(true)
-    expect((after.ghostNodeCount || 0)).toBeLessThan(gd.ghostNodeCount || 99)
+    expect(after.ghostNodeCount || 0).toBeLessThan(gd.ghostNodeCount || 99)
   })
 
   it('includeGhosts:false filters ghosts', () => {
@@ -162,7 +169,10 @@ describe('GraphEngine deep behaviors', () => {
   })
 
   it('aliases resolve and survive updates', () => {
-    write('Knowledge/Beta.md', '---\ntitle: Beta\naliases:\n  - Bee\n  - Beta Note\n---\n# Beta\n[[Gamma]]\n')
+    write(
+      'Knowledge/Beta.md',
+      '---\ntitle: Beta\naliases:\n  - Bee\n  - Beta Note\n---\n# Beta\n[[Gamma]]\n'
+    )
     write('Knowledge/Gamma.md', '# Gamma\n')
     const files = ['Beta.md', 'Gamma.md'].map((n) => {
       const p = path.join(tmp, 'Knowledge', n)
@@ -172,7 +182,10 @@ describe('GraphEngine deep behaviors', () => {
     const bee = graph.resolveTitleToPath('Bee')
     expect(bee && bee.replace(/\\/g, '/').endsWith('Knowledge/Beta.md')).toBe(true)
 
-    const beta2 = write('Knowledge/Beta.md', '---\ntitle: Beta\naliases:\n  - Bee\n---\n# Beta\n[[Gamma]]\n\nedited\n')
+    const beta2 = write(
+      'Knowledge/Beta.md',
+      '---\ntitle: Beta\naliases:\n  - Bee\n---\n# Beta\n[[Gamma]]\n\nedited\n'
+    )
     graph.updateNodeAndEdges(beta2)
     expect(graph.resolveTitleToPath('Bee')).toBeTruthy()
   })
@@ -219,9 +232,19 @@ describe('GraphEngine deep behaviors', () => {
     const ap = path.join(tmp, 'Knowledge', 'doc.pdf')
     fs.writeFileSync(ap, '%PDF-1.4')
     const aid = idOf(ap)
-    graph.upsertAttachment({ id: aid, path: ap, relativePath: 'Knowledge/doc.pdf', title: 'doc.pdf' })
+    graph.upsertAttachment({
+      id: aid,
+      path: ap,
+      relativePath: 'Knowledge/doc.pdf',
+      title: 'doc.pdf'
+    })
     expect(graph.getGraphData().edges.some((e) => e.target === aid)).toBe(true)
-    graph.upsertAttachment({ id: aid, path: ap, relativePath: 'Knowledge/doc.pdf', title: 'doc.pdf' })
+    graph.upsertAttachment({
+      id: aid,
+      path: ap,
+      relativePath: 'Knowledge/doc.pdf',
+      title: 'doc.pdf'
+    })
     expect(graph.getGraphData().nodes.filter((n) => n.id === aid)).toHaveLength(1)
     graph.removeAttachment(aid)
     expect(graph.getGraphData().nodes.some((n) => n.id === aid)).toBe(false)
@@ -235,10 +258,14 @@ describe('GraphEngine deep behaviors', () => {
     const imgPath = path.join(tmp, 'Knowledge', 'pic.png')
     fs.writeFileSync(imgPath, Buffer.from([0x89, 0x50, 0x4e, 0x47]))
     const attachId = idOf(imgPath)
-    graph.setAttachments([{ id: attachId, path: imgPath, relativePath: 'Knowledge/pic.png', title: 'pic.png' }])
+    graph.setAttachments([
+      { id: attachId, path: imgPath, relativePath: 'Knowledge/pic.png', title: 'pic.png' }
+    ])
     const after = graph.getGraphData()
     expect(after.nodes.some((n) => n.isAttachment && n.title === 'pic.png')).toBe(true)
-    expect(after.edges.some((e) => after.nodes.find((n) => n.id === e.target)?.isAttachment)).toBe(true)
+    expect(after.edges.some((e) => after.nodes.find((n) => n.id === e.target)?.isAttachment)).toBe(
+      true
+    )
   })
 
   it('tag nodes always built with tagnode edges', () => {
@@ -271,7 +298,7 @@ describe('GraphEngine deep behaviors', () => {
     const t0 = Date.now()
     const bigData = big.buildFromParsedFiles(parsed)
     const tBuild = Date.now()
-    expect((bigData.realNodeCount ?? bigData.nodes.filter((n) => !n.isGhost).length)).toBe(N)
+    expect(bigData.realNodeCount ?? bigData.nodes.filter((n) => !n.isGhost).length).toBe(N)
     expect(bigData.edgeCount).toBeGreaterThan(N / 2)
     expect(tBuild - t0).toBeLessThan(5000)
 
@@ -281,7 +308,7 @@ describe('GraphEngine deep behaviors', () => {
     big.updateNodeAndEdges(mid)
     expect(Date.now() - tUp0).toBeLessThan(2000)
     const afterBig = big.getGraphData()
-    expect((afterBig.realNodeCount ?? afterBig.nodes.filter((n) => !n.isGhost).length)).toBe(N)
+    expect(afterBig.realNodeCount ?? afterBig.nodes.filter((n) => !n.isGhost).length).toBe(N)
   })
 
   it('CRLF markdown parses cleanly', () => {

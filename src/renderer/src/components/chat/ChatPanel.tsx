@@ -53,6 +53,8 @@ function ChatMessageBody({
     if (streaming || !content) return
     const cached = mdCacheGet(content)
     if (cached !== undefined) {
+      // Derived-state sync from the markdown cache — not an event-driven setState.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setHtml(cached)
       return
     }
@@ -90,13 +92,11 @@ function ChatMessageBody({
 }
 
 export const ChatPanel: React.FC = () => {
-  const { width: chatWidth, onHandleMouseDown: chatResize, resizing } = usePanelWidth(
-    'wg.chatWidth',
-    360,
-    280,
-    640,
-    (x) => window.innerWidth - x
-  )
+  const {
+    width: chatWidth,
+    onHandleMouseDown: chatResize,
+    resizing
+  } = usePanelWidth('wg.chatWidth', 360, 280, 640, (x) => window.innerWidth - x)
   const {
     messages,
     providers,
@@ -171,7 +171,9 @@ export const ChatPanel: React.FC = () => {
     }
   }, [])
 
+  // Fetch-on-toggle: history is (re)loaded whenever the panel is shown.
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch-on-toggle pattern
     if (showHistory) void refreshHistory()
   }, [showHistory, refreshHistory])
 
@@ -179,7 +181,7 @@ export const ChatPanel: React.FC = () => {
   useEffect(() => {
     const el = messagesBoxRef.current
     if (!el) return
-    const onScroll = () => {
+    const onScroll = (): void => {
       const gap = el.scrollHeight - el.scrollTop - el.clientHeight
       stickToBottom.current = gap < 80
     }
@@ -206,7 +208,7 @@ export const ChatPanel: React.FC = () => {
     ? selectedModelId
     : modelOptions[0]?.id || ''
 
-  const handleSend = () => {
+  const handleSend = (): void => {
     if (!inputText.trim() || isGenerating) return
     stickToBottom.current = true
     sendMessage(inputText, activeTab?.path)
@@ -214,14 +216,14 @@ export const ChatPanel: React.FC = () => {
     requestAnimationFrame(() => inputRef.current?.focus())
   }
 
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>): void => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       handleSend()
     }
   }
 
-  const handleCopy = async (text: string, id: string) => {
+  const handleCopy = async (text: string, id: string): Promise<void> => {
     try {
       await navigator.clipboard.writeText(text)
       setCopyFlash(id)
@@ -231,7 +233,7 @@ export const ChatPanel: React.FC = () => {
     }
   }
 
-  const handleAppend = (text: string) => {
+  const handleAppend = (text: string): void => {
     // Read full content at click time — subscription only keeps path/title to avoid keystroke re-renders
     const tab = getActiveTab()
     if (tab) {
@@ -240,12 +242,12 @@ export const ChatPanel: React.FC = () => {
     }
   }
 
-  const openCitation = async (path: string) => {
+  const openCitation = async (path: string): Promise<void> => {
     await openTab(path)
     setActiveView('editor')
   }
 
-  const handleApply = async (p: WriteProposalItem) => {
+  const handleApply = async (p: WriteProposalItem): Promise<void> => {
     const res = await applyProposal(p.id)
     if (res.ok) {
       setApplyOk(true)
@@ -263,7 +265,7 @@ export const ChatPanel: React.FC = () => {
     setTimeout(() => setApplyMsg(''), 4000)
   }
 
-  const handleLearn = async () => {
+  const handleLearn = async (): Promise<void> => {
     if (isGenerating) return
     stickToBottom.current = true
     const res = await learnWorkspace(activeTab?.path)
@@ -274,7 +276,7 @@ export const ChatPanel: React.FC = () => {
     }
   }
 
-  const openMemoryIndex = async () => {
+  const openMemoryIndex = async (): Promise<void> => {
     try {
       await window.api.ensureAiMemory()
       const list = await window.api.listAiMemory()
@@ -292,7 +294,7 @@ export const ChatPanel: React.FC = () => {
     }
   }
 
-  const handleClear = async () => {
+  const handleClear = async (): Promise<void> => {
     if (messages.length === 0) return
     const ok = await confirmDialog({
       title: 'Hapus percakapan?',
@@ -305,7 +307,7 @@ export const ChatPanel: React.FC = () => {
     setShowHistory(false)
   }
 
-  const handleNewChat = () => {
+  const handleNewChat = (): void => {
     if (isGenerating) return
     if (messages.length > 0) {
       void saveCurrentChat()
@@ -315,14 +317,14 @@ export const ChatPanel: React.FC = () => {
     inputRef.current?.focus()
   }
 
-  const handleLoadChat = async (id: string) => {
+  const handleLoadChat = async (id: string): Promise<void> => {
     if (isGenerating) return
     await loadChat(id)
     setShowHistory(false)
     stickToBottom.current = true
   }
 
-  const handleDeleteChat = async (id: string) => {
+  const handleDeleteChat = async (id: string): Promise<void> => {
     if (isGenerating) return
     const res = await deleteChat(id)
     if (res.ok) {
@@ -336,7 +338,7 @@ export const ChatPanel: React.FC = () => {
     void refreshHistory()
   }
 
-  const handleRetry = () => {
+  const handleRetry = (): void => {
     if (isGenerating) return
     stickToBottom.current = true
     void retryLastMessage(activeTab?.path)
@@ -350,7 +352,7 @@ export const ChatPanel: React.FC = () => {
     name: string
     connected?: boolean
     configured?: boolean
-  }) => {
+  }): string => {
     // Ollama: live probe. Cloud: key saved (not same as live Test).
     if (p.id === 'ollama') return p.connected ? p.name : `${p.name} · offline`
     if (p.configured) return p.name
@@ -520,8 +522,8 @@ export const ChatPanel: React.FC = () => {
           </div>
         )}
       </div>
-
-      {/* History drawer */}        {showHistory && (
+      {/* History drawer */}{' '}
+      {showHistory && (
         <div className="chat-history">
           <div className="chat-history-head">
             <span>Riwayat chat</span>
@@ -551,39 +553,38 @@ export const ChatPanel: React.FC = () => {
               )
               .slice(0, 20)
               .map((h) => (
-              <div key={h.id} className="chat-history-item">
-                <button
-                  type="button"
-                  className="chat-history-load"
-                  onClick={() => void handleLoadChat(h.id)}
-                >
-                  <span className="truncate">{h.title || h.id}</span>
-                  {h.updatedAt && (
-                    <span className="chat-history-meta">
-                      {new Date(h.updatedAt).toLocaleString(undefined, {
-                        month: 'short',
-                        day: 'numeric',
-                        hour: '2-digit',
-                        minute: '2-digit'
-                      })}
-                    </span>
-                  )}
-                </button>
-                <button
-                  type="button"
-                  className="chat-history-del"
-                  aria-label="Hapus chat"
-                  title="Hapus chat tersimpan"
-                  onClick={() => void handleDeleteChat(h.id)}
-                >
-                  <Icon name="trash" size={12} />
-                </button>
-              </div>
-            ))
+                <div key={h.id} className="chat-history-item">
+                  <button
+                    type="button"
+                    className="chat-history-load"
+                    onClick={() => void handleLoadChat(h.id)}
+                  >
+                    <span className="truncate">{h.title || h.id}</span>
+                    {h.updatedAt && (
+                      <span className="chat-history-meta">
+                        {new Date(h.updatedAt).toLocaleString(undefined, {
+                          month: 'short',
+                          day: 'numeric',
+                          hour: '2-digit',
+                          minute: '2-digit'
+                        })}
+                      </span>
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    className="chat-history-del"
+                    aria-label="Hapus chat"
+                    title="Hapus chat tersimpan"
+                    onClick={() => void handleDeleteChat(h.id)}
+                  >
+                    <Icon name="trash" size={12} />
+                  </button>
+                </div>
+              ))
           )}
         </div>
       )}
-
       {/* Write proposals — dock */}
       {openProposals.length > 0 && (
         <div className="chat-proposals">
@@ -619,16 +620,13 @@ export const ChatPanel: React.FC = () => {
           ))}
         </div>
       )}
-
       {applyMsg && <div className={`chat-banner ${applyOk ? 'ok' : 'err'}`}>{applyMsg}</div>}
-
       {isGenerating && lastToolStatus && (
         <div className="chat-tool-status">
           <span className="chat-spinner" />
           {lastToolStatus}
         </div>
       )}
-
       {/* Messages */}
       <div className="chat-messages" ref={messagesBoxRef}>
         {messages.length === 0 ? (
@@ -673,7 +671,9 @@ export const ChatPanel: React.FC = () => {
               msg.content?.startsWith('Error:') ||
               msg.content?.includes('*(cancelled)*')
             const streamingThis =
-              isGenerating && msg.role === 'assistant' && msg.id === messages[messages.length - 1]?.id
+              isGenerating &&
+              msg.role === 'assistant' &&
+              msg.id === messages[messages.length - 1]?.id
             return (
               <div key={msg.id} className={`chat-message ${msg.role}`}>
                 <div className="message-role">
@@ -716,7 +716,10 @@ export const ChatPanel: React.FC = () => {
                         )
                       })}
                       {msg.verifications?.some((x) => !x.supported) && (
-                        <span className="chat-citations-weak-hint" title="Cek manual catatan sebelum mempercayai klaim">
+                        <span
+                          className="chat-citations-weak-hint"
+                          title="Cek manual catatan sebelum mempercayai klaim"
+                        >
                           ⚠ beberapa ref lemah
                         </span>
                       )}
@@ -760,7 +763,6 @@ export const ChatPanel: React.FC = () => {
         )}
         <div ref={messagesEndRef} />
       </div>
-
       {/* Composer */}
       <div className="chat-input-area">
         <textarea

@@ -38,7 +38,7 @@ export function listAiMemoryPaths(vaultRoot: string | null | undefined): string[
   const dir = memoryRoot(vaultRoot)
   if (!fs.existsSync(dir)) return []
   const out: string[] = []
-  const walk = (d: string, depth: number) => {
+  const walk = (d: string, depth: number): void => {
     if (depth > 3) return
     let entries: fs.Dirent[] = []
     try {

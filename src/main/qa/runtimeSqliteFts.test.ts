@@ -12,16 +12,16 @@ describe('SQLite FTS5 runtime', () => {
   it('creates FTS5 table, inserts, matches, ranks by bm25', async () => {
     const mod = (await vi.importActual('better-sqlite3')) as unknown as {
       default: new (p: string) => {
-      pragma(s: string): unknown
-      exec(s: string): void
-      prepare(s: string): {
-        run(...a: unknown[]): unknown
-        get(...a: unknown[]): Record<string, unknown> | undefined
-        all(...a: unknown[]): Record<string, unknown>[]
+        pragma(s: string): unknown
+        exec(s: string): void
+        prepare(s: string): {
+          run(...a: unknown[]): unknown
+          get(...a: unknown[]): Record<string, unknown> | undefined
+          all(...a: unknown[]): Record<string, unknown>[]
+        }
+        close(): void
       }
-      close(): void
     }
-  }
     const Database = mod.default
     const dbp = path.join(tmpdir(), `wg-fts-${Date.now()}.db`)
     const db = new Database(dbp)
@@ -57,9 +57,42 @@ describe('SQLite FTS5 runtime', () => {
       `INSERT INTO notes (id, path, relative_path, title, content, tags, type, headings, frontmatter, updated_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
-    ins.run('a1', path.join(dbp, 'Knowledge', 'Alpha.md'), 'Knowledge/Alpha.md', 'Alpha', 'Pegawai cuti tahunan', '["cuti"]', 'knowledge', 'Alpha', '{}', '2026-07-21')
-    ins.run('b1', path.join(dbp, 'SOP', 'Cuti.md'), 'SOP/Cuti.md', 'SOP Cuti', 'Prosedur cuti ASN', '["sop"]', 'sop', 'SOP Cuti', '{}', '2026-07-20')
-    ins.run('c1', path.join(dbp, 'Knowledge', 'Beta.md'), 'Knowledge/Beta.md', 'Beta', 'unrelated text', '[]', 'note', 'Beta', '{}', '2026-07-19')
+    ins.run(
+      'a1',
+      path.join(dbp, 'Knowledge', 'Alpha.md'),
+      'Knowledge/Alpha.md',
+      'Alpha',
+      'Pegawai cuti tahunan',
+      '["cuti"]',
+      'knowledge',
+      'Alpha',
+      '{}',
+      '2026-07-21'
+    )
+    ins.run(
+      'b1',
+      path.join(dbp, 'SOP', 'Cuti.md'),
+      'SOP/Cuti.md',
+      'SOP Cuti',
+      'Prosedur cuti ASN',
+      '["sop"]',
+      'sop',
+      'SOP Cuti',
+      '{}',
+      '2026-07-20'
+    )
+    ins.run(
+      'c1',
+      path.join(dbp, 'Knowledge', 'Beta.md'),
+      'Knowledge/Beta.md',
+      'Beta',
+      'unrelated text',
+      '[]',
+      'note',
+      'Beta',
+      '{}',
+      '2026-07-19'
+    )
 
     const hits = db
       .prepare(
@@ -74,6 +107,8 @@ describe('SQLite FTS5 runtime', () => {
     db.close()
     try {
       fs.unlinkSync(dbp)
-    } catch {}
+    } catch {
+      /* ignore */
+    }
   })
 })

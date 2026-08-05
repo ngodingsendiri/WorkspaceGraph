@@ -18,7 +18,9 @@ describe('PathSandbox', () => {
     try {
       fs.rmSync(vault, { recursive: true, force: true })
       fs.rmSync(sibling, { recursive: true, force: true })
-    } catch {}
+    } catch {
+      /* ignore */
+    }
   })
 
   it('accepts path inside vault', () => {
@@ -65,7 +67,9 @@ describe('PathSandbox', () => {
     } finally {
       try {
         fs.rmSync(outside, { recursive: true, force: true })
-      } catch {}
+      } catch {
+        /* ignore */
+      }
     }
   })
 

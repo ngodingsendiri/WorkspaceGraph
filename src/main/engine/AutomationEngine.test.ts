@@ -1,0 +1,287 @@
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+import fs from 'fs'
+import path from 'path'
+import { tmpdir } from 'os'
+import { AutomationEngine, type AutomationConfig, type AutomationRule } from './AutomationEngine'
+
+describe('AutomationEngine scheduler (cron)', () => {
+  let engine: AutomationEngine
+  let root: string
+
+  const writeConfig = (rules: AutomationRule[]): void => {
+    fs.mkdirSync(path.join(root, '.workspacegraph'), { recursive: true })
+    const cfg: AutomationConfig = { version: 1, rules }
+    fs.writeFileSync(
+      path.join(root, '.workspacegraph', 'automation.json'),
+      JSON.stringify(cfg, null, 2),
+      'utf-8'
+    )
+  }
+
+  const logRule = (
+    id: string,
+    schedule: AutomationRule['trigger']['schedule'],
+    opts: { enabled?: boolean } = {}
+  ): AutomationRule => ({
+    id,
+    name: id,
+    enabled: opts.enabled ?? true,
+    trigger: { type: 'schedule', schedule },
+    actions: [{ type: 'log', message: id }]
+  })
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    root = fs.mkdtempSync(path.join(tmpdir(), 'wg-test-auto-'))
+    engine = new AutomationEngine()
+  })
+
+  afterEach(() => {
+    engine.stop()
+    vi.useRealTimers()
+    try {
+      fs.rmSync(root, { recursive: true, force: true })
+    } catch {
+      /* ignore */
+    }
+  })
+
+  it('interval rule fires only after the full interval elapses', () => {
+    // 2026-08-05 is a Wednesday
+    vi.setSystemTime(new Date(2026, 7, 5, 8, 0, 0))
+    writeConfig([logRule('r1', { every: 30, unit: 'minutes' })])
+    engine.load(root)
+    engine.start()
+
+    vi.advanceTimersByTime(29 * 60_000)
+    expect(engine.getLogs().some((l) => l.message === 'r1')).toBe(false)
+
+    vi.advanceTimersByTime(1 * 60_000)
+    expect(engine.getLogs().filter((l) => l.message === 'r1' && l.ok)).toHaveLength(1)
+
+    vi.advanceTimersByTime(29 * 60_000)
+    expect(engine.getLogs().filter((l) => l.message === 'r1')).toHaveLength(1)
+
+    vi.advanceTimersByTime(1 * 60_000)
+    expect(engine.getLogs().filter((l) => l.message === 'r1')).toHaveLength(2)
+  })
+
+  it('daily rule fires once at atTime and again the next day', () => {
+    vi.setSystemTime(new Date(2026, 7, 5, 8, 59, 0))
+    writeConfig([logRule('daily', { atTime: '09:00' })])
+    engine.load(root)
+    engine.start()
+
+    vi.advanceTimersByTime(60_000) // 09:00
+    expect(engine.getLogs().some((l) => l.message === 'daily' && l.ok)).toBe(true)
+
+    vi.advanceTimersByTime(60_000) // 09:01 — no double fire
+    expect(engine.getLogs().filter((l) => l.message === 'daily')).toHaveLength(1)
+
+    vi.advanceTimersByTime(23 * 60 * 60_000) // next day 08:01
+    vi.advanceTimersByTime(59 * 60_000) // next day 09:00
+    expect(engine.getLogs().filter((l) => l.message === 'daily')).toHaveLength(2)
+  })
+
+  it('respects daysOfWeek (0=Sunday)', () => {
+    vi.setSystemTime(new Date(2026, 7, 5, 8, 59, 0)) // Wednesday
+    writeConfig([
+      logRule('sun', { atTime: '09:00', daysOfWeek: [0] }),
+      logRule('wed', { atTime: '09:00', daysOfWeek: [3] })
+    ])
+    engine.load(root)
+    engine.start()
+    vi.advanceTimersByTime(60_000)
+    const msgs = engine.getLogs().map((l) => l.message)
+    expect(msgs).toContain('wed')
+    expect(msgs).not.toContain('sun')
+  })
+
+  it('does not fire immediately on load (interval seeded from now)', () => {
+    vi.setSystemTime(new Date(2026, 7, 5, 8, 0, 0))
+    writeConfig([logRule('r1', { every: 10, unit: 'minutes' })])
+    engine.load(root)
+    engine.start()
+    vi.advanceTimersByTime(9 * 60_000)
+    expect(engine.getLogs().length).toBe(0)
+  })
+
+  it('seeds lastFiredDay when loaded after the daily slot has passed (no late fire)', () => {
+    vi.setSystemTime(new Date(2026, 7, 5, 10, 0, 0)) // 10:00 — past 09:00
+    writeConfig([logRule('daily', { atTime: '09:00' })])
+    engine.load(root)
+    engine.start()
+    vi.advanceTimersByTime(60 * 60_000) // 11:00 — must NOT fire today
+    expect(engine.getLogs().length).toBe(0)
+    vi.advanceTimersByTime(22 * 60 * 60_000) // next day 09:00
+    expect(engine.getLogs().some((l) => l.message === 'daily')).toBe(true)
+  })
+
+  it('skips disabled rules and a disabled engine', () => {
+    vi.setSystemTime(new Date(2026, 7, 5, 8, 59, 0))
+    writeConfig([logRule('off', { atTime: '09:00' }, { enabled: false })])
+    engine.load(root)
+    engine.setEnabled(false)
+    engine.start()
+    vi.advanceTimersByTime(120_000)
+    expect(engine.getLogs().length).toBe(0)
+    expect(engine.getSchedulerInfo().running).toBe(false)
+  })
+
+  it('stop() halts future fires', () => {
+    vi.setSystemTime(new Date(2026, 7, 5, 8, 59, 0))
+    writeConfig([logRule('daily', { atTime: '09:00' })])
+    engine.load(root)
+    engine.start()
+    engine.stop()
+    vi.advanceTimersByTime(10 * 60_000)
+    expect(engine.getLogs().length).toBe(0)
+  })
+
+  it('interval rules blocked by daysOfWeek catch up on the first allowed tick', () => {
+    vi.setSystemTime(new Date(2026, 7, 5, 8, 0, 0)) // Wednesday
+    writeConfig([logRule('iv', { every: 1, unit: 'hours', daysOfWeek: [4] })]) // Thursday only
+    engine.load(root)
+    engine.start()
+    vi.advanceTimersByTime(16 * 60 * 60_000) // Thursday 00:00 — first allowed day
+    expect(engine.getLogs().some((l) => l.message === 'iv')).toBe(true)
+  })
+
+  it('nextFireTime returns the next daily slot / interval end', () => {
+    vi.setSystemTime(new Date(2026, 7, 5, 8, 0, 0))
+    writeConfig([
+      logRule('daily', { atTime: '09:00' }),
+      logRule('iv', { every: 30, unit: 'minutes' })
+    ])
+    engine.load(root) // seeds iv.lastFiredAt = 08:00
+    const rules = engine.getConfig().rules
+    const daily = engine.nextFireTime(rules[0])!
+    expect(daily.getHours()).toBe(9)
+    expect(daily.getDate()).toBe(5)
+    const iv = engine.nextFireTime(rules[1])!
+    expect(iv.getTime()).toBe(new Date(2026, 7, 5, 8, 30, 0).getTime())
+    const info = engine.getSchedulerInfo()
+    expect(info.nextFire).toBe(iv.toISOString()) // earliest = interval 08:30
+    expect(info.running).toBe(true) // load() auto-starts the scheduler
+  })
+
+  it('nextFireTime skips non-listed days for daily rules', () => {
+    vi.setSystemTime(new Date(2026, 7, 5, 8, 0, 0)) // Wednesday
+    writeConfig([logRule('daily', { atTime: '09:00', daysOfWeek: [0] })]) // Sunday only
+    engine.load(root)
+    const next = engine.nextFireTime(engine.getConfig().rules[0])!
+    expect(next.getDay()).toBe(0)
+  })
+
+  it('nextFireTime day-advances blocked weekdays for interval rules', () => {
+    vi.setSystemTime(new Date(2026, 7, 5, 8, 0, 0)) // Wednesday
+    // Sunday-only minute interval — next fire must land on a Sunday
+    writeConfig([logRule('iv', { every: 30, unit: 'minutes', daysOfWeek: [0] })])
+    engine.load(root)
+    const next = engine.nextFireTime(engine.getConfig().rules[0])!
+    expect(next.getDay()).toBe(0)
+    expect(next.getHours()).toBe(8)
+  })
+
+  it('validateConfig rejects malformed schedules and accepts valid ones', () => {
+    const cfg: AutomationConfig = {
+      version: 1,
+      rules: [
+        { id: 'a', name: 'a', enabled: true, trigger: { type: 'schedule' }, actions: [] },
+        {
+          id: 'b',
+          name: 'b',
+          enabled: true,
+          trigger: { type: 'schedule', schedule: { atTime: '25:99' } },
+          actions: []
+        },
+        {
+          id: 'c',
+          name: 'c',
+          enabled: true,
+          trigger: { type: 'schedule', schedule: { every: 0 } },
+          actions: []
+        },
+        {
+          id: 'd',
+          name: 'd',
+          enabled: true,
+          trigger: { type: 'schedule', schedule: { atTime: '09:00', every: 5 } },
+          actions: []
+        },
+        {
+          id: 'e',
+          name: 'e',
+          enabled: true,
+          trigger: { type: 'schedule', schedule: { every: 1, unit: 'hours' } },
+          actions: []
+        },
+        {
+          id: 'f',
+          name: 'f',
+          enabled: true,
+          trigger: { type: 'file_updated', match: '.md' },
+          actions: []
+        },
+        {
+          id: 'g',
+          name: 'g',
+          enabled: true,
+          trigger: { type: 'schedule', schedule: {} },
+          actions: []
+        },
+        {
+          id: 'h',
+          name: 'h',
+          enabled: true,
+          trigger: { type: 'schedule', schedule: { unit: 'hours' } },
+          actions: []
+        },
+        {
+          id: 'i',
+          name: 'i',
+          enabled: true,
+          trigger: { type: 'schedule', schedule: { every: 1.5, unit: 'hours' } },
+          actions: []
+        }
+      ]
+    }
+    expect(AutomationEngine.validateConfig(cfg)).toHaveLength(7)
+    expect(
+      AutomationEngine.validateConfig({
+        version: 1,
+        rules: [
+          {
+            id: 'ok',
+            name: 'ok',
+            enabled: true,
+            trigger: { type: 'schedule', schedule: { atTime: '09:00' } },
+            actions: []
+          }
+        ]
+      })
+    ).toHaveLength(0)
+  })
+
+  it('runs scheduled append_to_note actions', () => {
+    vi.setSystemTime(new Date(2026, 7, 5, 8, 59, 0))
+    fs.mkdirSync(path.join(root, 'Daily'), { recursive: true })
+    writeConfig([
+      {
+        id: 'append',
+        name: 'append',
+        enabled: true,
+        trigger: { type: 'schedule', schedule: { atTime: '09:00' } },
+        actions: [
+          { type: 'append_to_note', path: 'Daily/{{date}}.md', content: '- ping {{time}}\n' }
+        ]
+      }
+    ])
+    engine.load(root)
+    engine.start()
+    vi.advanceTimersByTime(60_000)
+    const notes = fs.readdirSync(path.join(root, 'Daily')).filter((f) => f.endsWith('.md'))
+    expect(notes).toHaveLength(1)
+    expect(fs.readFileSync(path.join(root, 'Daily', notes[0]), 'utf-8')).toContain('- ping')
+  })
+})

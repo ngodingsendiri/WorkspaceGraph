@@ -10,10 +10,13 @@ describe('EmbeddingEngine', () => {
   beforeEach(() => {
     engine = new EmbeddingEngine()
     // Disable worker in tests
-    vi.spyOn(engine as any, 'ensureWorker').mockResolvedValue(false)
+    vi.spyOn(
+      engine as unknown as { ensureWorker: () => Promise<boolean> },
+      'ensureWorker'
+    ).mockResolvedValue(false)
     // Create mock fallback embedder as a callable function
     const mockEmbedder = vi.fn().mockResolvedValue({ data: new Float32Array(384).fill(0.1) })
-    engine['_fallbackEmbedder'] = mockEmbedder
+    engine['fallbackEmbedder'] = mockEmbedder
     engine['useWorker'] = false
   })
 
@@ -85,7 +88,7 @@ describe('EmbeddingEngine', () => {
           }
         ])
       }
-      engine.loadFromDb(mockDb as any)
+      engine.loadFromDb(mockDb as unknown as Parameters<EmbeddingEngine['loadFromDb']>[0])
       expect(engine.getStatus().totalChunks).toBe(1)
     })
 
@@ -102,7 +105,7 @@ describe('EmbeddingEngine', () => {
           }
         ])
       }
-      engine.loadFromDb(mockDb as any)
+      engine.loadFromDb(mockDb as unknown as Parameters<EmbeddingEngine['loadFromDb']>[0])
       expect(engine.getStatus().totalChunks).toBe(0)
     })
   })
@@ -161,7 +164,7 @@ describe('EmbeddingEngine', () => {
     it('returns empty when not ready', async () => {
       const freshEngine = new EmbeddingEngine()
       freshEngine['useWorker'] = false
-      freshEngine['_fallbackEmbedder'] = null
+      freshEngine['fallbackEmbedder'] = null
       const hits = await freshEngine.search('query', 5)
       expect(hits).toHaveLength(0)
     })

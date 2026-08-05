@@ -1,9 +1,9 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach } from 'vitest'
 import fs from 'fs'
 import path from 'path'
 import { tmpdir } from 'os'
 import { DomainEngine, parseCheckboxes } from './DomainEngine'
-import { MarkdownEngine } from './MarkdownEngine'
+import { MarkdownEngine, type ParsedMarkdown } from './MarkdownEngine'
 
 describe('DomainEngine', () => {
   let engine: DomainEngine
@@ -14,7 +14,7 @@ describe('DomainEngine', () => {
     md = new MarkdownEngine()
   })
 
-  const parse = (rel: string, content: string, vault: string) => {
+  const parse = (rel: string, content: string, vault: string): ParsedMarkdown => {
     return md.parseFile(path.join(vault, rel), content, vault)
   }
 

@@ -26,7 +26,9 @@ export interface API {
   ) => Promise<
     { conflict: false } | { conflict: true; existingMtime: number; theirs: string; yours: string }
   >
-  deleteFile: (filePath: string) => Promise<boolean>
+  deleteFile: (filePath: string) => Promise<{ ok: boolean; trashed: boolean; trashPath?: string }>
+  restoreFile: (filePath: string) => Promise<{ ok: boolean; path: string }>
+  emptyTrash: () => Promise<{ ok: boolean; count: number }>
   createFile: (filePath: string, content?: string) => Promise<boolean>
   createFolder: (folderPath: string) => Promise<boolean>
   renameFile: (
@@ -129,7 +131,10 @@ export interface API {
     groups: Array<{ id: string; query: string; color: string }>
   }>
   saveGraphSettings: (partial: Record<string, unknown>) => Promise<any>
-  saveGraphPng: (dataUrl: string, defaultName: string) => Promise<{
+  saveGraphPng: (
+    dataUrl: string,
+    defaultName: string
+  ) => Promise<{
     ok: boolean
     path?: string
     canceled?: boolean
@@ -211,6 +216,19 @@ export interface API {
     indexedFiles: number
     modelReady: boolean
   }>
+  onEmbeddingProgress: (
+    callback: (payload: {
+      current: number
+      total: number
+      stage: string
+      status: {
+        state: 'idle' | 'loading_model' | 'indexing' | 'ready'
+        totalChunks: number
+        indexedFiles: number
+        modelReady: boolean
+      }
+    }) => void
+  ) => () => void
   configureAIProvider: (
     providerId: string,
     apiKey?: string,
@@ -296,14 +314,54 @@ export interface API {
   getDomainOverview: () => Promise<any>
   listDomain: (type: string) => Promise<any[]>
 
-  getAutomation: () => Promise<any>
+  getAutomation: () => Promise<{
+    enabled: boolean
+    config: {
+      version: 1
+      rules: Array<{
+        id: string
+        name: string
+        enabled: boolean
+        trigger: {
+          type: string
+          match?: string
+          schedule?: {
+            every?: number
+            unit?: string
+            atTime?: string
+            daysOfWeek?: number[]
+          }
+        }
+        actions: unknown[]
+      }>
+    }
+    logs: { at: string; ruleId: string; message: string; ok: boolean }[]
+    schedule: { running: boolean; nextFire: string | null }
+  }>
   saveAutomation: (config: unknown) => Promise<{ ok: boolean; error?: string }>
   setAutomationEnabled: (enabled: boolean) => Promise<boolean>
   runAutomationRule: (ruleId: string) => Promise<{ ok: boolean; error?: string }>
 
-  listPlugins: () => Promise<any[]>
+  listPlugins: () => Promise<
+    {
+      id: string
+      name: string
+      version: string
+      enabled: boolean
+      description?: string
+      commands: number
+      js?: boolean
+    }[]
+  >
   listPluginCommands: () => Promise<any[]>
   reloadPlugins: () => Promise<{ ok: boolean; count?: number }>
+  runPluginCommand: (
+    pluginId: string,
+    commandId: string,
+    args?: Record<string, unknown>
+  ) => Promise<{ ok: boolean; result?: unknown; error?: string }>
+  revokePluginPermissions: (pluginId: string) => Promise<{ ok: boolean }>
+  onPluginNotify: (callback: (payload: { message: string }) => void) => () => void
 
   getApiHealth: () => Promise<any>
   getSecurityStatus: () => Promise<any>

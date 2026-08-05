@@ -84,7 +84,7 @@ class WorkerWrapper {
 
     this.initPromise = new Promise((resolve, reject) => {
       const timeout = setTimeout(() => reject(new Error('Worker init timeout')), 30000)
-      const onReady = (msg: WorkerResponse) => {
+      const onReady = (msg: WorkerResponse): void => {
         if (msg.type === 'ready') {
           clearTimeout(timeout)
           this.worker.off('message', onReady)
@@ -117,7 +117,10 @@ class WorkerWrapper {
   ): Promise<Extract<WorkerResponse, { type: T }>> {
     await this.initPromise
     return new Promise((resolve, reject) => {
-      this.pending.set(this.msgId++, { resolve: resolve as any, reject })
+      this.pending.set(this.msgId++, {
+        resolve: resolve as (v: WorkerResponse) => void,
+        reject
+      })
       this.worker.postMessage(msg)
     })
   }

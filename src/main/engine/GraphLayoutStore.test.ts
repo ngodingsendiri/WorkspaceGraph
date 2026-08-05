@@ -31,7 +31,9 @@ describe('GraphLayoutStore', () => {
   afterEach(() => {
     try {
       fs.rmSync(tmpVault, { recursive: true, force: true })
-    } catch {}
+    } catch {
+      /* ignore */
+    }
   })
 
   describe('mergeGraphSettings', () => {

@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { GraphEngine } from './GraphEngine'
-import { MarkdownEngine } from './MarkdownEngine'
+import { MarkdownEngine, type ParsedMarkdown } from './MarkdownEngine'
 
 describe('GraphEngine', () => {
   let graph: GraphEngine
@@ -11,11 +11,11 @@ describe('GraphEngine', () => {
     markdown = new MarkdownEngine()
   })
 
-  const parseNote = (filePath: string, content: string, rootPath = '/vault') => {
+  const parseNote = (filePath: string, content: string, rootPath = '/vault'): ParsedMarkdown => {
     return markdown.parseFile(filePath, content, rootPath)
   }
 
-  const buildGraph = (notes: ReturnType<typeof parseNote>[]) => {
+  const buildGraph = (notes: ReturnType<typeof parseNote>[]): void => {
     graph.buildFromParsedFiles(notes, false)
   }
 

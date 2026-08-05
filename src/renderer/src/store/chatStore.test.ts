@@ -2,8 +2,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { useChatStore } from './chatStore'
 
 /** Minimal window.api surface used by chatStore actions. */
-function mockWindowApi() {
-  const api = {
+type MockFn = ReturnType<typeof vi.fn>
+function mockWindowApi(): Record<string, MockFn> {
+  const api: Record<string, MockFn> = {
     getAIProviders: vi.fn().mockResolvedValue([]),
     getSettings: vi.fn().mockResolvedValue({}),
     setActiveAIProvider: vi.fn().mockResolvedValue(true),
@@ -22,7 +23,11 @@ function mockWindowApi() {
   return api
 }
 
-function msg(id: string, role: 'user' | 'assistant', content: string) {
+function msg(
+  id: string,
+  role: 'user' | 'assistant',
+  content: string
+): { id: string; role: 'user' | 'assistant'; content: string; timestamp: string } {
   return { id, role, content, timestamp: '12:00' }
 }
 

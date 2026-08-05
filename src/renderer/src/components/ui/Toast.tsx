@@ -38,6 +38,7 @@ const useToastStore = create<ToastStore>((set) => ({
 }))
 
 /** Show a toast notification from anywhere in the app */
+// eslint-disable-next-line react-refresh/only-export-components -- imperative toast API, not a component
 export function toast(message: string, opts?: { variant?: ToastVariant; duration?: number }): void {
   const id = Math.random().toString(36).slice(2)
   useToastStore.getState().add({
@@ -55,7 +56,7 @@ const VARIANT_ICON: Record<ToastVariant, IconName> = {
   error: 'cancel'
 }
 
-function ToastEntry({ item }: { item: ToastItem }) {
+function ToastEntry({ item }: { item: ToastItem }): React.JSX.Element {
   const remove = useToastStore((s) => s.remove)
   useEffect(() => {
     const t = setTimeout(() => remove(item.id), item.duration)
@@ -82,7 +83,7 @@ function ToastEntry({ item }: { item: ToastItem }) {
 }
 
 /** Mount once in App root to render toast notifications */
-export function Toaster() {
+export function Toaster(): React.JSX.Element {
   const items = useToastStore((s) => s.items)
   return (
     <div

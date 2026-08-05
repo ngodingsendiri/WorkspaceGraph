@@ -489,6 +489,14 @@ html:not([data-theme]) {
   color: var(--color-primary);
 }
 
+/* Soft-delete: trashed items look archived/dimmed so they read as "not live" */
+.file-tree-item.is-trash {
+  color: var(--text-muted);
+}
+.file-tree-item.is-trash:hover {
+  color: var(--text-secondary);
+}
+
 .file-tree-item svg,
 .file-tree-item .wg-icon {
   flex-shrink: 0;
@@ -3658,6 +3666,66 @@ button {
 .dash-empty .wg-icon {
   opacity: 0.6;
   flex-shrink: 0;
+}
+/* Semantic RAG card: status badge + live % progress bar (tone set inline via --rag-tone) */
+.dash-rag {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: var(--space-5);
+  padding: 10px 12px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-left: 3px solid var(--rag-tone, var(--color-accent));
+  border-radius: var(--radius-md);
+}
+.dash-rag-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.dash-rag-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+  color: var(--text-secondary);
+  letter-spacing: 0.03em;
+}
+.dash-rag-state {
+  font-size: var(--text-xs);
+  font-weight: var(--weight-semibold);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.dash-rag-track {
+  height: 4px;
+  border-radius: 999px;
+  background: var(--bg-hover);
+  overflow: hidden;
+}
+.dash-rag-bar {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--rag-tone, var(--color-accent));
+  transition: width 0.25s var(--ease-default);
+}
+.dash-rag-meta {
+  font-size: 10px;
+  color: var(--text-muted);
+}
+.is-spinning {
+  animation: wg-spin 0.9s linear infinite;
+}
+@keyframes wg-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
 }
 /* Tag chips: pill shape, ellipsis so long tags can't pierce the edge */
 .dash-tag {

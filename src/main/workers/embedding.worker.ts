@@ -8,7 +8,11 @@ import { parentPort, workerData } from 'worker_threads'
 import type { WorkerMessage, WorkerResponse, ChunkEntry, SemanticHit } from './worker-pool'
 
 // Dynamic import to avoid bundling issues with electron-vite
-let embedder: any = null
+type Embedder = (
+  text: string | Float32Array,
+  opts?: { pooling?: string; normalize?: boolean }
+) => Promise<{ data: Float32Array }>
+let embedder: Embedder | null = null
 let initializing = false
 
 async function initEmbedder(): Promise<void> {
@@ -18,7 +22,10 @@ async function initEmbedder(): Promise<void> {
     const { pipeline, env } = await import('@xenova/transformers')
     env.allowLocalModels = false
     if (env.backends?.onnx) env.backends.onnx.logLevel = 'error'
-    embedder = await pipeline('feature-extraction', 'Xenova/all-MiniLM-L6-v2')
+    embedder = (await pipeline(
+      'feature-extraction',
+      'Xenova/all-MiniLM-L6-v2'
+    )) as unknown as Embedder
     parentPort?.postMessage({ type: 'ready' } as WorkerResponse)
   } catch (err) {
     parentPort?.postMessage({ type: 'error', error: String(err) } as WorkerResponse)
@@ -73,6 +80,13 @@ parentPort?.on('message', async (msg: WorkerMessage) => {
       }
       case 'search': {
         if (!embedder) await initEmbedder()
+        if (!embedder) {
+          parentPort?.postMessage({
+            type: 'error',
+            error: 'Embedder not initialized'
+          } as WorkerResponse)
+          break
+        }
         const qOut = await embedder(msg.queryVector, { pooling: 'mean', normalize: true })
         const hits = cosineSearch(qOut.data as Float32Array, msg.indexSnapshot, msg.topK)
         parentPort?.postMessage({ type: 'searchResult', hits } as WorkerResponse)

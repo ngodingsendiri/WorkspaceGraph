@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { WorkspaceEngine } from './WorkspaceEngine'
+import { WorkspaceEngine, isTrashPath } from './WorkspaceEngine'
 import fs from 'fs'
 import path from 'path'
 import { tmpdir } from 'os'
@@ -16,7 +16,9 @@ describe('WorkspaceEngine', () => {
   afterEach(() => {
     try {
       fs.rmSync(testDir, { recursive: true, force: true })
-    } catch {}
+    } catch {
+      /* ignore */
+    }
   })
 
   describe('openWorkspace', () => {
@@ -157,6 +159,67 @@ describe('WorkspaceEngine', () => {
       const folderPath = path.join(testDir, 'newfolder')
       engine.createFolder(folderPath)
       expect(fs.existsSync(folderPath)).toBe(true)
+    })
+  })
+
+  describe('trash (soft-delete)', () => {
+    beforeEach(() => {
+      engine.openWorkspace(testDir)
+    })
+
+    it('moves file to .trash keeping relative path', () => {
+      fs.writeFileSync(path.join(testDir, 'note.md'), '# Note')
+      const trashPath = engine.moveToTrash(path.join(testDir, 'note.md'))
+      expect(fs.existsSync(path.join(testDir, 'note.md'))).toBe(false)
+      expect(fs.existsSync(trashPath)).toBe(true)
+      expect(trashPath).toContain('.trash')
+      expect(trashPath.replace(/\\/g, '/')).toContain('.trash/note.md')
+    })
+
+    it('restores trashed file to original location', () => {
+      fs.writeFileSync(path.join(testDir, 'note.md'), '# Note')
+      const trashPath = engine.moveToTrash(path.join(testDir, 'note.md'))
+      const restored = engine.restoreFromTrash(trashPath)
+      expect(restored).toBe(path.join(testDir, 'note.md'))
+      expect(fs.existsSync(path.join(testDir, 'note.md'))).toBe(true)
+      expect(fs.existsSync(trashPath)).toBe(false)
+    })
+
+    it('appends suffix when original path is taken', () => {
+      fs.writeFileSync(path.join(testDir, 'gone.md'), '# Old')
+      const trashPath = engine.moveToTrash(path.join(testDir, 'gone.md'))
+      // Original path gets re-occupied while the item sits in trash
+      fs.writeFileSync(path.join(testDir, 'gone.md'), '# Newer')
+      const restored = engine.restoreFromTrash(trashPath)
+      expect(restored).not.toBe(path.join(testDir, 'gone.md'))
+      expect(fs.existsSync(restored)).toBe(true)
+      expect(fs.readFileSync(restored, 'utf-8')).toBe('# Old')
+      expect(fs.readFileSync(path.join(testDir, 'gone.md'), 'utf-8')).toBe('# Newer')
+    })
+
+    it('rejects restore of non-trash path', () => {
+      fs.writeFileSync(path.join(testDir, 'note.md'), '# Note')
+      expect(() => engine.restoreFromTrash(path.join(testDir, 'note.md'))).toThrow(
+        'Not a trash item'
+      )
+    })
+
+    it('empties trash and counts files', () => {
+      fs.writeFileSync(path.join(testDir, 'a.md'), '# A')
+      fs.mkdirSync(path.join(testDir, 'sub'))
+      fs.writeFileSync(path.join(testDir, 'sub', 'b.md'), '# B')
+      engine.moveToTrash(path.join(testDir, 'a.md'))
+      engine.moveToTrash(path.join(testDir, 'sub'))
+      const count = engine.emptyTrash()
+      expect(count).toBe(2)
+      expect(fs.existsSync(path.join(testDir, '.trash'))).toBe(false)
+    })
+
+    it('isTrashPath detects trash items', () => {
+      fs.mkdirSync(path.join(testDir, '.trash'), { recursive: true })
+      fs.writeFileSync(path.join(testDir, '.trash', 'x.md'), '# X')
+      expect(isTrashPath(path.join(testDir, '.trash', 'x.md'))).toBe(true)
+      expect(isTrashPath(path.join(testDir, 'x.md'))).toBe(false)
     })
   })
 

@@ -91,7 +91,7 @@ export class GeminiProvider extends BaseProvider {
   }
 
   /** Gemini requires alternating user/model; system → systemInstruction */
-  private buildContents(request: AIRequest) {
+  private buildContents(request: AIRequest): { role: string; parts: { text: string }[] }[] {
     const contents: { role: string; parts: { text: string }[] }[] = []
     for (const m of request.messages) {
       if (!m.content?.trim()) continue
@@ -155,7 +155,7 @@ export class GeminiProvider extends BaseProvider {
     if (request.temperature !== undefined) config.temperature = request.temperature
     if (request.maxTokens) config.maxOutputTokens = request.maxTokens
 
-    const runStream = async (useModel: string) => {
+    const runStream = async (useModel: string): Promise<void> => {
       const responseStream = await client.models.generateContentStream({
         model: useModel,
         contents,

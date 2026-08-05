@@ -22,7 +22,7 @@ export const WelcomeScreen: React.FC = () => {
 
   const showErr = error || lastError || ''
 
-  const handleOpenFolder = async () => {
+  const handleOpenFolder = async (): Promise<void> => {
     setError('')
     clearError()
     const folder = await window.api.openFolder()
@@ -32,7 +32,7 @@ export const WelcomeScreen: React.FC = () => {
     }
   }
 
-  const handleCreateVault = async () => {
+  const handleCreateVault = async (): Promise<void> => {
     setError('')
     clearError()
     setCreating(true)

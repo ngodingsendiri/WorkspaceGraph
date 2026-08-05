@@ -59,6 +59,7 @@ import {
 import type { GraphSearchMode } from '../../store/graphStore'
 
 /** Obsidian-like display defaults (text fade soft at distance). */
+// eslint-disable-next-line react-refresh/only-export-components -- shared const, not a component
 export const DEFAULT_DISPLAY_OPTS: GraphDisplayOpts = {
   arrows: false,
   textFade: 0.9,
@@ -399,7 +400,7 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
   /** Ease hoverStrengthRef toward 1 (hovering) / 0 (clear) — soft Obsidian feel */
   const kickHoverAnim = useCallback(() => {
     if (hoverAnimRafRef.current) return
-    const step = () => {
+    const step = (): void => {
       const target = hoverIdRef.current ? 1 : 0
       const cur = hoverStrengthRef.current
       // slightly snappier in, softer out
@@ -589,7 +590,7 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
       if (markHydrated) cameraHydratedRef.current = true
       return true
     },
-    [requestPaint]
+    []
   )
 
   // Restore vault camera once when available (BUG-1).
@@ -669,7 +670,7 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
   useEffect(() => {
     if (!graphSettings) return
     // Always drain pending intent even after first hydrate
-    const drainPending = () => {
+    const drainPending = (): void => {
       settingsHydratedRef.current = true
       const pending = pendingIntentRef.current
       if (pending) {
@@ -774,7 +775,7 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
   }, [layoutNodes, requestPaint])
 
   useEffect(() => {
-    const apply = () => {
+    const apply = (): void => {
       paletteRef.current = readPalette()
       requestPaint()
     }
@@ -1088,7 +1089,7 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
           if (simLinks.length > maxE) {
             edgeList = [...simLinks]
               .sort((a, b) => {
-                const score = (e: SimLink) => {
+                const score = (e: SimLink): 0 | 3 | 2 => {
                   const s = end(e.source as string | SimNode)
                   const tg = end(e.target as string | SimNode)
                   if (!s?.id || !tg?.id) return 0
@@ -1402,6 +1403,9 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
       console.error('[GraphCanvas] paint failed:', err)
       dirtyRef.current = true
     }
+    // Paint loop is driven by dirtyRef from rAF; canvas size sync is pushed in,
+    // never a dependency of this callback.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pushSvgFrame])
 
   paintFnRef.current = paint
@@ -1568,7 +1572,7 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
     const kickRafs: number[] = []
     let resizeRaf = 0
 
-    const kick = (why: string, opts?: { allowFit?: boolean }) => {
+    const kick = (why: string, opts?: { allowFit?: boolean }): void => {
       syncCanvasSize()
       const fNodes = filteredNodesRef.current
       const fEdges = filteredEdgesRef.current
@@ -1670,6 +1674,7 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
       }
     }
     // ONLY activeView/embedded — any other dep re-ran this and reset camera/pan mid-session
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeView, embedded])
 
   // If toolbar already shows node count but SVG frame empty → force paint (user blank case)
@@ -1696,7 +1701,7 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
     }
     let raf = 0
     let alive = true
-    const loop = (t: number) => {
+    const loop = (t: number): void => {
       if (!alive) return
       pathPulseRef.current = (Math.sin(t / 520) + 1) / 2
       pathPulseFrameRef.current++
@@ -2227,7 +2232,7 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
       const tx = (width - k * (minX + maxX)) / 2
       const ty = (height - k * (minY + maxY)) / 2
       const target = d3.zoomIdentity.translate(tx, ty).scale(k)
-      const done = () => {
+      const done = (): void => {
         hasAutoFitRef.current = true
         // Explicit Fit/Layout owns camera again (auto-fit may not steal after this until pan)
         if (announce) {
@@ -2246,7 +2251,7 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
       const from = transformRef.current
       const steps = 12
       let i = 0
-      const step = () => {
+      const step = (): void => {
         i++
         const u = i / steps
         const e = 1 - Math.pow(1 - u, 3)
@@ -2262,7 +2267,7 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
       }
       requestAnimationFrame(step)
     },
-    [schedulePaint, syncCanvasSize, scheduleSaveCamera, flashAction]
+    [syncCanvasSize, scheduleSaveCamera, flashAction]
   )
   fitViewRef.current = fitView
 
@@ -2488,7 +2493,7 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
     const pointers = new Map<number, { x: number; y: number }>()
     const DRAG_THRESH = 6
 
-    const screenToWorld = (clientX: number, clientY: number) => {
+    const screenToWorld = (clientX: number, clientY: number): { x: number; y: number } => {
       const rect = wrapEl!.getBoundingClientRect()
       const t = transformRef.current
       const k = t.k || 1
@@ -2498,16 +2503,16 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
       }
     }
 
-    const distPts = (a: { x: number; y: number }, b: { x: number; y: number }) =>
+    const distPts = (a: { x: number; y: number }, b: { x: number; y: number }): number =>
       Math.hypot(a.x - b.x, a.y - b.y)
 
-    const clearDocListeners = () => {
+    const clearDocListeners = (): void => {
       document.removeEventListener('pointermove', onDocMove, true)
       document.removeEventListener('pointerup', onDocUp, true)
       document.removeEventListener('pointercancel', onDocUp, true)
     }
 
-    const endGesture = () => {
+    const endGesture = (): void => {
       if (mode === 'node' && dragged) {
         const d = dragged
         if (!moved) {
@@ -2558,7 +2563,7 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
       clearDocListeners()
     }
 
-    const onDocMove = (e: PointerEvent) => {
+    const onDocMove = (e: PointerEvent): void => {
       if (!wrapEl) return
       if (activeId != null && e.pointerId !== activeId && mode !== 'pinch') return
       pointers.set(e.pointerId, { x: e.clientX, y: e.clientY })
@@ -2620,7 +2625,7 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
       }
     }
 
-    const onDocUp = (e: PointerEvent) => {
+    const onDocUp = (e: PointerEvent): void => {
       pointers.delete(e.pointerId)
       if (mode === 'pinch') {
         if (pointers.size >= 2) return
@@ -2638,7 +2643,7 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
       endGesture()
     }
 
-    const onPointerDown = (e: PointerEvent) => {
+    const onPointerDown = (e: PointerEvent): void => {
       if (!wrapEl) return
       if (e.pointerType === 'mouse' && e.button !== 0 && e.button !== 1) return
       e.preventDefault()
@@ -2751,7 +2756,7 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
       }
     }
 
-    const onWheel = (e: WheelEvent) => {
+    const onWheel = (e: WheelEvent): void => {
       e.preventDefault()
       if (!wrapEl) return
       const rect = wrapEl.getBoundingClientRect()
@@ -2761,8 +2766,7 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
       const k0 = t.k || 1
       // Proportional wheel zoom: scale by real scroll distance (not fixed 1.12
       // jumps) so trackpads and fast flicks zoom smoothly without stutter.
-      const dy =
-        e.deltaMode === 1 ? e.deltaY * 16 : e.deltaMode === 2 ? e.deltaY * 120 : e.deltaY
+      const dy = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaMode === 2 ? e.deltaY * 120 : e.deltaY
       const nextK = Math.max(0.08, Math.min(6, k0 * Math.exp(-dy * 0.0012)))
       const x = mx - ((mx - t.x) * nextK) / k0
       const y = my - ((my - t.y) * nextK) / k0
@@ -2783,7 +2787,7 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
       }, 280)
     }
 
-    const onHover = (e: PointerEvent) => {
+    const onHover = (e: PointerEvent): void => {
       if (mode !== 'none') return
       if (e.pointerType === 'touch') return
       const hit = hitNodeRef.current(e.clientX, e.clientY)
@@ -2797,13 +2801,13 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
       }
     }
 
-    const onLeave = () => {
+    const onLeave = (): void => {
       if (mode !== 'none') return
       setHoverIdRef.current(null)
       hideTooltipDomRef.current()
     }
 
-    const onDbl = (e: MouseEvent) => {
+    const onDbl = (e: MouseEvent): void => {
       const hit = hitNodeRef.current(e.clientX, e.clientY)
       if (!hit || hit.isGhost || hit.isTag) return
       hit.fx = null
@@ -2815,7 +2819,7 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
       schedulePaint()
     }
 
-    const onContextMenu = (e: MouseEvent) => {
+    const onContextMenu = (e: MouseEvent): void => {
       e.preventDefault()
       e.stopImmediatePropagation()
       const hit = hitNodeRef.current(e.clientX, e.clientY)
@@ -2826,7 +2830,7 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
       setCtxMenu({ x: e.clientX, y: e.clientY, node: hit })
     }
 
-    const bind = (el: HTMLDivElement) => {
+    const bind = (el: HTMLDivElement): void => {
       wrapEl = el
       el.style.touchAction = 'none'
       el.style.userSelect = 'none'
@@ -2854,7 +2858,7 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
       }
     }
 
-    const unbind = () => {
+    const unbind = (): void => {
       clearDocListeners()
       if (wheelDebounceRef.current) {
         clearTimeout(wheelDebounceRef.current)
@@ -2887,7 +2891,7 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
       }
     }
 
-    const tryBind = () => {
+    const tryBind = (): void => {
       if (cancelled) return
       const el = wrapRef.current
       if (el) {
@@ -2902,6 +2906,9 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
       cancelled = true
       unbind()
     }
+    // Binding retries until sim is ready; canvas draw/show helpers are stable
+    // imperative handlers that must not retrigger this effect.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeView, schedulePaint])
 
   // External focus — retry until sim has positions (was clearing focus too early)
@@ -2909,7 +2916,7 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
     if (!focusedNodeId) return
     let tries = 0
     let timer: ReturnType<typeof setTimeout> | null = null
-    const attempt = () => {
+    const attempt = (): void => {
       const d = nodesRef.current.find((n) => n.id === focusedNodeId)
       const wrap = wrapRef.current
       if (d && d.x != null && d.y != null && wrap && wrap.clientWidth > 8) {
@@ -2946,7 +2953,7 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
     const el = wrapRef.current
     if (!el) return
     let t: ReturnType<typeof setTimeout> | null = null
-    const onResize = () => {
+    const onResize = (): void => {
       // Cheap path: resize buffer + repaint immediately so the canvas tracks the drag
       syncCanvasSize()
       schedulePaint()
@@ -3167,7 +3174,7 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
   ])
 
   const handleFindPath = useCallback(async () => {
-    const titleOf = (id: string) =>
+    const titleOf = (id: string): string =>
       nodesRef.current.find((n) => n.id === id)?.title || id.slice(0, 8)
     if (!pathFromId || !pathToId) {
       const d = diagnosePathResult({ phase: 'need-two' })
@@ -3403,7 +3410,7 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
 
     /** Electron can't reliably trigger <a download> with data URLs — use the
      * native save dialog via IPC (dialog.showSaveDialog + fs.writeFile). */
-    const downloadDataUrl = (url: string, note: string) => {
+    const downloadDataUrl = (url: string, note: string): void => {
       void window.api
         .saveGraphPng(url, fileName)
         .then((res) => {
@@ -3424,7 +3431,7 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
         })
     }
 
-    const tryCanvasDownload = (note: string) => {
+    const tryCanvasDownload = (note: string): void => {
       const canvas = canvasRef.current
       if (!canvas || canvas.width < 8 || canvas.height < 8) {
         flashAction('PNG gagal — canvas kosong')
@@ -3442,7 +3449,7 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
 
     // Prefer SVG → raster (what user sees). Wait 1–2 frames so React SVG is current.
     const { w, h } = sized
-    const runSvgExport = () => {
+    const runSvgExport = (): void => {
       const svg = svgRef.current
       if (!svg || w <= 8 || h <= 8) {
         tryCanvasDownload(' · canvas')
@@ -3716,6 +3723,8 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
         return
       }
     },
+    // schedulePaint / scheduleSaveCamera are stable rAF helpers, not deps.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [
       activeView,
       handleClearPath,
@@ -3724,8 +3733,6 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
       handleReheatAndFit,
       handleSaveLayout,
       handleExportPng,
-      schedulePaint,
-      scheduleSaveCamera,
       zoomBy,
       updateGraphSettings,
       openTab,
@@ -3757,7 +3764,7 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
   // Close context menu on outside click
   useEffect(() => {
     if (!ctxMenu) return
-    const close = (e: MouseEvent) => {
+    const close = (e: MouseEvent): void => {
       const menu = document.querySelector('.ctx-menu')
       if (menu && !menu.contains(e.target as Node)) setCtxMenu(null)
     }
@@ -3979,12 +3986,7 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
         {/* React-owned SVG — world graph under camera transform (Obsidian zoom scale) */}
         <div className="graph-svg-host" role="img" aria-label="Knowledge graph">
           {svgFrame ? (
-            <svg
-              ref={svgRef}
-              className="graph-svg"
-              width={svgFrame.w}
-              height={svgFrame.h}
-            >
+            <svg ref={svgRef} className="graph-svg" width={svgFrame.w} height={svgFrame.h}>
               <g
                 className="g-world"
                 transform={`translate(${svgFrame.tx},${svgFrame.ty}) scale(${svgFrame.k})`}
@@ -4333,7 +4335,8 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
                     void window.api.deleteFile(ctxMenu.node.path)
                     setCtxMenu(null)
                   })
-                }}                >
+                }}
+              >
                 Hapus
               </button>
             )}

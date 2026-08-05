@@ -13,14 +13,14 @@ interface EmbedStatus {
   modelReady: boolean
 }
 
-function EmbeddingBadge() {
+function EmbeddingBadge(): React.JSX.Element | null {
   const [status, setStatus] = useState<EmbedStatus | null>(null)
   const isOpen = useWorkspaceStore((s) => s.isOpen)
 
   useEffect(() => {
     if (!isOpen || !window.api?.getEmbeddingStatus) return
     let mounted = true
-    const poll = async () => {
+    const poll = async (): Promise<void> => {
       try {
         const s = await window.api.getEmbeddingStatus()
         if (mounted) setStatus(s)

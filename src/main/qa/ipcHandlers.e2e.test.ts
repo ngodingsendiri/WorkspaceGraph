@@ -63,7 +63,6 @@ import { registerSearchHandlers } from '../ipc/handlers/search'
 import { registerWorkspaceHandlers } from '../ipc/handlers/workspace'
 import { workspaceEngine } from '../engine/WorkspaceEngine'
 import { indexDatabase } from '../engine/IndexDatabase'
-import { searchEngine } from '../engine/SearchEngine'
 
 /** Invoke a registered handler exactly like ipcRenderer.invoke would. */
 async function invoke(channel: string, ...args: unknown[]): Promise<unknown> {
@@ -115,7 +114,10 @@ describe('IPC handlers end-to-end', () => {
 
   it('file:create → file:read round-trip through the real handler chain', async () => {
     const p = path.join(vault, 'Apollo.md')
-    await invoke('file:create', { filePath: p, content: '# Apollo\n\nMisi pendaratan bulan pertama.' })
+    await invoke('file:create', {
+      filePath: p,
+      content: '# Apollo\n\nMisi pendaratan bulan pertama.'
+    })
     expect(fs.existsSync(p)).toBe(true)
     const read = (await invoke('file:read', p)) as { title: string; content: string }
     expect(read.title).toBe('Apollo')
@@ -153,7 +155,10 @@ describe('IPC handlers end-to-end', () => {
   it('search:query finds a note written via handlers (self-contained)', async () => {
     // Own note + unique term — no dependency on other tests' mutations.
     const p = path.join(vault, 'Rocket.md')
-    await invoke('file:create', { filePath: p, content: '# Rocket\n\nMesin roket bertenaga nuklir.' })
+    await invoke('file:create', {
+      filePath: p,
+      content: '# Rocket\n\nMesin roket bertenaga nuklir.'
+    })
     const results = (await invoke('search:query', { query: 'nuklir', limit: 10 })) as Array<{
       path: string
     }>

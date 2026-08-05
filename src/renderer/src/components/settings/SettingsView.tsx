@@ -3,6 +3,21 @@ import { applyTheme, getCachedThemePref, type ThemePreference } from '../../util
 
 type Section = 'ai' | 'appearance' | 'index' | 'security' | 'automation' | 'plugins' | 'about'
 
+const DAYS_ID = ['Min', 'Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab']
+
+const DEFAULT_RULE_DRAFT = {
+  name: '',
+  mode: 'interval' as 'interval' | 'daily',
+  every: 30,
+  unit: 'minutes',
+  atTime: '09:00',
+  days: [] as number[],
+  action: 'log',
+  message: 'Scheduled run {{date}} {{time}}',
+  appendPath: 'Daily/{{date}}.md',
+  appendContent: '- Scheduled {{time}}\n'
+}
+
 export const SettingsView: React.FC = () => {
   const [providers, setProviders] = useState<
     {
@@ -48,10 +63,15 @@ export const SettingsView: React.FC = () => {
         id: string
         name: string
         enabled: boolean
-        trigger: { type: string; match?: string }
+        trigger: {
+          type: string
+          match?: string
+          schedule?: { every?: number; unit?: string; atTime?: string; daysOfWeek?: number[] }
+        }
       }[]
     }
     logs: { at: string; ruleId: string; message: string; ok: boolean }[]
+    schedule?: { running: boolean; nextFire: string | null }
   } | null>(null)
   const [plugins, setPlugins] = useState<
     {
@@ -61,6 +81,7 @@ export const SettingsView: React.FC = () => {
       enabled: boolean
       description?: string
       commands: number
+      js?: boolean
     }[]
   >([])
   const [pluginCmds, setPluginCmds] = useState<
@@ -68,22 +89,23 @@ export const SettingsView: React.FC = () => {
       id: string
       title: string
       pluginName: string
+      pluginId: string
       action: string
       args?: Record<string, string>
     }[]
   >([])
   const [health, setHealth] = useState<Record<string, unknown> | null>(null)
+  const [semanticContext, setSemanticContext] = useState(true)
+  const [trashEnabled, setTrashEnabled] = useState(true)
+  const [showAddRule, setShowAddRule] = useState(false)
+  const [draft, setDraft] = useState({ ...DEFAULT_RULE_DRAFT })
 
-  useEffect(() => {
-    loadAll()
-  }, [])
-
-  const flash = (msg: string) => {
+  const flash = (msg: string): void => {
     setSavedStatus(msg)
     setTimeout(() => setSavedStatus(''), 3000)
   }
 
-  const loadAll = async () => {
+  const loadAll = async (): Promise<void> => {
     const list = await window.api.getAIProviders()
     setProviders(list || [])
     try {
@@ -91,6 +113,8 @@ export const SettingsView: React.FC = () => {
         ai?: Record<string, { apiKey?: string; baseUrl?: string }>
         theme?: 'dark' | 'light' | 'system'
         permissions?: typeof permissions
+        semanticContext?: boolean
+        trashEnabled?: boolean
       }
       if (settings?.ai) {
         const urls: Record<string, string> = {}
@@ -109,6 +133,8 @@ export const SettingsView: React.FC = () => {
       if (settings?.permissions) {
         setPermissions((p) => ({ ...p, ...settings.permissions }))
       }
+      setSemanticContext(settings?.semanticContext !== false)
+      setTrashEnabled(settings?.trashEnabled !== false)
       setIndexStats(await window.api.getSearchStats())
       setEmbeddingStatus(await window.api.getEmbeddingStatus())
       setSecStatus(await window.api.getSecurityStatus())
@@ -121,7 +147,15 @@ export const SettingsView: React.FC = () => {
     }
   }
 
-  const handleSaveKey = async (providerId: string) => {
+  // Mount-only load; loadAll identity changes every render and including it
+  // would re-fetch on every keystroke.
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- one-shot bootstrap
+    void loadAll()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const handleSaveKey = async (providerId: string): Promise<void> => {
     const key = apiKeys[providerId]?.trim()
     const baseUrl = baseUrls[providerId]?.trim()
     // Key is masked in the UI — leaving it blank keeps the stored key (if any).
@@ -151,7 +185,7 @@ export const SettingsView: React.FC = () => {
     }
   }
 
-  const handleTest = async (providerId: string) => {
+  const handleTest = async (providerId: string): Promise<void> => {
     flash(`Testing ${providerId}…`)
     try {
       // BUGFIX: testProvider(id) already targets that provider — don't mutate global active
@@ -167,7 +201,7 @@ export const SettingsView: React.FC = () => {
     }
   }
 
-  const handleSetDefault = async (providerId: string) => {
+  const handleSetDefault = async (providerId: string): Promise<void> => {
     try {
       await window.api.setActiveAIProvider(providerId)
       flash(`Default provider: ${providerId}`)
@@ -177,7 +211,7 @@ export const SettingsView: React.FC = () => {
     }
   }
 
-  const handleTheme = async (t: ThemePreference) => {
+  const handleTheme = async (t: ThemePreference): Promise<void> => {
     setTheme(t)
     applyTheme(t)
     try {
@@ -190,7 +224,7 @@ export const SettingsView: React.FC = () => {
     }
   }
 
-  const savePermissions = async (next: typeof permissions) => {
+  const savePermissions = async (next: typeof permissions): Promise<void> => {
     setPermissions(next)
     const settings = ((await window.api.getSettings()) as Record<string, unknown>) || {}
     settings.permissions = next
@@ -199,7 +233,25 @@ export const SettingsView: React.FC = () => {
     await loadAll()
   }
 
-  const handleRebuildIndex = async () => {
+  const saveTrashEnabled = async (enabled: boolean): Promise<void> => {
+    setTrashEnabled(enabled)
+    const settings = ((await window.api.getSettings()) as Record<string, unknown>) || {}
+    settings.trashEnabled = enabled
+    await window.api.saveSettings(settings)
+    flash(enabled ? 'Trash (soft-delete) enabled' : 'Trash disabled — delete menghapus permanen')
+  }
+
+  const saveSemanticContext = async (enabled: boolean): Promise<void> => {
+    setSemanticContext(enabled)
+    const settings = ((await window.api.getSettings()) as Record<string, unknown>) || {}
+    settings.semanticContext = enabled
+    await window.api.saveSettings(settings)
+    flash(
+      enabled ? 'Semantic context aktif' : 'Semantic context nonaktif — AI hanya pakai FTS + graph'
+    )
+  }
+
+  const handleRebuildIndex = async (): Promise<void> => {
     setRebuilding(true)
     try {
       const res = await window.api.rebuildSearchIndex()
@@ -210,7 +262,7 @@ export const SettingsView: React.FC = () => {
     }
   }
 
-  const toggleRule = async (ruleId: string, enabled: boolean) => {
+  const toggleRule = async (ruleId: string, enabled: boolean): Promise<void> => {
     if (!automation) return
     const config = {
       ...automation.config,
@@ -219,6 +271,72 @@ export const SettingsView: React.FC = () => {
     await window.api.saveAutomation(config)
     setAutomation(await window.api.getAutomation())
     flash(enabled ? 'Rule enabled' : 'Rule disabled')
+  }
+
+  const describeSchedule = (
+    s:
+      | {
+          every?: number
+          unit?: string
+          atTime?: string
+          daysOfWeek?: number[]
+        }
+      | undefined
+  ): string => {
+    if (!s) return ''
+    const parts: string[] = []
+    if (s.atTime) parts.push(`harian ${s.atTime}`)
+    else if (s.every && s.every > 0) {
+      const u = s.unit === 'hours' ? 'jam' : s.unit === 'days' ? 'hari' : 'menit'
+      parts.push(`setiap ${s.every} ${u}`)
+    }
+    const list = s.daysOfWeek
+    if (list && list.length > 0 && list.length < 7) {
+      const sorted = [...list].sort((a, b) => a - b)
+      if (sorted.length >= 2 && sorted[sorted.length - 1] - sorted[0] === sorted.length - 1) {
+        parts.push(`${DAYS_ID[sorted[0]]}–${DAYS_ID[sorted[sorted.length - 1]]}`)
+      } else {
+        parts.push(sorted.map((d) => DAYS_ID[d]).join(', '))
+      }
+    }
+    return parts.join(' · ') || 'setiap hari'
+  }
+
+  const addScheduleRule = async (): Promise<void> => {
+    if (!automation || !draft.name.trim()) return
+    const rule = {
+      id: `sched-${Date.now().toString(36)}`,
+      name: draft.name.trim(),
+      enabled: true,
+      trigger: {
+        type: 'schedule',
+        schedule: {
+          ...(draft.mode === 'daily'
+            ? { atTime: draft.atTime || '09:00' }
+            : { every: draft.every || 30, unit: draft.unit }),
+          ...(draft.days.length > 0 ? { daysOfWeek: [...draft.days].sort((a, b) => a - b) } : {})
+        }
+      },
+      actions: [
+        draft.action === 'log'
+          ? { type: 'log', message: draft.message || 'Scheduled {{date}} {{time}}' }
+          : {
+              type: 'append_to_note',
+              path: draft.appendPath || 'Daily/{{date}}.md',
+              content: draft.appendContent || '- Scheduled {{time}}\n'
+            }
+      ]
+    }
+    const config = { ...automation.config, rules: [...automation.config.rules, rule] }
+    const res = await window.api.saveAutomation(config)
+    if (res.ok) {
+      flash(`Rule "${draft.name}" dibuat`)
+      setShowAddRule(false)
+      setDraft({ ...DEFAULT_RULE_DRAFT })
+    } else {
+      flash(res.error || 'Gagal membuat rule')
+    }
+    setAutomation(await window.api.getAutomation())
   }
 
   const nav: { id: Section; label: string }[] = [
@@ -469,18 +587,57 @@ export const SettingsView: React.FC = () => {
                 Model:{' '}
                 <strong
                   style={{
-                    color: embeddingStatus?.modelReady ? 'var(--color-success)' : 'var(--text-muted)'
+                    color: embeddingStatus?.modelReady
+                      ? 'var(--color-success)'
+                      : 'var(--text-muted)'
                   }}
                 >
                   {embeddingStatus?.modelReady ? 'ready' : 'not loaded'}
                 </strong>{' '}
-                · {embeddingStatus?.totalChunks ?? 0} chunks ·{' '}
-                {embeddingStatus?.indexedFiles ?? 0} files
+                · {embeddingStatus?.totalChunks ?? 0} chunks · {embeddingStatus?.indexedFiles ?? 0}{' '}
+                files
               </div>
               <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
                 Dipakai Context AI (semantic recall) saat vault terbuka.
               </div>
             </div>
+
+            <label
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                marginBottom: 12,
+                fontSize: 'var(--text-sm)',
+                cursor: 'pointer'
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={semanticContext}
+                onChange={(e) => void saveSemanticContext(e.target.checked)}
+              />
+              Semantic context (AI pakai vector search untuk konteks)
+            </label>
+
+            <label
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                marginBottom: 16,
+                fontSize: 'var(--text-sm)',
+                cursor: 'pointer'
+              }}
+            >
+              <input
+                type="checkbox"
+                checked={trashEnabled}
+                onChange={(e) => void saveTrashEnabled(e.target.checked)}
+              />
+              Trash (soft-delete) — hapus pindah ke .trash dulu
+            </label>
+
             <button
               className="btn btn-primary btn-sm"
               onClick={handleRebuildIndex}
@@ -511,7 +668,7 @@ export const SettingsView: React.FC = () => {
                 ['aiAccess', 'AI access (network providers)'],
                 ['aiTools', 'AI worker tools (search/read/write proposals)'],
                 ['automation', 'Automation rules'],
-                ['plugins', 'Declarative plugins']
+                ['plugins', 'Plugins (declarative + JS sandbox)']
               ] as const
             ).map(([key, label]) => (
               <label
@@ -535,7 +692,7 @@ export const SettingsView: React.FC = () => {
             ))}
             <p style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 12 }}>
               AI write selalu butuh konfirmasi Apply (aiAutoWrite tetap off). Path di luar vault
-              ditolak.
+              ditolak. Plugin JS jalan di sandbox vm + worker; operasi tulis butuh prompt izin.
             </p>
           </div>
         )}
@@ -571,6 +728,30 @@ export const SettingsView: React.FC = () => {
               />
               Engine enabled
             </label>
+            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 16 }}>
+              Scheduler:{' '}
+              <b
+                style={{
+                  color: automation?.schedule?.running
+                    ? 'var(--color-success)'
+                    : 'var(--color-error)'
+                }}
+              >
+                {automation?.schedule?.running ? 'aktif' : 'berhenti'}
+              </b>
+              {automation?.schedule?.nextFire ? (
+                <>
+                  {' '}
+                  · next{' '}
+                  <b>
+                    {new Date(automation.schedule.nextFire).toLocaleTimeString([], {
+                      hour: '2-digit',
+                      minute: '2-digit'
+                    })}
+                  </b>
+                </>
+              ) : null}
+            </div>
             {(automation?.config.rules || []).map((r) => (
               <div
                 key={r.id}
@@ -588,8 +769,16 @@ export const SettingsView: React.FC = () => {
                 <div style={{ minWidth: 0 }}>
                   <div style={{ fontWeight: 600, fontSize: 'var(--text-sm)' }}>{r.name}</div>
                   <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-                    {r.trigger.type}
-                    {r.trigger.match ? ` · ${r.trigger.match}` : ''}
+                    {r.trigger.type === 'schedule' ? (
+                      <span style={{ color: 'var(--color-primary)' }}>
+                        ⏰ {describeSchedule(r.trigger.schedule)}
+                      </span>
+                    ) : (
+                      <>
+                        {r.trigger.type}
+                        {r.trigger.match ? ` · ${r.trigger.match}` : ''}
+                      </>
+                    )}
                   </div>
                 </div>
                 <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
@@ -615,6 +804,147 @@ export const SettingsView: React.FC = () => {
                 </div>
               </div>
             ))}
+            <button
+              className="btn btn-surface btn-sm"
+              style={{ marginTop: 4 }}
+              onClick={() => setShowAddRule((v) => !v)}
+            >
+              {showAddRule ? 'Batal' : '+ Tambah rule terjadwal'}
+            </button>
+            {showAddRule && (
+              <div
+                style={{
+                  background: 'var(--bg-surface)',
+                  padding: 12,
+                  borderRadius: 6,
+                  marginTop: 8,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 10
+                }}
+              >
+                <input
+                  className="input"
+                  placeholder="Nama rule"
+                  value={draft.name}
+                  onChange={(e) => setDraft({ ...draft, name: e.target.value })}
+                />
+                <div style={{ display: 'flex', gap: 6 }}>
+                  {(['interval', 'daily'] as const).map((m) => (
+                    <button
+                      key={m}
+                      className={`btn btn-sm ${draft.mode === m ? 'btn-primary' : 'btn-surface'}`}
+                      onClick={() => setDraft({ ...draft, mode: m })}
+                    >
+                      {m === 'interval' ? 'Interval' : 'Harian (jam)'}
+                    </button>
+                  ))}
+                </div>
+                {draft.mode === 'interval' ? (
+                  <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                    <input
+                      className="input"
+                      type="number"
+                      min={1}
+                      value={draft.every}
+                      onChange={(e) => setDraft({ ...draft, every: Number(e.target.value) || 1 })}
+                      style={{ width: 70 }}
+                    />
+                    <select
+                      className="input"
+                      value={draft.unit}
+                      onChange={(e) => setDraft({ ...draft, unit: e.target.value })}
+                    >
+                      <option value="minutes">menit</option>
+                      <option value="hours">jam</option>
+                      <option value="days">hari</option>
+                    </select>
+                  </div>
+                ) : (
+                  <input
+                    className="input"
+                    type="time"
+                    value={draft.atTime}
+                    onChange={(e) => setDraft({ ...draft, atTime: e.target.value })}
+                    style={{ width: 120 }}
+                  />
+                )}
+                <div>
+                  <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 4 }}>
+                    Hari (kosong = setiap hari)
+                  </div>
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                    {DAYS_ID.map((label, i) => (
+                      <label
+                        key={label}
+                        style={{
+                          fontSize: 11,
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 2,
+                          cursor: 'pointer'
+                        }}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={draft.days.includes(i)}
+                          onChange={(e) =>
+                            setDraft({
+                              ...draft,
+                              days: e.target.checked
+                                ? [...draft.days, i]
+                                : draft.days.filter((d) => d !== i)
+                            })
+                          }
+                        />
+                        {label}
+                      </label>
+                    ))}
+                  </div>
+                </div>
+                <div style={{ display: 'flex', gap: 6 }}>
+                  {(['log', 'append_to_note'] as const).map((a) => (
+                    <button
+                      key={a}
+                      className={`btn btn-sm ${draft.action === a ? 'btn-primary' : 'btn-surface'}`}
+                      onClick={() => setDraft({ ...draft, action: a })}
+                    >
+                      {a === 'log' ? 'Log' : 'Append ke catatan'}
+                    </button>
+                  ))}
+                </div>
+                {draft.action === 'log' ? (
+                  <input
+                    className="input"
+                    placeholder="Pesan ({{date}} {{time}} {{workspace}})"
+                    value={draft.message}
+                    onChange={(e) => setDraft({ ...draft, message: e.target.value })}
+                  />
+                ) : (
+                  <>
+                    <input
+                      className="input"
+                      placeholder="Path (mis. Daily/{{date}}.md)"
+                      value={draft.appendPath}
+                      onChange={(e) => setDraft({ ...draft, appendPath: e.target.value })}
+                    />
+                    <input
+                      className="input"
+                      placeholder="Konten"
+                      value={draft.appendContent}
+                      onChange={(e) => setDraft({ ...draft, appendContent: e.target.value })}
+                    />
+                  </>
+                )}
+                <button
+                  className="btn btn-primary btn-sm"
+                  disabled={!draft.name.trim()}
+                  onClick={() => void addScheduleRule()}
+                >
+                  Simpan rule
+                </button>
+              </div>
+            )}
             <div className="section-title" style={{ marginTop: 16 }}>
               Recent logs
             </div>
@@ -631,7 +961,7 @@ export const SettingsView: React.FC = () => {
 
         {section === 'plugins' && (
           <div className="settings-section">
-            <h2>Plugins (declarative)</h2>
+            <h2>Plugins</h2>
             <p
               style={{
                 fontSize: 'var(--text-sm)',
@@ -639,7 +969,8 @@ export const SettingsView: React.FC = () => {
                 marginBottom: 12
               }}
             >
-              <code>.workspacegraph/plugins/*/manifest.json</code> — no arbitrary JS execution.
+              <code>.workspacegraph/plugins/*/manifest.json</code> — declarative commands; plugin
+              dengan <code>main</code> berjalan di sandbox JS (vm + worker, izin per operasi tulis).
             </p>
             <button
               className="btn btn-surface btn-sm"
@@ -662,9 +993,45 @@ export const SettingsView: React.FC = () => {
                   marginBottom: 8
                 }}
               >
-                <div style={{ fontWeight: 600, fontSize: 'var(--text-sm)' }}>
-                  {p.name}{' '}
-                  <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>v{p.version}</span>
+                <div
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: 8
+                  }}
+                >
+                  <div style={{ fontWeight: 600, fontSize: 'var(--text-sm)', minWidth: 0 }}>
+                    {p.name}{' '}
+                    <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>
+                      v{p.version}
+                    </span>
+                    {p.js && (
+                      <span
+                        className="badge"
+                        style={{
+                          background: 'var(--color-primary)',
+                          color: '#fff',
+                          marginLeft: 6
+                        }}
+                        title="Plugin JS berjalan di sandbox (vm + worker), operasi tulis butuh izin"
+                      >
+                        JS sandbox
+                      </span>
+                    )}
+                  </div>
+                  {p.js && (
+                    <button
+                      className="btn btn-ghost btn-sm"
+                      style={{ fontSize: 10, flexShrink: 0 }}
+                      onClick={async () => {
+                        await window.api.revokePluginPermissions(p.id)
+                        flash(`Izin ${p.name} di-reset — prompt muncul lagi`)
+                      }}
+                    >
+                      Reset izin
+                    </button>
+                  )}
                 </div>
                 <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
                   {p.description || p.id} · {p.commands} commands ·{' '}
@@ -698,6 +1065,19 @@ export const SettingsView: React.FC = () => {
                         title: c.args.title || 'New'
                       })
                       .then((r) => flash(r.ok ? `Created ${r.relativePath}` : r.error || 'Failed'))
+                  } else if (c.action === 'js') {
+                    void window.api.runPluginCommand(c.pluginId, c.id, c.args).then((res) => {
+                      if (res.ok) {
+                        const r = res.result
+                        flash(
+                          r !== undefined && r !== null
+                            ? `OK: ${typeof r === 'object' ? JSON.stringify(r) : String(r)}`
+                            : `OK: ${c.title}`
+                        )
+                      } else {
+                        flash(res.error || 'Plugin gagal')
+                      }
+                    })
                   }
                 }}
               >

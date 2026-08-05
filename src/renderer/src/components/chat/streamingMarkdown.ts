@@ -62,7 +62,7 @@ function renderInline(text: string): string {
       const i = slots.length
       // Values already escaped — do not double-escape (would corrupt &amp;)
       slots.push(`<a href="${url}" target="_blank" rel="noopener noreferrer">${label}</a>`)
-      return `\u0000L${i}\u0000`
+      return `\uE000L${i}\uE000`
     }
   )
   s = s.replace(/`([^`\n]+?)`/g, '<code>$1</code>')
@@ -80,7 +80,7 @@ function renderInline(text: string): string {
     (_m, target: string, alias?: string) =>
       `<span class="wiki-link" data-target="${target.trim()}">${(alias || target).trim()}</span>`
   )
-  s = s.replace(/\u0000L(\d+)\u0000/g, (_m, i: string) => slots[Number(i)] || '')
+  s = s.replace(/\uE000L(\d+)\uE000/g, (_m, i: string) => slots[Number(i)] || '')
   return s
 }
 

@@ -23,6 +23,20 @@ export function registerPluginsHandlers(): void {
     return { ok: true, count: pluginHost.list().length }
   })
 
+  ipcMain.handle(
+    'plugins:runCommand',
+    async (_, payload: { pluginId: string; commandId: string; args?: Record<string, unknown> }) => {
+      const perms = readPermissions(workspaceEngine.getSettings())
+      if (!perms.plugins) return { ok: false, error: 'Plugin permission disabled' }
+      return pluginHost.runCommand(payload.pluginId, payload.commandId, payload.args || {})
+    }
+  )
+
+  ipcMain.handle('plugins:revoke', async (_, pluginId: string) => {
+    pluginHost.revokePermissions(pluginId)
+    return { ok: true }
+  })
+
   // --- Platform API health ---
   ipcMain.handle('api:health', async () => {
     return InternalAPI.health()

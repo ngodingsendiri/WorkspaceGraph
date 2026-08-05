@@ -210,8 +210,10 @@ export const CommandPalette: React.FC<{
   const inputRef = useRef<HTMLInputElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
 
+  // Reset palette state each time it opens.
   useEffect(() => {
     if (!isOpen) return
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setQuery('')
     setMode(initialMode)
     setSelected(0)
@@ -244,9 +246,7 @@ export const CommandPalette: React.FC<{
     const q = query.trim().toLowerCase()
     if (!q) return actions
     return actions.filter(
-      (a) =>
-        a.title.toLowerCase().includes(q) ||
-        (a.keywords || '').toLowerCase().includes(q)
+      (a) => a.title.toLowerCase().includes(q) || (a.keywords || '').toLowerCase().includes(q)
     )
   }, [actions, query])
 
@@ -260,7 +260,9 @@ export const CommandPalette: React.FC<{
     return [...map.entries()]
   }, [filtered])
 
+  // Keep the highlighted row in range when the filtered list shrinks.
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- clamp selection on filter change
     setSelected(0)
   }, [query, mode])
 

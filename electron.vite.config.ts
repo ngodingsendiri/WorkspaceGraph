@@ -11,6 +11,7 @@ export default defineConfig({
           index: resolve('src/main/index.ts'),
           'workers/embedding.worker': resolve('src/main/workers/embedding.worker.ts'),
           'workers/search-index.worker': resolve('src/main/workers/search-index.worker.ts'),
+          'workers/js-plugin.worker': resolve('src/main/plugin/js-plugin.worker.ts'),
         },
       },
     },

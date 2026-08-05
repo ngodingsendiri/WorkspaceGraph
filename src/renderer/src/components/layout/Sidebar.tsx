@@ -40,8 +40,9 @@ const FileTreeItemNode = memo(function FileTreeItemNode({
 }: FileTreeItemProps) {
   const [isOpen, setIsOpen] = useState(depth < 2)
   const isActive = Boolean(activeNormPath && normPath(item.path) === activeNormPath)
+  const isInTrash = item.relativePath.startsWith('.trash')
 
-  const handleClick = () => {
+  const handleClick = (): void => {
     if (item.isDirectory) {
       setIsOpen(!isOpen)
     } else {
@@ -52,7 +53,7 @@ const FileTreeItemNode = memo(function FileTreeItemNode({
   return (
     <div>
       <div
-        className={`file-tree-item ${isActive ? 'active' : ''}`}
+        className={`file-tree-item ${isActive ? 'active' : ''} ${isInTrash ? 'is-trash' : ''}`}
         style={{ '--depth': depth } as React.CSSProperties}
         onClick={handleClick}
         onContextMenu={(e) => onContextMenu(e, item)}
@@ -68,7 +69,7 @@ const FileTreeItemNode = memo(function FileTreeItemNode({
             }}
           />
         ) : (
-          <Icon name="file" size={14} style={{ opacity: 0.65 }} />
+          <Icon name={isInTrash ? 'trash' : 'file'} size={14} style={{ opacity: 0.65 }} />
         )}
         <span className="truncate">{item.name}</span>
       </div>
@@ -106,13 +107,11 @@ const NavGroup: React.FC<{ title: string; children: React.ReactNode }> = ({ titl
 
 export const Sidebar: React.FC<{ onOpenSearch: () => void }> = ({ onOpenSearch }) => {
   const { files, rootPath, setActiveView, activeView, fetchState } = useWorkspaceStore()
-  const { width: sidebarWidth, onHandleMouseDown: sidebarResize, resizing } = usePanelWidth(
-    'wg.sidebarWidth',
-    260,
-    200,
-    480,
-    (x) => x
-  )
+  const {
+    width: sidebarWidth,
+    onHandleMouseDown: sidebarResize,
+    resizing
+  } = usePanelWidth('wg.sidebarWidth', 260, 200, 480, (x) => x)
   const openTab = useEditorStore((s) => s.openTab)
   // Only re-render tree highlight when active path changes — not on every keystroke
   const activeNormPath = useEditorStore((s) => {
@@ -128,18 +127,29 @@ export const Sidebar: React.FC<{ onOpenSearch: () => void }> = ({ onOpenSearch }
   )
   const [ctx, setCtx] = useState<CtxMenu | null>(null)
   const [tplOpen, setTplOpen] = useState(false)
+  const [trashEnabled, setTrashEnabled] = useState(true)
   const menuRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
+    window.api
+      .getSettings()
+      .then((s) => {
+        if (s && typeof s === 'object' && 'trashEnabled' in s)
+          setTrashEnabled(s.trashEnabled !== false)
+      })
+      .catch(() => {})
+  }, [])
+
+  useEffect(() => {
     if (!ctx) return
-    const close = (e: MouseEvent) => {
+    const close = (e: MouseEvent): void => {
       if (menuRef.current && !menuRef.current.contains(e.target as Node)) setCtx(null)
     }
     window.addEventListener('mousedown', close)
     return () => window.removeEventListener('mousedown', close)
   }, [ctx])
 
-  const handleNewNote = async (folderPath?: string) => {
+  const handleNewNote = async (folderPath?: string): Promise<void> => {
     if (!rootPath) return
     const base = folderPath || `${rootPath}${rootPath.includes('\\') ? '\\' : '/'}Knowledge`
     const stamp = Date.now().toString().slice(-4)
@@ -152,14 +162,21 @@ export const Sidebar: React.FC<{ onOpenSearch: () => void }> = ({ onOpenSearch }
     setCtx(null)
   }
 
-  const handleNewFolder = async (parentPath?: string) => {
+  const handleNewFolder = async (parentPath?: string): Promise<void> => {
     if (!rootPath) return
-    const name = await promptDialog({ title: 'Folder baru', message: 'Nama folder baru:', placeholder: 'Nama folder' })
+    const name = await promptDialog({
+      title: 'Folder baru',
+      message: 'Nama folder baru:',
+      placeholder: 'Nama folder'
+    })
     if (!name?.trim()) return
     const clean = name.trim()
     // Reject path segments that would create nested escapes (../, a/b, …)
     if (/[/\\]/.test(clean) || clean === '.' || clean === '..') {
-      await alertDialog({ title: 'Nama tidak valid', message: 'Nama folder tidak boleh mengandung / \\ atau ..' })
+      await alertDialog({
+        title: 'Nama tidak valid',
+        message: 'Nama folder tidak boleh mengandung / \\ atau ..'
+      })
       return
     }
     const base = parentPath || rootPath
@@ -168,12 +185,15 @@ export const Sidebar: React.FC<{ onOpenSearch: () => void }> = ({ onOpenSearch }
       await window.api.createFolder(`${base}${sep}${clean}`)
       await fetchState()
     } catch (err) {
-      await alertDialog({ title: 'Gagal membuat folder', message: err instanceof Error ? err.message : String(err) })
+      await alertDialog({
+        title: 'Gagal membuat folder',
+        message: err instanceof Error ? err.message : String(err)
+      })
     }
     setCtx(null)
   }
 
-  const handleRename = async (item: FileItem) => {
+  const handleRename = async (item: FileItem): Promise<void> => {
     const next = await promptDialog({
       title: 'Ubah nama',
       message: 'Nama baru:',
@@ -186,7 +206,10 @@ export const Sidebar: React.FC<{ onOpenSearch: () => void }> = ({ onOpenSearch }
     }
     const clean = next.trim()
     if (/[/\\]/.test(clean) || clean === '.' || clean === '..') {
-      await alertDialog({ title: 'Nama tidak valid', message: 'Nama tidak boleh mengandung / \\ atau ..' })
+      await alertDialog({
+        title: 'Nama tidak valid',
+        message: 'Nama tidak boleh mengandung / \\ atau ..'
+      })
       setCtx(null)
       return
     }
@@ -221,12 +244,16 @@ export const Sidebar: React.FC<{ onOpenSearch: () => void }> = ({ onOpenSearch }
     setCtx(null)
   }
 
-  const handleDelete = async (item: FileItem) => {
+  const handleDelete = async (item: FileItem, permanent = false): Promise<void> => {
     const ok = await confirmDialog({
-      title: 'Hapus?',
-      message: `Hapus "${item.name}"?${item.isDirectory ? ' (termasuk isinya)' : ''}`,
+      title: permanent ? 'Hapus permanen?' : 'Hapus?',
+      message: permanent
+        ? `Hapus "${item.name}" secara permanen? Tidak bisa dipulihkan.`
+        : trashEnabled
+          ? `Pindahkan "${item.name}" ke .trash?${item.isDirectory ? ' (termasuk isinya)' : ''} Bisa dipulihkan nanti.`
+          : `Hapus "${item.name}"?${item.isDirectory ? ' (termasuk isinya)' : ''}`,
       danger: true,
-      okLabel: 'Hapus'
+      okLabel: permanent ? 'Hapus permanen' : trashEnabled ? 'Pindah ke trash' : 'Hapus'
     })
     if (!ok) {
       setCtx(null)
@@ -235,21 +262,70 @@ export const Sidebar: React.FC<{ onOpenSearch: () => void }> = ({ onOpenSearch }
     try {
       // Discard editor tabs first (cancels autosave) so delete is not undone by a late write
       useEditorStore.getState().discardTabsUnder(item.path)
-      await window.api.deleteFile(item.path)
+      const result = await window.api.deleteFile(item.path)
       await fetchState()
+      if (result && typeof result === 'object' && result.trashed) {
+        toast('🗑 Dipindah ke .trash — klik kanan di sana untuk pulihkan', { variant: 'success' })
+      }
     } catch (err) {
-      await alertDialog({ title: 'Gagal menghapus', message: err instanceof Error ? err.message : String(err) })
+      await alertDialog({
+        title: 'Gagal menghapus',
+        message: err instanceof Error ? err.message : String(err)
+      })
     }
     setCtx(null)
   }
 
-  const onContextMenu = (e: React.MouseEvent, item: FileItem) => {
+  const handleRestore = async (item: FileItem): Promise<void> => {
+    try {
+      const result = await window.api.restoreFile(item.path)
+      await fetchState()
+      if (result && typeof result === 'object' && result.path) {
+        toast(`↩️ Dipulihkan ke ${result.path.split(/[/\\]/).pop()}`, { variant: 'success' })
+      }
+    } catch (err) {
+      await alertDialog({
+        title: 'Gagal memulihkan',
+        message: err instanceof Error ? err.message : String(err)
+      })
+    }
+    setCtx(null)
+  }
+
+  const handleEmptyTrash = async (item: FileItem): Promise<void> => {
+    const ok = await confirmDialog({
+      title: 'Kosongkan trash?',
+      message: 'Semua file di .trash akan dihapus permanen. Tidak bisa dipulihkan.',
+      danger: true,
+      okLabel: 'Kosongkan'
+    })
+    if (!ok) {
+      setCtx(null)
+      return
+    }
+    try {
+      useEditorStore.getState().discardTabsUnder(item.path)
+      const result = await window.api.emptyTrash()
+      await fetchState()
+      toast(
+        `🧹 Trash dikosongkan (${result && typeof result === 'object' ? (result.count ?? 0) : 0} file)`
+      )
+    } catch (err) {
+      await alertDialog({
+        title: 'Gagal mengosongkan trash',
+        message: err instanceof Error ? err.message : String(err)
+      })
+    }
+    setCtx(null)
+  }
+
+  const onContextMenu = (e: React.MouseEvent, item: FileItem): void => {
     e.preventDefault()
     e.stopPropagation()
     setCtx({ x: e.clientX, y: e.clientY, item })
   }
 
-  const onTreeBackgroundContext = (e: React.MouseEvent) => {
+  const onTreeBackgroundContext = (e: React.MouseEvent): void => {
     e.preventDefault()
     if (!rootPath) return
     setCtx({
@@ -402,31 +478,66 @@ export const Sidebar: React.FC<{ onOpenSearch: () => void }> = ({ onOpenSearch }
           style={{ position: 'fixed', left: ctx.x, top: ctx.y, zIndex: 9999 }}
           onContextMenu={(e) => e.preventDefault()}
         >
-          {ctx.item.isDirectory && (
-            <>
-              <button type="button" onClick={() => handleNewNote(ctx.item.path)}>
-                Note baru di sini
-              </button>
-              <button type="button" onClick={() => handleNewFolder(ctx.item.path)}>
-                Folder baru
-              </button>
-            </>
-          )}
-          {ctx.item.id !== 'root' && (
-            <>
-              <button type="button" onClick={() => handleRename(ctx.item)}>
-                Ubah nama
-              </button>
-              <button type="button" className="danger" onClick={() => handleDelete(ctx.item)}>
-                Hapus
-              </button>
-            </>
-          )}
-          {ctx.item.id === 'root' && (
-            <button type="button" onClick={() => handleNewNote()}>
-              Note baru di Knowledge
-            </button>
-          )}
+          {(() => {
+            const isTrashRoot = ctx.item.name === '.trash' && ctx.item.isDirectory
+            const isInTrash = ctx.item.relativePath.startsWith('.trash')
+            if (isTrashRoot) {
+              return (
+                <button
+                  type="button"
+                  className="danger"
+                  onClick={() => void handleEmptyTrash(ctx.item)}
+                >
+                  Kosongkan trash
+                </button>
+              )
+            }
+            if (isInTrash) {
+              return (
+                <>
+                  <button type="button" onClick={() => handleRestore(ctx.item)}>
+                    Pulihkan
+                  </button>
+                  <button
+                    type="button"
+                    className="danger"
+                    onClick={() => handleDelete(ctx.item, true)}
+                  >
+                    Hapus permanen
+                  </button>
+                </>
+              )
+            }
+            return (
+              <>
+                {ctx.item.isDirectory && (
+                  <>
+                    <button type="button" onClick={() => handleNewNote(ctx.item.path)}>
+                      Note baru di sini
+                    </button>
+                    <button type="button" onClick={() => handleNewFolder(ctx.item.path)}>
+                      Folder baru
+                    </button>
+                  </>
+                )}
+                {ctx.item.id !== 'root' && (
+                  <>
+                    <button type="button" onClick={() => handleRename(ctx.item)}>
+                      Ubah nama
+                    </button>
+                    <button type="button" className="danger" onClick={() => handleDelete(ctx.item)}>
+                      Hapus
+                    </button>
+                  </>
+                )}
+                {ctx.item.id === 'root' && (
+                  <button type="button" onClick={() => handleNewNote()}>
+                    Note baru di Knowledge
+                  </button>
+                )}
+              </>
+            )
+          })()}
         </div>
       )}
     </div>

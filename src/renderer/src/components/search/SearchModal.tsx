@@ -25,8 +25,10 @@ export const SearchModal: React.FC<{ isOpen: boolean; onClose: () => void }> = (
   const inputRef = useRef<HTMLInputElement>(null)
   const itemRefs = useRef<(HTMLDivElement | null)[]>([])
 
+  // Reset selection + focus when the modal opens.
   useEffect(() => {
     if (!isOpen) return
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- reset-on-open pattern
     setSelectedIndex(0)
     setTimeout(() => inputRef.current?.focus(), 0)
   }, [isOpen])
@@ -38,7 +40,7 @@ export const SearchModal: React.FC<{ isOpen: boolean; onClose: () => void }> = (
 
   // Prefill from dashboard (tags / orphan)
   useEffect(() => {
-    const onPrefill = (e: Event) => {
+    const onPrefill = (e: Event): void => {
       const detail = (e as CustomEvent).detail as string
       if (typeof detail === 'string') setQuery(detail)
     }
@@ -49,7 +51,7 @@ export const SearchModal: React.FC<{ isOpen: boolean; onClose: () => void }> = (
   useEffect(() => {
     if (!isOpen) return
     let cancelled = false
-    const fetchResults = async () => {
+    const fetchResults = async (): Promise<void> => {
       setSearching(true)
       try {
         if (!query.trim()) {
@@ -72,14 +74,14 @@ export const SearchModal: React.FC<{ isOpen: boolean; onClose: () => void }> = (
     }
   }, [query, isOpen])
 
-  const handleSelect = async (item: SearchResultItem) => {
+  const handleSelect = async (item: SearchResultItem): Promise<void> => {
     await openTab(item.path)
     setActiveView('editor')
     onClose()
     setQuery('')
   }
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
+  const handleKeyDown = (e: React.KeyboardEvent): void => {
     if (e.key === 'ArrowDown') {
       e.preventDefault()
       setSelectedIndex((prev) => (prev + 1) % Math.max(1, results.length))
@@ -110,7 +112,9 @@ export const SearchModal: React.FC<{ isOpen: boolean; onClose: () => void }> = (
             role="combobox"
             aria-expanded={results.length > 0}
             aria-controls="search-results-list"
-            aria-activedescendant={results[selectedIndex] ? `search-opt-${selectedIndex}` : undefined}
+            aria-activedescendant={
+              results[selectedIndex] ? `search-opt-${selectedIndex}` : undefined
+            }
             aria-label="Pencarian catatan"
             onChange={(e) => {
               setQuery(e.target.value)
@@ -121,7 +125,12 @@ export const SearchModal: React.FC<{ isOpen: boolean; onClose: () => void }> = (
           />
         </div>
 
-        <div id="search-results-list" className="search-results" role="listbox" aria-label="Hasil pencarian">
+        <div
+          id="search-results-list"
+          className="search-results"
+          role="listbox"
+          aria-label="Hasil pencarian"
+        >
           {results.length === 0 ? (
             <div
               style={{ padding: 'var(--space-6)', textAlign: 'center', color: 'var(--text-muted)' }}

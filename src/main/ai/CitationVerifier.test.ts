@@ -1,8 +1,14 @@
 import { describe, it, expect } from 'vitest'
 import { verifyCitations } from './CitationVerifier'
 
-function cite(answer: string, fileContents: Record<string, string>): ReturnType<typeof verifyCitations> {
-  const citations = Object.keys(fileContents).map((p) => ({ title: p.split('/').pop() || p, path: p }))
+function cite(
+  answer: string,
+  fileContents: Record<string, string>
+): ReturnType<typeof verifyCitations> {
+  const citations = Object.keys(fileContents).map((p) => ({
+    title: p.split('/').pop() || p,
+    path: p
+  }))
   return verifyCitations(answer, citations, (p) => fileContents[p] || '')
 }
 
@@ -48,7 +54,9 @@ describe('verifyCitations', () => {
   it('boosts supported when the answer names the cited title', () => {
     const res = cite(
       'Menurut QuantumNotes, hasil pengukuran eksperimen konsisten dengan prediksi teori dan metodologi yang diuraikan sebelumnya.',
-      { '/vault/QuantumNotes.md': 'Dokumen ini membahas resep masakan nusantara dan bahan-bahannya.' }
+      {
+        '/vault/QuantumNotes.md': 'Dokumen ini membahas resep masakan nusantara dan bahan-bahannya.'
+      }
     )
     expect(res[0].supported).toBe(true)
   })
@@ -56,7 +64,10 @@ describe('verifyCitations', () => {
   it('flags a hallucinated citation with a long confident answer', () => {
     const res = cite(
       'Rasio keuangan perusahaan naik dua kali lipat pada kuartal ketiga karena strategi ekspansi pasar internasional berhasil meningkatkan margin operasional secara signifikan.',
-      { '/vault/Catatan.md': 'Daftar belanja mingguan: telur, susu, roti, dan sayuran segar untuk kebutuhan dapur.' }
+      {
+        '/vault/Catatan.md':
+          'Daftar belanja mingguan: telur, susu, roti, dan sayuran segar untuk kebutuhan dapur.'
+      }
     )
     expect(res[0].supported).toBe(false)
     expect(res[0].score).toBeLessThan(0.08)

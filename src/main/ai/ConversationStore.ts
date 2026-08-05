@@ -127,6 +127,6 @@ export function deleteConversation(id: string): { ok: boolean; error?: string } 
 
 export function newConversationId(): string {
   const d = new Date()
-  const pad = (n: number) => String(n).padStart(2, '0')
+  const pad = (n: number): string => String(n).padStart(2, '0')
   return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}_${Math.random().toString(36).slice(2, 6)}`
 }

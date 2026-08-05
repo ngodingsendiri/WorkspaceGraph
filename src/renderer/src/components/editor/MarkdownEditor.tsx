@@ -22,12 +22,24 @@ import { livePreviewExtension, setLivePreviewOpenHandler } from './livePreviewEx
  * large notes stay plain text + Live Preview decorations (perf-safe).
  */
 const markdownHighlight = HighlightStyle.define([
-  { tag: [t.heading1, t.heading2], fontWeight: '700', color: 'var(--note-heading, var(--text-primary))' },
-  { tag: [t.heading3, t.heading4, t.heading5, t.heading6], fontWeight: '600', color: 'var(--note-heading, var(--text-primary))' },
+  {
+    tag: [t.heading1, t.heading2],
+    fontWeight: '700',
+    color: 'var(--note-heading, var(--text-primary))'
+  },
+  {
+    tag: [t.heading3, t.heading4, t.heading5, t.heading6],
+    fontWeight: '600',
+    color: 'var(--note-heading, var(--text-primary))'
+  },
   { tag: t.strong, fontWeight: '700' },
   { tag: t.emphasis, fontStyle: 'italic' },
   { tag: t.strikethrough, textDecoration: 'line-through', opacity: 0.7 },
-  { tag: t.monospace, fontFamily: 'var(--font-mono)', color: 'var(--note-code, var(--color-accent))' },
+  {
+    tag: t.monospace,
+    fontFamily: 'var(--font-mono)',
+    color: 'var(--note-code, var(--color-accent))'
+  },
   { tag: t.link, color: 'var(--color-primary)', textDecoration: 'underline' },
   { tag: t.url, color: 'var(--color-accent)' },
   { tag: t.quote, color: 'var(--text-muted)', fontStyle: 'italic' },
@@ -40,7 +52,7 @@ const markdownHighlight = HighlightStyle.define([
 ])
 /** Cache themes — recreating EditorView.theme each memo rebuild still thrashs CM facets */
 const noteShellThemeCache = new Map<boolean, ReturnType<typeof EditorView.theme>>()
-function makeNoteShellTheme(dark: boolean) {
+function makeNoteShellTheme(dark: boolean): ReturnType<typeof EditorView.theme> {
   const hit = noteShellThemeCache.get(dark)
   if (hit) return hit
   const theme = EditorView.theme(
@@ -179,7 +191,7 @@ export const MarkdownEditor: React.FC = () => {
   // Close format menu on outside click
   useEffect(() => {
     if (!formatOpen) return
-    const onDown = (e: MouseEvent) => {
+    const onDown = (e: MouseEvent): void => {
       if (formatMenuRef.current && !formatMenuRef.current.contains(e.target as Node)) {
         setFormatOpen(false)
       }
@@ -205,14 +217,14 @@ export const MarkdownEditor: React.FC = () => {
     return base
   }, [isLive, cmTheme, lpEnabled, hlEnabled])
 
-  const handleChange = (value: string) => {
+  const handleChange = (value: string): void => {
     if (!activeTabId) return
     updateContent(activeTabId, value)
     // Per-tab debounce — switching tabs no longer cancels other saves
     scheduleSave(activeTabId, 700)
   }
 
-  const insertText = (before: string, after = '') => {
+  const insertText = (before: string, after = ''): void => {
     if (!activeTabId || !activeTab) return
     const view = cmRef.current?.view
     if (view) {
@@ -235,7 +247,7 @@ export const MarkdownEditor: React.FC = () => {
   }
 
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
+    const onKey = (e: KeyboardEvent): void => {
       const mod = e.ctrlKey || e.metaKey
       if (mod && e.key.toLowerCase() === 's') {
         e.preventDefault()

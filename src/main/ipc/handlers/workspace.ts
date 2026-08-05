@@ -43,6 +43,7 @@ export function registerWorkspaceHandlers(): void {
     const perms = readPermissions(workspaceEngine.getSettings())
     automationEngine.load(root)
     automationEngine.setEnabled(perms.automation)
+    automationEngine.start()
     pluginHost.setAllowed(perms.plugins)
     pluginHost.load(root)
     if (perms.automation) {
@@ -84,6 +85,7 @@ export function registerWorkspaceHandlers(): void {
         const perms = readPermissions(workspaceEngine.getSettings())
         automationEngine.load(state.rootPath)
         automationEngine.setEnabled(perms.automation)
+        automationEngine.start()
         pluginHost.setAllowed(perms.plugins)
         pluginHost.load(state.rootPath)
         const db = indexDatabase.getDb()
@@ -102,6 +104,7 @@ export function registerWorkspaceHandlers(): void {
   ipcMain.handle('workspace:close', async () => {
     fileWatcher.stop()
     indexDatabase.close()
+    automationEngine.stop()
     automationEngine.unload()
     pluginHost.unload()
     graphEngine.clear()

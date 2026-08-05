@@ -34,7 +34,9 @@ describe('renderStreamingMarkdown', () => {
 
   it('renders safe links only (http/https/mailto)', () => {
     const html = renderStreamingMarkdown('[X](https://example.com)')
-    expect(html).toContain('<a href="https://example.com" target="_blank" rel="noopener noreferrer">X</a>')
+    expect(html).toContain(
+      '<a href="https://example.com" target="_blank" rel="noopener noreferrer">X</a>'
+    )
     // javascript: must NOT become a link
     const evil = renderStreamingMarkdown('[x](javascript:alert(1))')
     expect(evil).not.toContain('<a ')
@@ -42,7 +44,9 @@ describe('renderStreamingMarkdown', () => {
 
   it('renders wikilinks as inert spans', () => {
     const html = renderStreamingMarkdown('[[Catatan Penting]]')
-    expect(html).toContain('<span class="wiki-link" data-target="Catatan Penting">Catatan Penting</span>')
+    expect(html).toContain(
+      '<span class="wiki-link" data-target="Catatan Penting">Catatan Penting</span>'
+    )
   })
 
   it('handles CRLF input', () => {

@@ -25,7 +25,7 @@ function exists(rel: string): boolean {
 function readIpcSource(): string {
   const dir = path.join(root, 'src/main/ipc')
   let out = ''
-  const walk = (d: string) => {
+  const walk = (d: string): void => {
     for (const e of fs.readdirSync(d, { withFileTypes: true })) {
       const full = path.join(d, e.name)
       if (e.isDirectory()) walk(full)
@@ -36,8 +36,10 @@ function readIpcSource(): string {
   return out
 }
 
-const has = (haystack: string, ...needles: string[]) => needles.every((n) => haystack.includes(n))
-const hasAny = (haystack: string, ...needles: string[]) => needles.some((n) => haystack.includes(n))
+const has = (haystack: string, ...needles: string[]): boolean =>
+  needles.every((n) => haystack.includes(n))
+const hasAny = (haystack: string, ...needles: string[]): boolean =>
+  needles.some((n) => haystack.includes(n))
 
 describe('IPC surface (whole src/main/ipc dir)', () => {
   const ipc = readIpcSource()
@@ -132,13 +134,19 @@ describe('IPC surface (whole src/main/ipc dir)', () => {
     return out
   }
   // Handlers live in src/main/ipc/handlers/*, plus a few registered directly in index.ts
-  const registeredSrc = readIpcSource() + '\n' + (exists('src/main/index.ts') ? read('src/main/index.ts') : '')
+  const registeredSrc =
+    readIpcSource() + '\n' + (exists('src/main/index.ts') ? read('src/main/index.ts') : '')
   const registered = extractChannels(registeredSrc)
   const preload = read('src/preload/index.ts')
   const bridged = extractChannels(preload)
 
   it('every preload-invoked channel is registered by a main handler', () => {
-    const missing = [...bridged].filter((c) => !registered.has(c))
+    // Push-only channels (main → renderer via webContents.send): they have no
+    // ipcMain.handle by design; preload subscribes with ipcRenderer.on.
+    // embedding:progress also appears in the registered set (ai.ts is scanned),
+    // but plugin:notify lives in src/main/plugin/jsRunner.ts, outside the scan.
+    const PUSH_ONLY = new Set(['embedding:progress', 'plugin:notify'])
+    const missing = [...bridged].filter((c) => !registered.has(c) && !PUSH_ONLY.has(c))
     expect(missing).toEqual([])
   })
 
@@ -234,7 +242,9 @@ describe('Renderer wiring', () => {
     const set = read('src/renderer/src/components/settings/SettingsView.tsx')
     expect(has(set, 'testAIProvider', 'handleTest')).toBe(true)
     expect(has(set, 'configureAIProvider', 'importGrokCli')).toBe(true)
-    expect(hasAny(set, "'security'", "'automation'", 'Security', 'Automation', 'Plugins')).toBe(true)
+    expect(hasAny(set, "'security'", "'automation'", 'Security', 'Automation', 'Plugins')).toBe(
+      true
+    )
     expect(hasAny(set, 'Rebuild', 'rebuildSearchIndex')).toBe(true)
     expect(has(set, 'saveSettings', 'getSettings')).toBe(true)
   })
@@ -284,24 +294,39 @@ describe('Renderer wiring', () => {
     expect(store.includes('learnWorkspace:')).toBe(true)
   })
   it('TemplatePicker wired', () => {
-    expect(read('src/renderer/src/components/systems/TemplatePicker.tsx').includes('createFromTemplate')).toBe(true)
+    expect(
+      read('src/renderer/src/components/systems/TemplatePicker.tsx').includes('createFromTemplate')
+    ).toBe(true)
   })
   it('graphStore state + filters', () => {
     const store = read('src/renderer/src/store/graphStore.ts')
     expect(hasAny(store, 'Array.isArray(data?.nodes)', 'rawNodes')).toBe(true)
-    expect(has(store, 'tags: Array.isArray', 'saveLayoutPositions', 'loadGraphSettings', 'orphanMode', 'hubMode')).toBe(true)
+    expect(
+      has(
+        store,
+        'tags: Array.isArray',
+        'saveLayoutPositions',
+        'loadGraphSettings',
+        'orphanMode',
+        'hubMode'
+      )
+    ).toBe(true)
     expect(has(store, 'GraphOpenIntent', 'setOpenIntent')).toBe(true)
     expect(has(store, 'savedViews', 'saveGraphView')).toBe(true)
     expect(has(store, 'findPath', 'fetchNeighborhood')).toBe(true)
   })
   it('GraphFiltersPanel controls', () => {
     const f = read('src/renderer/src/components/graph/GraphFiltersPanel.tsx')
-    expect(has(f, 'Spotlight', "'hide'", "'only'", 'Ambang hub', 'orphanMode', 'hubMode')).toBe(true)
+    expect(has(f, 'Spotlight', "'hide'", "'only'", 'Ambang hub', 'orphanMode', 'hubMode')).toBe(
+      true
+    )
     // Copy unified to Indonesian (F-1): labels follow UI language
     expect(has(f, 'Simpan layout', 'Hapus file', 'Reset gaya', 'DEFAULT_FORCE_SETTINGS')).toBe(true)
     expect(has(f, 'Jelajah', 'Cari path', 'Warna node', 'Folder')).toBe(true)
     expect(has(f, 'Ekspor PNG', 'Performa', 'Quality')).toBe(true)
-    expect(has(f, 'View & Ekspor', 'existingFilesOnly', 'showTags', 'showAttachments', 'animateForces')).toBe(true)
+    expect(
+      has(f, 'View & Ekspor', 'existingFilesOnly', 'showTags', 'showAttachments', 'animateForces')
+    ).toBe(true)
   })
   it('GraphCanvas fluid UI + guards', () => {
     const gc = read('src/renderer/src/components/graph/GraphCanvas.tsx')
@@ -329,7 +354,16 @@ describe('Renderer wiring', () => {
   })
   it('graphShared utilities', () => {
     const shared = read('src/renderer/src/components/graph/graphShared.ts')
-    expect(has(shared, 'chargeFor', 'linkDistanceFor', 'SpatialHash2D', 'edgeDrawBudget', 'FORCE_PRESETS')).toBe(true)
+    expect(
+      has(
+        shared,
+        'chargeFor',
+        'linkDistanceFor',
+        'SpatialHash2D',
+        'edgeDrawBudget',
+        'FORCE_PRESETS'
+      )
+    ).toBe(true)
     expect(has(shared, 'css(', 'getPropertyValue', 'readPalette')).toBe(true)
     // Shared force layout is the single source of truth for the global graph
     expect(has(shared, 'applyForceLayout')).toBe(true)
@@ -365,13 +399,32 @@ describe('Design tokens / light theme', () => {
   })
   it('graph node tokens + shadows present', () => {
     const tokens = read('src/renderer/src/styles/tokens.css')
-    for (const v of ['--node-knowledge', '--node-project', '--node-task', '--node-daily', '--node-person', '--color-primary', '--color-accent', '--shadow-md', '--graph-bg-glow']) {
+    for (const v of [
+      '--node-knowledge',
+      '--node-project',
+      '--node-task',
+      '--node-daily',
+      '--node-person',
+      '--color-primary',
+      '--color-accent',
+      '--shadow-md',
+      '--graph-bg-glow'
+    ]) {
       expect(tokens).toContain(v)
     }
   })
   it('theme util applies data-theme + caches', () => {
     const theme = read('src/renderer/src/utils/theme.ts')
-    expect(has(theme, "setAttribute('data-theme'", 'bootTheme', 'getSettings', 'wg-theme', 'setTitleBarTheme')).toBe(true)
+    expect(
+      has(
+        theme,
+        "setAttribute('data-theme'",
+        'bootTheme',
+        'getSettings',
+        'wg-theme',
+        'setTitleBarTheme'
+      )
+    ).toBe(true)
   })
   it('main.tsx pre-paint applyTheme', () => {
     const mainTsx = read('src/renderer/src/main.tsx')
@@ -394,7 +447,9 @@ describe('Design tokens / light theme', () => {
   })
   it('electron chrome titlebar theme-aware', () => {
     const main = read('src/main/index.ts')
-    expect(has(main, 'light:', 'setTitleBarOverlay', 'window:setTitleBarTheme', 'backgroundColor')).toBe(true)
+    expect(
+      has(main, 'light:', 'setTitleBarOverlay', 'window:setTitleBarTheme', 'backgroundColor')
+    ).toBe(true)
   })
   it('light surface selectors exist', () => {
     const globals = read('src/renderer/src/styles/globals.css')
@@ -402,18 +457,18 @@ describe('Design tokens / light theme', () => {
       "[data-theme='light'] .sidebar",
       "[data-theme='light'] .chat-panel",
       "[data-theme='light'] .welcome-action-card",
-      ".search-overlay",
-      ".graph-filters-panel",
-      ".graph-filter-seg",
-      ".graph-filter-range",
-      ".graph-filter-actions",
-      ".graph-filter-status",
-      ".graph-views-list"
+      '.search-overlay',
+      '.graph-filters-panel',
+      '.graph-filter-seg',
+      '.graph-filter-range',
+      '.graph-filter-actions',
+      '.graph-filter-status',
+      '.graph-views-list'
     ]) {
       expect(globals).toContain(sel)
     }
     expect(globals).toContain('color: var(--text-inverse)')
-    expect(globals).toContain('html[data-theme=\'light\']')
+    expect(globals).toContain("html[data-theme='light']")
   })
 })
 
@@ -435,31 +490,78 @@ describe('Engine source contracts', () => {
   })
   it('WorkspaceEngine standard folders + seed + recent', () => {
     const we = read('src/main/engine/WorkspaceEngine.ts')
-    expect(has(we, 'STANDARD_FOLDERS', 'createWorkspace', 'openWorkspace', 'seedBuiltinToVault', 'getRecentWorkspaces')).toBe(true)
+    expect(
+      has(
+        we,
+        'STANDARD_FOLDERS',
+        'createWorkspace',
+        'openWorkspace',
+        'seedBuiltinToVault',
+        'getRecentWorkspaces'
+      )
+    ).toBe(true)
     expect(has(we, 'Knowledge', 'Daily', 'People')).toBe(true)
   })
   it('GraphEngine outLinks cache + ghost + prune', () => {
     const eng = read('src/main/engine/GraphEngine.ts')
-    expect(has(eng, 'outLinks', 'rebuildWikiEdgesFromOutLinks', 'pruneGhostEdges', 'isGhost', 'ensureGhostNode')).toBe(true)
+    expect(
+      has(
+        eng,
+        'outLinks',
+        'rebuildWikiEdgesFromOutLinks',
+        'pruneGhostEdges',
+        'isGhost',
+        'ensureGhostNode'
+      )
+    ).toBe(true)
     expect(has(eng, 'upsertAttachment', 'removeAttachment')).toBe(true)
   })
   it('TemplateEngine builtins + seed + render', () => {
     const te = read('src/main/engine/TemplateEngine.ts')
-    expect(has(te, 'builtin-project', 'builtin-task', 'builtin-people', 'seedBuiltinToVault', '{{title}}')).toBe(true)
+    expect(
+      has(
+        te,
+        'builtin-project',
+        'builtin-task',
+        'builtin-people',
+        'seedBuiltinToVault',
+        '{{title}}'
+      )
+    ).toBe(true)
   })
   it('DomainEngine overview + checkbox parse', () => {
     const de = read('src/main/engine/DomainEngine.ts')
-    expect(has(de, 'getOverview', 'parseCheckboxes', "type === 'project'", "type === 'task'")).toBe(true)
+    expect(has(de, 'getOverview', 'parseCheckboxes', "type === 'project'", "type === 'task'")).toBe(
+      true
+    )
   })
 })
 
 describe('AI system contracts', () => {
   it('all six providers registered in middleware', () => {
     const mid = read('src/main/ai/AIMiddleware.ts')
-    for (const p of ['GrokProvider', 'GeminiProvider', 'OpenAIProvider', 'ClaudeProvider', 'OllamaProvider', 'OpenRouterProvider']) {
+    for (const p of [
+      'GrokProvider',
+      'GeminiProvider',
+      'OpenAIProvider',
+      'ClaudeProvider',
+      'OllamaProvider',
+      'OpenRouterProvider'
+    ]) {
       expect(mid).toContain(p)
     }
-    expect(has(mid, 'listModels()', 'configured', 'belum dikonfigurasi', 'testProvider', 'enableTools', 'MAX_TOOL_ROUNDS', 'cancelStream')).toBe(true)
+    expect(
+      has(
+        mid,
+        'listModels()',
+        'configured',
+        'belum dikonfigurasi',
+        'testProvider',
+        'enableTools',
+        'MAX_TOOL_ROUNDS',
+        'cancelStream'
+      )
+    ).toBe(true)
     expect(has(mid, 'importGrokFromCli', 'getAllProvidersStatus')).toBe(true)
     expect(has(mid, 'KERNEL_SYSTEM_PROMPT', 'unknown tools skipped')).toBe(true)
   })
@@ -467,7 +569,16 @@ describe('AI system contracts', () => {
     const files = ['Grok', 'Gemini', 'OpenAI', 'Claude', 'Ollama', 'OpenRouter']
     for (const id of files) {
       const src = read(`src/main/ai/providers/${id}Provider.ts`)
-      expect(has(src, 'sendMessage', 'streamMessage', 'listModels', 'healthCheck', 'extends BaseProvider')).toBe(true)
+      expect(
+        has(
+          src,
+          'sendMessage',
+          'streamMessage',
+          'listModels',
+          'healthCheck',
+          'extends BaseProvider'
+        )
+      ).toBe(true)
     }
   })
   it('Grok provider official API + CLI auth', () => {
@@ -491,17 +602,31 @@ describe('AI system contracts', () => {
   it('AgentTools fences + tools + AI Memory mention', () => {
     const tools = read('src/main/ai/AgentTools.ts')
     expect(tools).toContain('```(?:wg-action|json|javascript)?')
-    expect(has(tools, "'search'", 'read_note', 'list_dir', 'write_note', 'append_note', 'create_note')).toBe(true)
-    expect(has(tools, 'applyProposal', 'pending', 'AI Memory', 'create_from_template', 'list_templates')).toBe(true)
+    expect(
+      has(tools, "'search'", 'read_note', 'list_dir', 'write_note', 'append_note', 'create_note')
+    ).toBe(true)
+    expect(
+      has(tools, 'applyProposal', 'pending', 'AI Memory', 'create_from_template', 'list_templates')
+    ).toBe(true)
     expect(hasAny(tools, 'path escape', 'outside vault', 'startsWith')).toBe(true)
   })
   it('ConversationStore guards path traversal + cache path', () => {
     const conv = read('src/main/ai/ConversationStore.ts')
-    expect(has(conv, 'safeConversationId', '^[a-zA-Z0-9_-]{1,80}$', '.workspacegraph', 'chats')).toBe(true)
+    expect(
+      has(conv, 'safeConversationId', '^[a-zA-Z0-9_-]{1,80}$', '.workspacegraph', 'chats')
+    ).toBe(true)
   })
   it('WorkspaceMemory constants', () => {
     const mem = read('src/main/ai/WorkspaceMemory.ts')
-    expect(has(mem, "AI_MEMORY_DIR = 'AI Memory'", 'ensureAiMemoryScaffold', 'KERNEL_SYSTEM_PROMPT', '00 Index.md')).toBe(true)
+    expect(
+      has(
+        mem,
+        "AI_MEMORY_DIR = 'AI Memory'",
+        'ensureAiMemoryScaffold',
+        'KERNEL_SYSTEM_PROMPT',
+        '00 Index.md'
+      )
+    ).toBe(true)
   })
 })
 

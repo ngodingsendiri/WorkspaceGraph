@@ -26,7 +26,9 @@ describe('AgentTools', () => {
     try {
       workspaceEngine.closeWorkspace()
       fs.rmSync(vault, { recursive: true, force: true })
-    } catch {}
+    } catch {
+      /* ignore */
+    }
   })
 
   describe('parseToolActions', () => {

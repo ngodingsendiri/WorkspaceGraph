@@ -73,7 +73,15 @@ export function chunkText(text: string, size = CHUNK_SIZE, overlap = CHUNK_OVERL
       // Prefer paragraph break, then line break, then sentence end inside the window
       const para = window.lastIndexOf('\n\n')
       const line = para >= 0 ? -1 : window.lastIndexOf('\n')
-      const sent = para < 0 && line < 0 ? Math.max(window.lastIndexOf('. '), window.lastIndexOf('? '), window.lastIndexOf('! '), window.lastIndexOf('.\n')) : -1
+      const sent =
+        para < 0 && line < 0
+          ? Math.max(
+              window.lastIndexOf('. '),
+              window.lastIndexOf('? '),
+              window.lastIndexOf('! '),
+              window.lastIndexOf('.\n')
+            )
+          : -1
       const breakAt = Math.max(para, line, sent)
       // Only step back if the break is past the middle — avoids tiny fragments
       if (breakAt > size * 0.35) end = start + breakAt + (para >= 0 ? 2 : 1)
@@ -101,6 +109,13 @@ export class EmbeddingEngine {
   private indexedPaths = new Set<string>()
   private currentDb: MinDb | null = null
   private worker: Awaited<ReturnType<typeof getEmbeddingWorker>> | null = null
+  /** Main-thread fallback embedder when the worker can't start (onnx pipeline). */
+  private fallbackEmbedder:
+    | ((
+        text: string,
+        opts?: { pooling?: string; normalize?: boolean }
+      ) => Promise<{ data: Float32Array }>)
+    | null = null
   private useWorker = true
   private progressCallbacks: ((current: number, total: number, stage: string) => void)[] = []
 
@@ -167,10 +182,10 @@ export class EmbeddingEngine {
         env.allowLocalModels = false
         if (env.backends?.onnx) env.backends.onnx.logLevel = 'error'
         // Store embedder on a temp property for fallback
-        ;(this as any)._fallbackEmbedder = await pipeline(
+        this.fallbackEmbedder = (await pipeline(
           'feature-extraction',
           'Xenova/all-MiniLM-L6-v2'
-        )
+        )) as unknown as EmbeddingEngine['fallbackEmbedder']
         console.log('[EmbeddingEngine] Fallback model ready on main thread')
       } catch (e) {
         console.warn('[EmbeddingEngine] Fallback init failed:', e)
@@ -178,7 +193,7 @@ export class EmbeddingEngine {
       }
     }
     this.initializing = false
-    if (this.worker || (this as any)._fallbackEmbedder) this.state = 'ready'
+    if (this.worker || this.fallbackEmbedder) this.state = 'ready'
   }
 
   // ── DB persistence ────────────────────────────────────────────────────────────
@@ -252,7 +267,7 @@ export class EmbeddingEngine {
       throw new Error('Worker embed failed')
     }
     // Fallback: main thread
-    const embedder = (this as any)._fallbackEmbedder
+    const embedder = this.fallbackEmbedder
     if (!embedder) throw new Error('No embedder available')
     const vectors: Float32Array[] = []
     for (let i = 0; i < texts.length; i++) {
@@ -266,7 +281,7 @@ export class EmbeddingEngine {
   // ── Indexing ────────────────────────────────────────────────────────────────
 
   async indexFile(filePath: string, db?: MinDb | null): Promise<void> {
-    if (!this.worker && !(this as any)._fallbackEmbedder) return
+    if (!this.worker && !this.fallbackEmbedder) return
     const norm = filePath.replace(/\\/g, '/')
 
     let mtime = 0
@@ -326,7 +341,7 @@ export class EmbeddingEngine {
   }
 
   async indexVaultBackground(vaultRoot: string, db?: MinDb | null): Promise<void> {
-    if (!this.worker && !(this as any)._fallbackEmbedder) return
+    if (!this.worker && !this.fallbackEmbedder) return
     const activeDb = db ?? this.currentDb
     this.state = 'indexing'
     const files = this.collectMarkdownPaths(vaultRoot)
@@ -345,11 +360,7 @@ export class EmbeddingEngine {
   // ── Search ──────────────────────────────────────────────────────────────────
 
   async search(query: string, topK = 6): Promise<SemanticHit[]> {
-    if (
-      (!this.worker && !(this as any)._fallbackEmbedder) ||
-      !query.trim() ||
-      this.index.length === 0
-    )
+    if ((!this.worker && !this.fallbackEmbedder) || !query.trim() || this.index.length === 0)
       return []
 
     let qv: Float32Array
@@ -359,7 +370,8 @@ export class EmbeddingEngine {
       if (resp.type !== 'embedded') throw new Error('Worker embed failed')
       qv = resp.vectors[0]
     } else {
-      const embedder = (this as any)._fallbackEmbedder
+      const embedder = this.fallbackEmbedder
+      if (!embedder) throw new Error('No embedder available')
       const out = await embedder(query, { pooling: 'mean', normalize: true })
       qv = out.data as Float32Array
     }
@@ -369,7 +381,10 @@ export class EmbeddingEngine {
     const titleBoost = (filePath: string): number => {
       const base = filePath.replace(/\\/g, '/').split('/').pop() || ''
       const title = base.replace(/\.md$/i, '').toLowerCase()
-      const terms = query.toLowerCase().split(/\s+/).filter((t) => t.length > 2)
+      const terms = query
+        .toLowerCase()
+        .split(/\s+/)
+        .filter((t) => t.length > 2)
       return terms.some((t) => title.includes(t)) ? 0.06 : 0
     }
 
@@ -421,7 +436,7 @@ export class EmbeddingEngine {
 
   private collectMarkdownPaths(vaultRoot: string): string[] {
     const out: string[] = []
-    const walk = (dir: string) => {
+    const walk = (dir: string): void => {
       let entries: fs.Dirent[] = []
       try {
         entries = fs.readdirSync(dir, { withFileTypes: true })

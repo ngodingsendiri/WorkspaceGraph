@@ -25,8 +25,10 @@ export const MergeDialog: React.FC<MergeDialogProps> = ({
   const [activeTab, setActiveTab] = useState<'yours' | 'theirs' | 'merged'>('merged')
   const textareaRef = useRef<HTMLTextAreaElement>(null)
 
+  // Reset dialog state to the incoming "yours" content each time it opens.
   useEffect(() => {
     if (isOpen) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect -- reset-on-open pattern
       setResolved(yours)
       setActiveTab('merged')
     }
@@ -43,9 +45,9 @@ export const MergeDialog: React.FC<MergeDialogProps> = ({
 
   const baseContent = computeBase()
 
-  const applyTheirs = () => setResolved(theirs)
-  const applyYours = () => setResolved(yours)
-  const applyBase = () => setResolved(baseContent)
+  const applyTheirs = (): void => setResolved(theirs)
+  const applyYours = (): void => setResolved(yours)
+  const applyBase = (): void => setResolved(baseContent)
 
   if (!isOpen) return null
 

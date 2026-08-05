@@ -34,6 +34,108 @@ const EmptyState: React.FC<{ text: string }> = ({ text }) => (
   </div>
 )
 
+type EmbedState = 'idle' | 'loading_model' | 'indexing' | 'ready'
+interface EmbedStatus {
+  state: EmbedState
+  totalChunks: number
+  indexedFiles: number
+  modelReady: boolean
+}
+
+/** Semantic RAG progress badge — live % bar while indexing, status when ready. */
+function SemanticRagCard(): React.JSX.Element {
+  const [status, setStatus] = useState<EmbedStatus | null>(null)
+  const [progress, setProgress] = useState<{ current: number; total: number } | null>(null)
+  const [enabled, setEnabled] = useState(true)
+
+  useEffect(() => {
+    let mounted = true
+    // Guard against a stale snapshot overwriting a newer pushed status: the
+    // progress stream is strictly newer than the mount-time getEmbeddingStatus
+    // poll, so once any progress event lands we stop applying the snapshot.
+    let sawProgress = false
+    const load = async (): Promise<void> => {
+      try {
+        const s = await window.api.getEmbeddingStatus()
+        if (mounted && !sawProgress) setStatus(s)
+        const settings = (await window.api.getSettings()) as { semanticContext?: boolean } | null
+        if (mounted) setEnabled(settings?.semanticContext !== false)
+      } catch {
+        /* ignore */
+      }
+    }
+    void load()
+    const unsub = window.api.onEmbeddingProgress?.((p) => {
+      if (!mounted) return
+      sawProgress = true
+      setStatus(p.status)
+      if (p.stage === 'ready' || p.total <= 0) setProgress(null)
+      else setProgress({ current: p.current, total: p.total })
+    })
+    return () => {
+      mounted = false
+      unsub?.()
+    }
+  }, [])
+
+  const pct =
+    progress && progress.total > 0
+      ? Math.min(100, Math.round((progress.current / progress.total) * 100))
+      : 0
+  const busy = status?.state === 'loading_model' || status?.state === 'indexing'
+  // Before the first progress tick (indexing already underway at mount) the
+  // poll snapshot has no current/total — show indexedFiles as a lower bound.
+  const showBar = enabled && status?.state === 'indexing' && progress
+  const tone = !enabled
+    ? 'var(--text-muted)'
+    : status?.state === 'ready'
+      ? 'var(--color-success)'
+      : busy
+        ? 'var(--color-accent)'
+        : 'var(--text-muted)'
+
+  const title = !enabled
+    ? 'Semantic RAG nonaktif — AI pakai FTS + graph saja (toggle di Settings → Search Index)'
+    : status?.state === 'loading_model'
+      ? 'Memuat model embedding…'
+      : status?.state === 'indexing'
+        ? showBar
+          ? `Mengindeks ${progress!.current}/${progress!.total} chunk…`
+          : `Mengindeks ${status.indexedFiles} file…`
+        : status?.state === 'ready'
+          ? `Siap · ${status.totalChunks} chunk · ${status.indexedFiles} file`
+          : 'Belum aktif — buka vault untuk mengindeks'
+
+  return (
+    <div className="dash-rag" style={{ '--rag-tone': tone } as React.CSSProperties}>
+      <div className="dash-rag-head">
+        <span className="dash-rag-title">
+          <Icon name="psychology" size={14} />
+          Semantic RAG
+          {busy && <Icon name="sync" size={12} className="is-spinning" />}
+        </span>
+        <span className="dash-rag-state" style={{ color: tone }}>
+          {!enabled
+            ? 'nonaktif'
+            : status?.state === 'loading_model'
+              ? 'memuat model…'
+              : status?.state === 'indexing'
+                ? `${pct}%`
+                : status?.state === 'ready'
+                  ? `${status.totalChunks} chunk · ${status.indexedFiles} file`
+                  : 'idle'}
+        </span>
+      </div>
+      {showBar ? (
+        <div className="dash-rag-track">
+          <div className="dash-rag-bar" style={{ width: `${pct}%` }} />
+        </div>
+      ) : null}
+      <div className="dash-rag-meta">{title}</div>
+    </div>
+  )
+}
+
 interface DomainOverview {
   projects: { title: string; path: string; status?: string; relativePath: string }[]
   tasks: { title: string; path: string; status?: string; priority?: string; relativePath: string }[]
@@ -65,17 +167,7 @@ export const DashboardView: React.FC<{ onOpenSearch: () => void }> = ({ onOpenSe
   const [tplOpen, setTplOpen] = useState(false)
   const [loading, setLoading] = useState(true)
 
-  useEffect(() => {
-    fetchGraph()
-    loadDashboardData()
-    const unsub = window.api.onGraphUpdated(() => {
-      fetchGraph()
-      loadDashboardData()
-    })
-    return () => unsub()
-  }, [fetchGraph])
-
-  const loadDashboardData = async () => {
+  const loadDashboardData = async (): Promise<void> => {
     setLoading(true)
     try {
       const recent = await window.api.getRecentNotes(6)
@@ -91,12 +183,24 @@ export const DashboardView: React.FC<{ onOpenSearch: () => void }> = ({ onOpenSe
     }
   }
 
-  const openNote = async (filePath: string) => {
+  useEffect(() => {
+    fetchGraph()
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- bootstrap fetch
+    loadDashboardData()
+    const unsub = window.api.onGraphUpdated(() => {
+      fetchGraph()
+
+      loadDashboardData()
+    })
+    return () => unsub()
+  }, [fetchGraph])
+
+  const openNote = async (filePath: string): Promise<void> => {
     await openTab(filePath)
     setActiveView('editor')
   }
 
-  const handleCreateDailyNote = async () => {
+  const handleCreateDailyNote = async (): Promise<void> => {
     const today = new Date().toISOString().split('T')[0]
     try {
       const res = await window.api.createFromTemplate({
@@ -130,9 +234,9 @@ export const DashboardView: React.FC<{ onOpenSearch: () => void }> = ({ onOpenSe
     }
   }
 
-  const handleOpenInGraph = (notePath: string) => {
+  const handleOpenInGraph = (notePath: string): void => {
     // Windows paths: case/separators may differ between search index and graph nodes
-    const norm = (p: string) => p.replace(/\\/g, '/').toLowerCase()
+    const norm = (p: string): string => p.replace(/\\/g, '/').toLowerCase()
     const target = norm(notePath)
     const node = nodes.find(
       (n) =>
@@ -150,20 +254,20 @@ export const DashboardView: React.FC<{ onOpenSearch: () => void }> = ({ onOpenSe
     }
   }
 
-  const handleTagClick = (tag: string) => {
+  const handleTagClick = (tag: string): void => {
     onOpenSearch()
     setTimeout(() => {
       window.dispatchEvent(new CustomEvent('search:prefill', { detail: `#${tag}` }))
     }, 50)
   }
 
-  const handleOrphanClick = () => {
+  const handleOrphanClick = (): void => {
     // Open Graph with orphans-only filter (primary); search remains available via search
     setOpenIntent({ orphanMode: 'only' })
     setActiveView('graph')
   }
 
-  const handleOrphanSearch = () => {
+  const handleOrphanSearch = (): void => {
     onOpenSearch()
     setTimeout(() => {
       window.dispatchEvent(new CustomEvent('search:prefill', { detail: 'orphan:true' }))
@@ -235,7 +339,12 @@ export const DashboardView: React.FC<{ onOpenSearch: () => void }> = ({ onOpenSe
     }
   ]
 
-  const listItem = (title: string, sub: string, onClick: () => void, badge?: string) => (
+  const listItem = (
+    title: string,
+    sub: string,
+    onClick: () => void,
+    badge?: string
+  ): React.JSX.Element => (
     <div key={`${title}\u0000${sub}`} className="dash-list-item" onClick={onClick}>
       <div style={{ minWidth: 0 }}>
         <div className="dash-list-title truncate">{title}</div>
@@ -286,21 +395,21 @@ export const DashboardView: React.FC<{ onOpenSearch: () => void }> = ({ onOpenSe
         ))}
       </div>
 
+      <SemanticRagCard />
+
       <div className="dash-grid">
         {/* Open tasks + checkboxes */}
         <section className="dash-section">
-          <SectionHead
-            icon="check"
-            title="Tugas terbuka"
-            count={domain?.counts.openTasks}
-          />
+          <SectionHead icon="check" title="Tugas terbuka" count={domain?.counts.openTasks} />
           {loading ? (
             <SkeletonRows count={4} />
           ) : (
             <>
-              {openTasks.slice(0, 6).map((t) =>
-                listItem(t.title, t.relativePath, () => openNote(t.path), t.priority || t.status)
-              )}
+              {openTasks
+                .slice(0, 6)
+                .map((t) =>
+                  listItem(t.title, t.relativePath, () => openNote(t.path), t.priority || t.status)
+                )}
               {(!domain || domain.tasks.length === 0) && (
                 <EmptyState text="Belum ada catatan tugas. Buat lewat template Task." />
               )}
@@ -422,7 +531,9 @@ export const DashboardView: React.FC<{ onOpenSearch: () => void }> = ({ onOpenSe
           ) : (
             orphanNodes
               .slice(0, 8)
-              .map((n) => listItem(n.title, n.relativePath || n.type, () => openNote(n.path), '0 link'))
+              .map((n) =>
+                listItem(n.title, n.relativePath || n.type, () => openNote(n.path), '0 link')
+              )
           )}
           {orphanNodes.length > 8 && (
             <button

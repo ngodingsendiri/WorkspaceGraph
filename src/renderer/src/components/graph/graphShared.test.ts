@@ -300,4 +300,3 @@ describe('layout regression — bounding box per preset (no explode / no collaps
     expect(cluster.diag).toBeGreaterThan(compact.diag)
   })
 })
-

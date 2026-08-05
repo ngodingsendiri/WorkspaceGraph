@@ -5,10 +5,17 @@ import type { WorkspaceEngine } from '../engine/WorkspaceEngine'
 import { embeddingEngine } from './EmbeddingEngine'
 
 /** Minimal fakes — ContextEngine only touches these members. */
-function makeFakes() {
+function makeFakes(): {
+  ctx: ContextEngine
+  workspaceEngine: WorkspaceEngine
+  searchEngine: SearchEngine
+} {
   const workspaceEngine = {
-    readFile: vi.fn((p: string) => ({ content: `# ${p}\\n\\nBody of ${p}. Lorem ipsum dolor sit amet.` })),
-    getState: vi.fn(() => ({ rootPath: null }))
+    readFile: vi.fn((p: string) => ({
+      content: `# ${p}\\n\\nBody of ${p}. Lorem ipsum dolor sit amet.`
+    })),
+    getState: vi.fn(() => ({ rootPath: null })),
+    getSettings: vi.fn(() => ({}))
   } as unknown as WorkspaceEngine
   const searchEngine = {
     searchSync: vi.fn(() => []),
@@ -206,5 +213,40 @@ describe('ContextEngine.buildContextPackageAsync rerank', () => {
     const { ctx } = makeFakes()
     const pkg = await ctx.buildContextPackageAsync('query', undefined, 'general')
     expect(pkg.relevantFiles.some((f) => f.tier === 'semantic')).toBe(false)
+  })
+
+  it('skips semantic tier when settings.semanticContext is false (user toggle off)', async () => {
+    const { ctx, workspaceEngine, searchEngine } = makeFakes()
+    ;(workspaceEngine as unknown as { getSettings: () => object }).getSettings = vi.fn(() => ({
+      semanticContext: false
+    }))
+    searchEngine.searchSync = vi.fn(() => []) as never
+
+    const isReadySpy = vi.spyOn(embeddingEngine, 'isReady', 'get').mockReturnValue(true)
+    const searchSpy = vi
+      .spyOn(embeddingEngine, 'search')
+      .mockResolvedValue([{ filePath: '/vault/Sem.md', chunk: 'vector chunk', score: 0.6 }])
+
+    const pkg = await ctx.buildContextPackageAsync('query', undefined, 'general')
+    expect(pkg.relevantFiles.some((f) => f.tier === 'semantic')).toBe(false)
+    expect(searchSpy).not.toHaveBeenCalled()
+    isReadySpy.mockRestore()
+    searchSpy.mockRestore()
+  })
+
+  it('runs semantic tier when settings.semanticContext is unset (default on)', async () => {
+    const { ctx, searchEngine } = makeFakes()
+    searchEngine.searchSync = vi.fn(() => []) as never
+
+    const isReadySpy = vi.spyOn(embeddingEngine, 'isReady', 'get').mockReturnValue(true)
+    const searchSpy = vi
+      .spyOn(embeddingEngine, 'search')
+      .mockResolvedValue([{ filePath: '/vault/Sem.md', chunk: 'vector chunk', score: 0.6 }])
+
+    const pkg = await ctx.buildContextPackageAsync('query', undefined, 'general')
+    expect(pkg.relevantFiles.some((f) => f.tier === 'semantic')).toBe(true)
+    expect(searchSpy).toHaveBeenCalledTimes(1)
+    isReadySpy.mockRestore()
+    searchSpy.mockRestore()
   })
 })

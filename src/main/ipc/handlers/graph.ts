@@ -128,10 +128,7 @@ export function registerGraphHandlers(): void {
    */
   ipcMain.handle(
     'graph:savePng',
-    async (
-      _,
-      { dataUrl, defaultName }: { dataUrl: string; defaultName: string }
-    ) => {
+    async (_, { dataUrl, defaultName }: { dataUrl: string; defaultName: string }) => {
       try {
         if (typeof dataUrl !== 'string' || !dataUrl.startsWith('data:image/png;base64,')) {
           return { ok: false, error: 'Invalid PNG data' }

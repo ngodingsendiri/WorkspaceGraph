@@ -2,7 +2,7 @@ import { BrowserWindow } from 'electron'
 import fs from 'fs'
 import crypto from 'crypto'
 import path from 'path'
-import { workspaceEngine } from '../engine/WorkspaceEngine'
+import { workspaceEngine, isTrashPath } from '../engine/WorkspaceEngine'
 import { markdownEngine } from '../engine/MarkdownEngine'
 import { graphEngine } from '../engine/GraphEngine'
 import { searchEngine } from '../engine/SearchEngine'
@@ -68,8 +68,10 @@ function collectVaultFiles(fileTree: ReturnType<typeof workspaceEngine.refreshFi
 } {
   const mdFiles: string[] = []
   const attachments: { path: string; relativePath: string; extension: string }[] = []
-  function walk(files: typeof fileTree) {
+  function walk(files: typeof fileTree): void {
     for (const f of files) {
+      // Never index .trash items (deleted files awaiting restore/empty)
+      if (isTrashPath(f.path)) continue
       if (f.isDirectory && f.children) {
         walk(f.children)
       } else if (!f.isDirectory) {
@@ -132,6 +134,7 @@ export async function syncWorkspaceData(rootPath: string): Promise<void> {
 }
 
 export function syncSingleFile(filePath: string, rootPath: string): void {
+  if (isTrashPath(filePath)) return
   const lower = filePath.toLowerCase()
   if (lower.endsWith('.md')) {
     try {
@@ -166,8 +169,9 @@ export function refreshDomainFromDisk(rootPath: string): void {
   try {
     const fileTree = workspaceEngine.getState().files
     const mdFiles: string[] = []
-    function collectMd(files: typeof fileTree) {
+    function collectMd(files: typeof fileTree): void {
       for (const f of files) {
+        if (isTrashPath(f.path)) continue
         if (f.isDirectory && f.children) collectMd(f.children)
         else if (!f.isDirectory && f.extension === '.md') mdFiles.push(f.path)
       }
@@ -250,6 +254,10 @@ export function attachFileWatcher(folderPath: string): void {
   fileWatcher.start(folderPath)
   fileWatcher.removeAllListeners('change')
   fileWatcher.on('change', (event: FileChangeEvent) => {
+    if (isTrashPath(event.path)) {
+      debounceEmit()
+      return
+    }
     if (event.type === 'add' || event.type === 'change') {
       // file:write already ran syncSingleFile — chokidar echo would double-parse + rebuild edges
       if (isSelfWriteEcho(event.path)) {

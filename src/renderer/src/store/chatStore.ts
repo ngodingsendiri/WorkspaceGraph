@@ -288,7 +288,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
                   tokensUsed:
                     chunk.tokensUsed !== undefined && m.tokensUsed !== undefined
                       ? m.tokensUsed + chunk.tokensUsed
-                      : chunk.tokensUsed ?? m.tokensUsed,
+                      : (chunk.tokensUsed ?? m.tokensUsed),
                   contextTokens: chunk.contextTokens ?? m.contextTokens,
                   verifications: (chunk.verifications as CitationVerification[]) || m.verifications
                 }
@@ -310,7 +310,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         enableTools
       )
       set({ activeStreamId: streamId })
-    } catch (err) {
+    } catch (_err) {
       set((state) => ({
         messages: state.messages.map((m) =>
           m.id === assistantMsgId

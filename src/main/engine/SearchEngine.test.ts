@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'
 import { SearchEngine } from './SearchEngine'
-import { MarkdownEngine } from './MarkdownEngine'
+import { MarkdownEngine, type ParsedMarkdown } from './MarkdownEngine'
 import { embeddingEngine } from '../ai/EmbeddingEngine'
 
 describe('SearchEngine', () => {
@@ -12,11 +12,11 @@ describe('SearchEngine', () => {
     markdown = new MarkdownEngine()
   })
 
-  const parse = (filePath: string, content: string) => {
+  const parse = (filePath: string, content: string): ParsedMarkdown => {
     return markdown.parseFile(filePath, content, '/vault')
   }
 
-  const buildIndex = async (files: ReturnType<typeof parse>[]) => {
+  const buildIndex = async (files: ReturnType<typeof parse>[]): Promise<void> => {
     await search.buildIndex(files)
   }
 
@@ -122,9 +122,7 @@ describe('SearchEngine', () => {
       const isReadySpy = vi.spyOn(embeddingEngine, 'isReady', 'get').mockReturnValue(true)
       const searchSpy = vi
         .spyOn(embeddingEngine, 'search')
-        .mockResolvedValue([
-          { filePath: '/vault/A.md', chunk: 'vector hit on A', score: 0.85 }
-        ])
+        .mockResolvedValue([{ filePath: '/vault/A.md', chunk: 'vector hit on A', score: 0.85 }])
 
       const results = await search.search({ query: 'TypeScript', limit: 10 })
       // A appears once, sourced from semantic, and is merged into results
@@ -154,9 +152,7 @@ describe('SearchEngine', () => {
       // A is already a keyword hit — semantic must not add a second entry
       const searchSpy = vi
         .spyOn(embeddingEngine, 'search')
-        .mockResolvedValue([
-          { filePath: '/vault/B.md', chunk: 'vector hit on B', score: 0.9 }
-        ])
+        .mockResolvedValue([{ filePath: '/vault/B.md', chunk: 'vector hit on B', score: 0.9 }])
 
       const results = await search.search({ query: 'TypeScript', limit: 10 })
       expect(results.filter((r) => r.title === 'B')).toHaveLength(1)

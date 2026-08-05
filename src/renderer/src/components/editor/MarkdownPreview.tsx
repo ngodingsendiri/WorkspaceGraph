@@ -15,7 +15,7 @@ export const MarkdownPreview: React.FC<{
     const el = ref.current
     if (!el) return
 
-    const onClick = async (e: MouseEvent) => {
+    const onClick = async (e: MouseEvent): Promise<void> => {
       const target = e.target as HTMLElement
 
       // Wikilink → navigate (mode baca: label only, no [[ ]])
@@ -61,6 +61,7 @@ export const MarkdownPreview: React.FC<{
 }
 
 /** slug must match MarkdownEngine headingId */
+// eslint-disable-next-line react-refresh/only-export-components -- shared util, not a component
 export function headingSlug(raw: string): string {
   return (
     raw

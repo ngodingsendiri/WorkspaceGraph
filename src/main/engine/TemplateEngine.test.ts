@@ -16,7 +16,9 @@ describe('TemplateEngine', () => {
   afterEach(() => {
     try {
       fs.rmSync(workspace, { recursive: true, force: true })
-    } catch {}
+    } catch {
+      /* ignore */
+    }
   })
 
   describe('builtins', () => {

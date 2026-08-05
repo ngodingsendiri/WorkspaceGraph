@@ -108,11 +108,46 @@ export interface RoleProfile {
 }
 
 export const ROLE_PROFILES: Record<AgentRole, RoleProfile> = {
-  general: { budget: 3600, searchFiles: 4, searchChars: 500, semanticFiles: 4, semanticChars: 500, systemCap: 1 },
-  writer: { budget: 3400, searchFiles: 3, searchChars: 450, semanticFiles: 3, semanticChars: 450, systemCap: 2 },
-  researcher: { budget: 4600, searchFiles: 6, searchChars: 550, semanticFiles: 6, semanticChars: 550, systemCap: 2 },
-  curator: { budget: 4000, searchFiles: 5, searchChars: 500, semanticFiles: 5, semanticChars: 500, systemCap: 1 },
-  planner: { budget: 3200, searchFiles: 3, searchChars: 450, semanticFiles: 3, semanticChars: 450, systemCap: 2 }
+  general: {
+    budget: 3600,
+    searchFiles: 4,
+    searchChars: 500,
+    semanticFiles: 4,
+    semanticChars: 500,
+    systemCap: 1
+  },
+  writer: {
+    budget: 3400,
+    searchFiles: 3,
+    searchChars: 450,
+    semanticFiles: 3,
+    semanticChars: 450,
+    systemCap: 2
+  },
+  researcher: {
+    budget: 4600,
+    searchFiles: 6,
+    searchChars: 550,
+    semanticFiles: 6,
+    semanticChars: 550,
+    systemCap: 2
+  },
+  curator: {
+    budget: 4000,
+    searchFiles: 5,
+    searchChars: 500,
+    semanticFiles: 5,
+    semanticChars: 500,
+    systemCap: 1
+  },
+  planner: {
+    budget: 3200,
+    searchFiles: 3,
+    searchChars: 450,
+    semanticFiles: 3,
+    semanticChars: 450,
+    systemCap: 2
+  }
 }
 
 export class ContextEngine {
@@ -136,7 +171,7 @@ export class ContextEngine {
     let usedTokens = 0
     const profile = ROLE_PROFILES[agentRole] || ROLE_PROFILES.general
 
-    const addCitation = (title: string, p: string) => {
+    const addCitation = (title: string, p: string): void => {
       if (!citations.some((c) => c.path === p)) citations.push({ title, path: p })
     }
 
@@ -265,7 +300,8 @@ export class ContextEngine {
         const prio = this.pathPriority(res.path)
         const maxChars = prio <= 2 ? Math.max(600, profile.searchChars) : profile.searchChars
         // Use the FTS/Fuse match window as the snippet — far more useful than the file head
-        if (tryAddSnippet(res.title, res.path, 'search', maxChars, 2, res.preview, res.score)) added++
+        if (tryAddSnippet(res.title, res.path, 'search', maxChars, 2, res.preview, res.score))
+          added++
         if (added >= profile.searchFiles || usedTokens >= tokenBudget * 0.9) break
       }
     }
@@ -357,8 +393,11 @@ export class ContextEngine {
     const pkg = this.buildContextPackage(query, activeFilePath, agentRole, tokenBudget)
     const profile = ROLE_PROFILES[agentRole] || ROLE_PROFILES.general
 
+    // User toggle: semanticContext !== false (default on) gates the vector tier.
+    const semanticContextEnabled = this.workspaceEngine.getSettings()?.semanticContext !== false
+
     // If semantic search is ready and we have budget left, augment with vector hits
-    if (embeddingEngine.isReady && query.trim()) {
+    if (semanticContextEnabled && embeddingEngine.isReady && query.trim()) {
       try {
         const hits = await embeddingEngine.search(query, profile.semanticFiles + 2)
         const seenPaths = new Set(pkg.relevantFiles.map((f) => f.path.replace(/\\/g, '/')))
@@ -378,7 +417,13 @@ export class ContextEngine {
           if (cost > budgetLeft) continue
 
           const title = hit.filePath.split(/[/\\]/).pop()?.replace(/\.md$/i, '') || 'Note'
-          semanticAdditions.push({ title, path: hit.filePath, snippet, tier: 'semantic', score: hit.score })
+          semanticAdditions.push({
+            title,
+            path: hit.filePath,
+            snippet,
+            tier: 'semantic',
+            score: hit.score
+          })
           if (!pkg.citations.some((c) => c.path === hit.filePath)) {
             pkg.citations.push({ title, path: hit.filePath })
           }
@@ -412,12 +457,8 @@ export class ContextEngine {
           // relevant); everything else competes by relevance with a small tier
           // bonus so a strong semantic hit CAN rise above wikilink/backlink.
           const nonSearch = pkg.relevantFiles.filter((f) => f.tier !== 'search')
-          const pinned = nonSearch.filter(
-            (f) => f.tier === 'ai-memory' || f.tier === 'system'
-          )
-          const rest = nonSearch.filter(
-            (f) => f.tier !== 'ai-memory' && f.tier !== 'system'
-          )
+          const pinned = nonSearch.filter((f) => f.tier === 'ai-memory' || f.tier === 'system')
+          const rest = nonSearch.filter((f) => f.tier !== 'ai-memory' && f.tier !== 'system')
           const TIER_BONUS: Record<string, number> = {
             wikilink: 0.08,
             backlink: 0.05,

@@ -8,7 +8,18 @@ import { workspaceEngine } from './WorkspaceEngine'
 import { assertPathInVault } from '../security/PathSandbox'
 
 export type AutomationTriggerType =
-  'file_created' | 'file_updated' | 'file_deleted' | 'workspace_opened' | 'manual'
+  'file_created' | 'file_updated' | 'file_deleted' | 'workspace_opened' | 'manual' | 'schedule'
+
+/** Cron-style schedule: either a repeating interval or a daily atTime slot. */
+export interface AutomationSchedule {
+  /** Interval length (with unit) — e.g. { every: 30, unit: 'minutes' } */
+  every?: number
+  unit?: 'minutes' | 'hours' | 'days'
+  /** Daily slot HH:MM (local time, same convention as daily notes) */
+  atTime?: string
+  /** 0=Sunday … 6=Saturday; empty = every day */
+  daysOfWeek?: number[]
+}
 
 export interface AutomationRule {
   id: string
@@ -18,6 +29,8 @@ export interface AutomationRule {
     type: AutomationTriggerType
     /** glob-like: ends with .md or contains path fragment */
     match?: string
+    /** Only for trigger.type === 'schedule' */
+    schedule?: AutomationSchedule
   }
   actions: AutomationAction[]
 }
@@ -37,6 +50,11 @@ export interface AutomationLogEntry {
 export interface AutomationConfig {
   version: 1
   rules: AutomationRule[]
+}
+
+export interface SchedulerInfo {
+  running: boolean
+  nextFire: string | null
 }
 
 const DEFAULT_CONFIG: AutomationConfig = {
@@ -61,8 +79,41 @@ const DEFAULT_CONFIG: AutomationConfig = {
           content: '- Created [[{{title}}]] ({{relativePath}})\n'
         }
       ]
+    },
+    {
+      id: 'daily-digest-log',
+      name: 'Daily digest (09:00, Sen–Jum)',
+      enabled: false,
+      trigger: {
+        type: 'schedule',
+        schedule: { atTime: '09:00', daysOfWeek: [1, 2, 3, 4, 5] }
+      },
+      actions: [{ type: 'log', message: 'Daily digest {{date}} — {{workspace}}' }]
     }
   ]
+}
+
+const TICK_MS = 60_000
+
+/** Local calendar day key (YYYY-MM-DD) — scheduler day boundaries are local. */
+function localDayKey(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+}
+
+function parseAtTime(atTime: string): [number, number] {
+  const [h, m] = atTime.split(':').map(Number)
+  return [h, m]
+}
+
+function unitMs(unit?: 'minutes' | 'hours' | 'days'): number {
+  switch (unit) {
+    case 'hours':
+      return 3_600_000
+    case 'days':
+      return 86_400_000
+    default:
+      return 60_000
+  }
 }
 
 export class AutomationEngine {
@@ -70,6 +121,11 @@ export class AutomationEngine {
   private logs: AutomationLogEntry[] = []
   private enabled = true
   private rootPath: string | null = null
+  private timer: ReturnType<typeof setInterval> | null = null
+  /** Per-rule last fire timestamp (interval rules) */
+  private lastFiredAt: Record<string, number> = {}
+  /** Per-rule last fire day key (daily rules) */
+  private lastFiredDay: Record<string, string> = {}
 
   load(workspaceRoot: string): void {
     this.rootPath = workspaceRoot
@@ -85,14 +141,19 @@ export class AutomationEngine {
     } catch {
       this.config = JSON.parse(JSON.stringify(DEFAULT_CONFIG)) as AutomationConfig
     }
+    this.seedSchedulerState()
+    this.restart()
   }
 
   unload(): void {
+    this.stop()
     this.rootPath = null
   }
 
   setEnabled(on: boolean): void {
     this.enabled = on
+    if (on) this.restart()
+    else this.stop()
   }
 
   isEnabled(): boolean {
@@ -117,6 +178,7 @@ export class AutomationEngine {
       JSON.stringify(this.config, null, 2),
       'utf-8'
     )
+    this.restart()
   }
 
   private matchPath(match: string | undefined, filePath: string): boolean {
@@ -251,6 +313,186 @@ export class AutomationEngine {
       }
     }
     return { ok: true }
+  }
+
+  // ─── Scheduler (trigger type 'schedule') ───────────────────────────────
+
+  /** Start the 60s tick. Idempotent; unref'd so it never holds the app open. */
+  start(): void {
+    if (this.timer || !this.rootPath || !this.enabled) return
+    this.timer = setInterval(() => this.tick(), TICK_MS)
+    const t = this.timer
+    if (typeof t.unref === 'function') t.unref()
+  }
+
+  stop(): void {
+    if (this.timer) {
+      clearInterval(this.timer)
+      this.timer = null
+    }
+  }
+
+  restart(): void {
+    this.stop()
+    this.start()
+  }
+
+  /**
+   * Seed per-rule scheduler state on load:
+   * - interval rules start counting from now (full interval before first fire)
+   * - daily rules already past today's slot are marked fired so a restart
+   *   never double-fires (or fires hours late) for the current day.
+   */
+  seedSchedulerState(): void {
+    this.lastFiredAt = {}
+    this.lastFiredDay = {}
+    const now = new Date()
+    const today = localDayKey(now)
+    for (const rule of this.config.rules) {
+      if (!rule.enabled || rule.trigger.type !== 'schedule') continue
+      const sched = rule.trigger.schedule
+      if (!sched) continue
+      if (sched.atTime) {
+        const [h, m] = parseAtTime(sched.atTime)
+        const atMs = new Date(now.getFullYear(), now.getMonth(), now.getDate(), h, m, 0).getTime()
+        if (now.getTime() >= atMs && this.dayAllowed(sched, now)) {
+          this.lastFiredDay[rule.id] = today
+        }
+      } else if (sched.every && sched.every > 0) {
+        this.lastFiredAt[rule.id] = now.getTime()
+      }
+    }
+  }
+
+  private dayAllowed(sched: AutomationSchedule, date: Date): boolean {
+    const list = sched.daysOfWeek
+    if (!list || list.length === 0) return true
+    return list.includes(date.getDay())
+  }
+
+  /**
+   * Note: an interval rule blocked by daysOfWeek catches up on the first
+   * allowed tick (e.g. every-1h Mon-only fires at 00:00 Tue) — the time of
+   * day drifts after a blocked day; intentional, documented in the plan.
+   */
+  private tick(): void {
+    if (!this.enabled || !this.rootPath) return
+    const now = new Date()
+    for (const rule of this.config.rules) {
+      if (!rule.enabled || rule.trigger.type !== 'schedule') continue
+      const sched = rule.trigger.schedule
+      if (!sched || !this.shouldFire(rule.id, sched, now)) continue
+      const ctx = this.buildCtx()
+      for (const action of rule.actions) {
+        try {
+          this.runAction(action, ctx, rule.id)
+        } catch (err) {
+          this.pushLog(rule.id, err instanceof Error ? err.message : String(err), false)
+        }
+      }
+      this.lastFiredAt[rule.id] = now.getTime()
+      this.lastFiredDay[rule.id] = localDayKey(now)
+    }
+  }
+
+  private shouldFire(id: string, sched: AutomationSchedule, now: Date): boolean {
+    if (!this.dayAllowed(sched, now)) return false
+    const today = localDayKey(now)
+    if (sched.atTime) {
+      if (this.lastFiredDay[id] === today) return false
+      const [h, m] = parseAtTime(sched.atTime)
+      const atMs = new Date(now.getFullYear(), now.getMonth(), now.getDate(), h, m, 0).getTime()
+      return now.getTime() >= atMs
+    }
+    if (sched.every && sched.every > 0) {
+      const last = this.lastFiredAt[id]
+      if (last === undefined) return true
+      return now.getTime() - last >= sched.every * unitMs(sched.unit)
+    }
+    return false
+  }
+
+  /** Validate an automation config; returns a list of human-readable errors. */
+  static validateConfig(config: AutomationConfig): string[] {
+    const errs: string[] = []
+    for (const rule of config.rules) {
+      if (rule.trigger.type !== 'schedule') continue
+      const s = rule.trigger.schedule
+      const label = rule.name || rule.id
+      if (!s) {
+        errs.push(`Rule "${label}": trigger schedule butuh blok schedule`)
+        continue
+      }
+      if (s.atTime && !/^([01]\d|2[0-3]):[0-5]\d$/.test(s.atTime)) {
+        errs.push(`Rule "${label}": atTime "${s.atTime}" tidak valid (HH:MM)`)
+      }
+      if (!s.atTime && s.every === undefined) {
+        errs.push(`Rule "${label}": butuh atTime (harian) atau every (interval)`)
+      }
+      if (s.every !== undefined && (!Number.isInteger(s.every) || s.every < 1)) {
+        errs.push(`Rule "${label}": every harus bilangan bulat ≥ 1`)
+      }
+      if (s.every !== undefined && !['minutes', 'hours', 'days'].includes(s.unit || 'minutes')) {
+        errs.push(`Rule "${label}": unit harus minutes/hours/days`)
+      }
+      if (s.atTime && s.every !== undefined) {
+        errs.push(`Rule "${label}": pilih salah satu — atTime (harian) atau every (interval)`)
+      }
+      if (s.daysOfWeek) {
+        for (const d of s.daysOfWeek) {
+          if (!Number.isInteger(d) || d < 0 || d > 6) {
+            errs.push(`Rule "${label}": daysOfWeek harus 0–6 (0=Minggu)`)
+            break
+          }
+        }
+      }
+    }
+    return errs
+  }
+
+  /** Next fire time for a schedule rule (null if it will never fire). */
+  nextFireTime(rule: AutomationRule, now = new Date()): Date | null {
+    if (rule.trigger.type !== 'schedule' || !rule.trigger.schedule) return null
+    const sched = rule.trigger.schedule
+    if (sched.atTime) {
+      const [h, m] = parseAtTime(sched.atTime)
+      for (let d = 0; d < 8; d++) {
+        const cand = new Date(now.getFullYear(), now.getMonth(), now.getDate() + d, h, m, 0)
+        if (cand.getTime() <= now.getTime()) continue
+        if (this.dayAllowed(sched, cand)) return cand
+      }
+      return null
+    }
+    if (sched.every && sched.every > 0) {
+      const span = sched.every * unitMs(sched.unit)
+      const base = this.lastFiredAt[rule.id] ?? now.getTime()
+      let cand = new Date(base + span)
+      for (let i = 0; i < 8; i++) {
+        if (cand.getTime() <= now.getTime()) cand = new Date(cand.getTime() + span)
+        if (this.dayAllowed(sched, cand)) return cand
+        cand = new Date(
+          cand.getFullYear(),
+          cand.getMonth(),
+          cand.getDate() + 1,
+          cand.getHours(),
+          cand.getMinutes(),
+          cand.getSeconds()
+        )
+      }
+      return null
+    }
+    return null
+  }
+
+  getSchedulerInfo(): SchedulerInfo {
+    const running = this.timer !== null && this.enabled && !!this.rootPath
+    let next: Date | null = null
+    for (const rule of this.config.rules) {
+      if (!rule.enabled) continue
+      const t = this.nextFireTime(rule)
+      if (t && (!next || t.getTime() < next.getTime())) next = t
+    }
+    return { running, nextFire: next ? next.toISOString() : null }
   }
 }
 

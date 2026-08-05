@@ -29,13 +29,15 @@ export const TemplatePicker: React.FC<{ open: boolean; onClose: () => void }> = 
       setTemplates(list || [])
       if (list?.[0]) setSelected(list[0].id)
     })
+    // Load templates + reset the form each time the picker opens.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setTitle('')
     setError('')
   }, [open])
 
   if (!open) return null
 
-  const handleCreate = async () => {
+  const handleCreate = async (): Promise<void> => {
     if (!selected) return
     const tpl = templates.find((t) => t.id === selected)
     const name =

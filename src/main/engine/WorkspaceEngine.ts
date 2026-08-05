@@ -11,6 +11,13 @@ import { templateEngine } from './TemplateEngine'
 
 const SETTINGS_VERSION = 1
 
+export const TRASH_FOLDER = '.trash'
+
+/** True if the path lives inside the vault trash folder (.trash). */
+export function isTrashPath(filePath: string): boolean {
+  return filePath.split(/[/\\]/).includes(TRASH_FOLDER)
+}
+
 export interface WorkspaceConfig {
   name: string
   path: string
@@ -352,6 +359,114 @@ export class WorkspaceEngine {
     }
   }
 
+  /** Move a vault item into .trash/ keeping its relative path. Returns the trash path. */
+  moveToTrash(filePath: string): string {
+    const root = this.state.rootPath
+    if (!root) throw new Error('No workspace open')
+    if (!fs.existsSync(filePath)) throw new Error(`Path does not exist: ${filePath}`)
+    const rel = path.relative(root, filePath)
+    if (!rel || rel === '.') throw new Error('Cannot move the vault root to trash')
+    if (rel.startsWith('..') || path.isAbsolute(rel)) {
+      throw new Error(`Path outside vault: ${filePath}`)
+    }
+    const trashRoot = path.join(root, TRASH_FOLDER)
+    fs.mkdirSync(trashRoot, { recursive: true })
+    let target = path.join(trashRoot, rel)
+    if (fs.existsSync(target)) {
+      const ext = path.extname(target)
+      target = `${target.slice(0, target.length - ext.length)}-${Date.now()}${ext}`
+    }
+    fs.mkdirSync(path.dirname(target), { recursive: true })
+    fs.renameSync(filePath, target)
+    return target
+  }
+
+  /**
+   * Restore a trashed item back to its original vault location. If the original
+   * path is taken, a numeric suffix is appended. Returns the restored path.
+   */
+  restoreFromTrash(filePath: string): string {
+    const root = this.state.rootPath
+    if (!root) throw new Error('No workspace open')
+    const trashRoot = path.join(root, TRASH_FOLDER)
+    const rel = path.relative(trashRoot, filePath)
+    if (!rel || rel === '.' || rel.startsWith('..') || path.isAbsolute(rel)) {
+      throw new Error(`Not a trash item: ${filePath}`)
+    }
+    if (!fs.existsSync(filePath)) throw new Error(`Not found in trash: ${filePath}`)
+    const original = path.join(root, rel)
+    let target = original
+    if (fs.existsSync(target)) {
+      const ext = path.extname(target)
+      const base = path.basename(target, ext)
+      const dir = path.dirname(target)
+      let i = 1
+      while (fs.existsSync(target)) {
+        target = path.join(dir, `${base} (${i})${ext}`)
+        i++
+      }
+    }
+    fs.mkdirSync(path.dirname(target), { recursive: true })
+    fs.renameSync(filePath, target)
+    this.pruneEmptyTrashDirs()
+    return target
+  }
+
+  /** Permanently delete everything inside `.trash`. Returns the number of files removed. */
+  emptyTrash(): number {
+    const root = this.state.rootPath
+    if (!root) return 0
+    const trashRoot = path.join(root, TRASH_FOLDER)
+    if (!fs.existsSync(trashRoot)) return 0
+    let count = 0
+    const walk = (dir: string): void => {
+      for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+        const p = path.join(dir, e.name)
+        if (e.isDirectory()) walk(p)
+        else count++
+      }
+    }
+    try {
+      walk(trashRoot)
+    } catch {
+      /* ignore */
+    }
+    fs.rmSync(trashRoot, { recursive: true, force: true })
+    return count
+  }
+
+  /** Remove now-empty subfolders left under `.trash` after restores. */
+  private pruneEmptyTrashDirs(): void {
+    const root = this.state.rootPath
+    if (!root) return
+    const trashRoot = path.join(root, TRASH_FOLDER)
+    if (!fs.existsSync(trashRoot)) return
+    const walk = (dir: string): boolean => {
+      let empty = true
+      for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+        const p = path.join(dir, e.name)
+        if (e.isDirectory()) {
+          if (!walk(p)) empty = false
+        } else {
+          empty = false
+        }
+      }
+      if (empty && path.resolve(dir) !== path.resolve(trashRoot)) {
+        try {
+          fs.rmdirSync(dir)
+        } catch {
+          /* ignore */
+        }
+      }
+      return empty
+    }
+    try {
+      walk(trashRoot)
+    } catch {
+      /* ignore */
+    }
+  }
+
   createFile(filePath: string, content = ''): void {
     if (fs.existsSync(filePath)) {
       throw new Error(`File already exists: ${filePath}`)
@@ -376,7 +491,7 @@ export class WorkspaceEngine {
   getAllMarkdownPaths(): string[] {
     if (!this.state.rootPath) return []
     const out: string[] = []
-    const walk = (dir: string) => {
+    const walk = (dir: string): void => {
       let entries: fs.Dirent[] = []
       try {
         entries = fs.readdirSync(dir, { withFileTypes: true })
@@ -512,7 +627,9 @@ export class WorkspaceEngine {
         const raw = JSON.parse(fs.readFileSync(settingsPath, 'utf-8')) as Record<string, unknown>
         return this.migrateSettings(raw)
       }
-    } catch {}
+    } catch {
+      /* ignore */
+    }
     return {}
   }
 

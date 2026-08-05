@@ -62,6 +62,7 @@ export type IconName =
  * App icon key → Material Symbols ligature
  * (snake_case names from Google Icons catalog)
  */
+// eslint-disable-next-line react-refresh/only-export-components -- icon-name registry, not a component
 export const MATERIAL_ICON: Record<IconName, string> = {
   dashboard: 'dashboard',
   file: 'description',

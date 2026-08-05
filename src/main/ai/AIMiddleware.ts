@@ -454,8 +454,10 @@ export class AIMiddleware {
     const getVerifications = (): CitationVerification[] | undefined => {
       if (verifications === undefined && lastFullText && lastCitations.length > 0) {
         try {
-          verifications = verifyCitations(lastFullText, lastCitations, (p) =>
-            workspaceEngine.readFile(p).content
+          verifications = verifyCitations(
+            lastFullText,
+            lastCitations,
+            (p) => workspaceEngine.readFile(p).content
           )
         } catch {
           verifications = undefined
@@ -529,33 +531,37 @@ export class AIMiddleware {
           resolve()
         }, remainingMs)
       })
-      const streamPromise = provider.streamMessage(req, (chunk) => {
-        if (timedOut || (requestId && this.isCancelled(requestId))) return
-        if (chunk.error) streamError = chunk.error
-        fullText += chunk.content || ''
-        lastFullText += chunk.content || ''
-        // Don't mark done until tool loop finishes (unless error)
-        if (chunk.error) {
+      const streamPromise = provider.streamMessage(
+        req,
+        (chunk) => {
+          if (timedOut || (requestId && this.isCancelled(requestId))) return
+          if (chunk.error) streamError = chunk.error
+          fullText += chunk.content || ''
+          lastFullText += chunk.content || ''
+          // Don't mark done until tool loop finishes (unless error)
+          if (chunk.error) {
+            onChunk({
+              content: chunk.content || '',
+              done: false,
+              error: chunk.error,
+              citations: lastCitations,
+              round
+            })
+            return
+          }
           onChunk({
-            content: chunk.content || '',
+            content: chunk.content,
             done: false,
-            error: chunk.error,
             citations: lastCitations,
-            round
+            round,
+            // Surface context token estimate once per stream (first chunk).
+            contextTokens: contextMetaSent ? undefined : contextTokens,
+            tokensUsed: chunk.tokensUsed
           })
-          return
-        }
-        onChunk({
-          content: chunk.content,
-          done: false,
-          citations: lastCitations,
-          round,
-          // Surface context token estimate once per stream (first chunk).
-          contextTokens: contextMetaSent ? undefined : contextTokens,
-          tokensUsed: chunk.tokensUsed
-        })
-        contextMetaSent = true
-      }, signal)
+          contextMetaSent = true
+        },
+        signal
+      )
       await Promise.race([streamPromise, watchdog])
       if (watchdogTimer) clearTimeout(watchdogTimer)
       if (Date.now() - started > TIMEOUT_MS) {

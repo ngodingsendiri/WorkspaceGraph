@@ -329,7 +329,7 @@ export class GrokProvider extends BaseProvider {
       }
 
       await runChatStream()
-    } catch (err) {
+    } catch (_err) {
       if (signal?.aborted) return
       // Fallback: refresh session + chat on official API
       try {

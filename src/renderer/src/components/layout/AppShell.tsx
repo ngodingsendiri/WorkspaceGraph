@@ -14,6 +14,7 @@ import { TemplatePicker } from '../systems/TemplatePicker'
 import { CommandPalette } from '../ui/CommandPalette'
 import { Icon } from '../ui/Icons'
 import { ErrorBoundary } from '../ui/ErrorBoundary'
+import { toast, Toaster } from '../ui/Toast'
 import { bootTheme, subscribeThemePreferenceChange } from '../../utils/theme'
 
 function noteTemplate(title: string, type = 'knowledge'): string {
@@ -66,6 +67,21 @@ export const AppShell: React.FC = () => {
     return subscribeThemePreferenceChange(() => {
       /* data-theme already applied by observer path for preference storage */
     })
+  }, [])
+
+  // Plugin notifications (JS sandbox ui.notify) → toast
+  useEffect(() => {
+    if (!window.api?.onPluginNotify) return
+    const unsub = window.api.onPluginNotify((payload) => {
+      toast(payload?.message || 'Plugin', { variant: 'info', duration: 4000 })
+    })
+    return () => {
+      try {
+        unsub?.()
+      } catch {
+        /* ignore */
+      }
+    }
   }, [])
 
   // Smooth window drag-resize: freeze CSS transitions/animations while the
@@ -151,15 +167,15 @@ date: ${today}
 
   // Open search from empty-editor CTA etc.
   useEffect(() => {
-    const openSearch = () => setIsSearchOpen(true)
-    const openPalette = () => {
+    const openSearch = (): void => setIsSearchOpen(true)
+    const openPalette = (): void => {
       setPaletteMode('commands')
       setIsPaletteOpen(true)
     }
-    const openTemplate = () => setIsTemplateOpen(true)
-    const newNote = () => void createNewNote()
-    const newDaily = () => void createDailyNote()
-    const toggleSplit = () => {
+    const openTemplate = (): void => setIsTemplateOpen(true)
+    const newNote = (): undefined => void createNewNote()
+    const newDaily = (): undefined => void createDailyNote()
+    const toggleSplit = (): void => {
       setSplitGraph((v) => {
         const next = !v
         try {
@@ -188,7 +204,7 @@ date: ${today}
 
   // Keyboard shortcuts (Obsidian-like)
   useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
+    const handleKeyDown = (e: KeyboardEvent): void => {
       const mod = e.ctrlKey || e.metaKey
       if (!mod) return
       // Don't fire global shortcuts behind the open command palette
@@ -289,38 +305,38 @@ date: ${today}
               >
                 <Icon name="sidebar" size={14} />
               </button>
-            <button
-              type="button"
-              className={`btn btn-ghost btn-sm btn-icon ${showAIChat ? 'active' : ''}`}
-              onClick={toggleAIChat}
-              data-tooltip="Sembunyikan/Tampilkan panel AI"
-              aria-label="Toggle AI panel"
-            >
-              <Icon name="panelRight" size={14} />
-            </button>
-            <button
-              type="button"
-              className={`btn btn-ghost btn-sm btn-icon titlebar-extra ${splitGraph ? 'active' : ''}`}
-              onClick={() => window.dispatchEvent(new Event('wg:toggle-split'))}
-              data-tooltip="Split editor + graph"
-              aria-label="Split editor dan graph"
-            >
-              <Icon name="split" size={14} />
-            </button>
-            <button
-              type="button"
-              className="btn btn-ghost btn-sm btn-icon"
-              onClick={() => {
-                setPaletteMode('commands')
-                setIsPaletteOpen(true)
-              }}
-              data-tooltip="Command palette (Ctrl+P)"
-              aria-label="Command palette"
-            >
-              <Icon name="command" size={14} />
-            </button>
-          </div>
-        )}
+              <button
+                type="button"
+                className={`btn btn-ghost btn-sm btn-icon ${showAIChat ? 'active' : ''}`}
+                onClick={toggleAIChat}
+                data-tooltip="Sembunyikan/Tampilkan panel AI"
+                aria-label="Toggle AI panel"
+              >
+                <Icon name="panelRight" size={14} />
+              </button>
+              <button
+                type="button"
+                className={`btn btn-ghost btn-sm btn-icon titlebar-extra ${splitGraph ? 'active' : ''}`}
+                onClick={() => window.dispatchEvent(new Event('wg:toggle-split'))}
+                data-tooltip="Split editor + graph"
+                aria-label="Split editor dan graph"
+              >
+                <Icon name="split" size={14} />
+              </button>
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm btn-icon"
+                onClick={() => {
+                  setPaletteMode('commands')
+                  setIsPaletteOpen(true)
+                }}
+                data-tooltip="Command palette (Ctrl+P)"
+                aria-label="Command palette"
+              >
+                <Icon name="command" size={14} />
+              </button>
+            </div>
+          )}
         </div>
       </header>
 
@@ -372,6 +388,7 @@ date: ${today}
         onClose={() => setIsPaletteOpen(false)}
         initialMode={paletteMode}
       />
+      <Toaster />
     </div>
   )
 }
