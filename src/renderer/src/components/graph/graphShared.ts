@@ -32,22 +32,31 @@ export const DEFAULT_FORCE_SETTINGS: GraphForceSettings = {
 }
 
 /**
- * Simulation cooling — closer to Obsidian settle (organic → stable).
+ * Simulation cooling — Obsidian rubber-band settle (underdamped, elastic).
+ * Lower friction/decay than d3 defaults so linked nodes follow a drag with
+ * springy lag and the release recoils softly, then the graph settles organic.
  * animateAlphaTarget: gentle “breathe” when Animate is on.
  */
 export const OBSIDIAN_SIM = {
-  /** friction — higher = settles smoother, less jitter */
-  velocityDecay: 0.42,
-  velocityDecayLarge: 0.5,
-  /** cool-down rate — lower = more ticks to form clusters */
-  alphaDecay: 0.028,
-  alphaDecayLarge: 0.036,
+  /** friction — LOWER = springier (less damping = overshoot + recoil) */
+  velocityDecay: 0.32,
+  velocityDecayLarge: 0.44,
+  /** cool-down rate — lower = more ticks to form clusters, softer settle */
+  alphaDecay: 0.024,
+  alphaDecayLarge: 0.03,
   alphaMin: 0.001,
   /** initial heat on (re)build */
   alphaStart: 0.72,
   alphaStartLarge: 0.55,
   /** continuous animate (Obsidian “Animate”) */
-  animateAlphaTarget: 0.014
+  animateAlphaTarget: 0.014,
+  /** sim heat while a node is grabbed — warm enough to stay alive, low enough
+   *  not to jitter the whole graph while held */
+  dragAlphaTarget: 0.15,
+  /** reheat when grabbing a node (settled sim would otherwise not respond) */
+  dragAlpha: 0.5,
+  /** reheat on release — soft recoil of the stretched graph */
+  releaseAlpha: 0.26
 } as const
 
 /**

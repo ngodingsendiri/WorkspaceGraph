@@ -300,3 +300,114 @@ describe('layout regression — bounding box per preset (no explode / no collaps
     expect(cluster.diag).toBeGreaterThan(compact.diag)
   })
 })
+
+// ─── Obsidian rubber-band: drag reheat propagates spring motion ────────────
+// The “rubber band” feel comes from reheating the sim when a node is grabbed:
+// linked neighbors follow the drag with springy lag. A settled (cold) sim must
+// NOT react — forces are scaled by alpha, so alpha≈0 means a dead graph.
+
+describe('Obsidian rubber-band drag physics', () => {
+  /** Build a settled 3-cluster graph; returns sim + hub-0 + its linked ids. */
+  function settledGraph(): {
+    sim: d3.Simulation<SimNode, undefined>
+    hub: SimNode
+    linkedIds: string[]
+  } {
+    const { nodes, links } = buildSyntheticGraph(6)
+    nodes.forEach((n, i) => {
+      const p = spiralSeed(i, nodes.length, 600, 400)
+      n.x = p.x
+      n.y = p.y
+    })
+    const sim = d3
+      .forceSimulation<SimNode>(nodes)
+      .force(
+        'link',
+        d3.forceLink<SimNode, SimLink>(links).id((d) => d.id)
+      )
+      .velocityDecay(OBSIDIAN_SIM.velocityDecay)
+      .alphaDecay(OBSIDIAN_SIM.alphaDecay)
+      .alphaMin(OBSIDIAN_SIM.alphaMin)
+      .alpha(0.72)
+      .stop()
+    applyForceLayout(sim as d3.Simulation<SimNode, undefined>, DEFAULT_FORCE_SETTINGS, {
+      width: 600,
+      height: 400,
+      large: false
+    })
+    sim.tick(300)
+    const hub = nodes[0]!
+    const linkedIds = links
+      .filter((l) => l.source === hub || l.target === hub)
+      .map((l) => (l.source === hub ? (l.target as SimNode).id : (l.source as SimNode).id))
+    return { sim, hub, linkedIds }
+  }
+
+  function snapshotPositions(
+    sim: d3.Simulation<SimNode, undefined>
+  ): Map<string, { x: number; y: number }> {
+    return new Map(sim.nodes().map((n) => [n.id, { x: n.x ?? 0, y: n.y ?? 0 }]))
+  }
+
+  function countMoved(
+    sim: d3.Simulation<SimNode, undefined>,
+    ids: string[],
+    before: Map<string, { x: number; y: number }>,
+    threshold: number
+  ): number {
+    let moved = 0
+    for (const n of sim.nodes()) {
+      if (!ids.includes(n.id)) continue
+      const b = before.get(n.id)
+      if (!b || n.x == null || n.y == null) continue
+      if (Math.hypot(n.x - b.x, n.y - b.y) > threshold) moved++
+    }
+    return moved
+  }
+
+  it('reheating on grab propagates the drag to linked leaves (rubber stretch)', () => {
+    const { sim, hub, linkedIds } = settledGraph()
+    const before = snapshotPositions(sim)
+    // Grab: pin hub far to the right and reheat exactly like GraphCanvas
+    hub.fx = (hub.x ?? 0) + 260
+    hub.fy = hub.y
+    sim.alphaTarget(OBSIDIAN_SIM.dragAlphaTarget)
+    sim.alpha(Math.max(sim.alpha(), OBSIDIAN_SIM.dragAlpha)).restart()
+    sim.tick(60)
+    // Linked leaves were dragged along — the rubber stretch is visible
+    expect(countMoved(sim, linkedIds, before, 12)).toBeGreaterThan(0)
+  })
+
+  it('a settled (cold) sim barely reacts — reheating is what makes it elastic', () => {
+    const { sim, hub, linkedIds } = settledGraph()
+    const before = snapshotPositions(sim)
+    hub.fx = (hub.x ?? 0) + 260
+    hub.fy = hub.y
+    // OLD behavior: no reheat — alpha stays at its settled near-zero value
+    sim.restart()
+    sim.tick(60)
+    expect(countMoved(sim, linkedIds, before, 12)).toBe(0)
+  })
+
+  it('releasing the grab leaves a soft recoil instead of a dead stop', () => {
+    const { sim, hub } = settledGraph()
+    hub.fx = (hub.x ?? 0) + 260
+    hub.fy = hub.y
+    sim.alphaTarget(OBSIDIAN_SIM.dragAlphaTarget)
+    sim.alpha(Math.max(sim.alpha(), OBSIDIAN_SIM.dragAlpha)).restart()
+    sim.tick(40)
+    // Release: cool back down but with a recoil reheat (GraphCanvas endGesture)
+    sim.alphaTarget(0)
+    sim.alpha(Math.max(sim.alpha(), OBSIDIAN_SIM.releaseAlpha)).restart()
+    const before = new Map(sim.nodes().map((n) => [n.id, { x: n.x ?? 0, y: n.y ?? 0 }]))
+    sim.tick(40)
+    // Nodes keep moving after release (spring-back), not a hard freeze
+    let stillMoving = 0
+    for (const n of sim.nodes()) {
+      const b = before.get(n.id)
+      if (!b || n.x == null || n.y == null) continue
+      if (Math.hypot(n.x - b.x, n.y - b.y) > 1) stillMoving++
+    }
+    expect(stillMoving).toBeGreaterThan(0)
+  })
+})

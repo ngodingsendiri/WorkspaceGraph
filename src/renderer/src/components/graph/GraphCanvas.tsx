@@ -68,6 +68,15 @@ export const DEFAULT_DISPLAY_OPTS: GraphDisplayOpts = {
 }
 
 /**
+ * Interactive overlays rendered inside .graph-stage that must keep their own
+ * clicks. .graph-svg-host and .graph-canvas are pointer-events:none, so pointer
+ * events on the graph surface arrive with target = .graph-stage itself — only
+ * these overlay containers (pointer-events:auto) produce their own targets.
+ */
+const GRAPH_OVERLAY_UI =
+  '.graph-zoom-controls, .graph-filter-live-chip, .graph-diag-banner, .graph-empty'
+
+/**
  * Obsidian-like group query matcher.
  * Space-separated terms, AND semantics; `-term` negates.
  * Prefixes: tag:, path:, file:, type: — bare term matches title/path/tag.
@@ -2493,6 +2502,17 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
     const pointers = new Map<number, { x: number; y: number }>()
     const DRAG_THRESH = 6
 
+    // Overlays keep their own clicks — preventDefault + pointer capture on the
+    // stage swallows their click events in Chromium (zoom buttons appeared dead
+    // / snapped back). During an active gesture the SVG is hidden and the
+    // canvas is pointer-events:none, so extra fingers land on the stage itself
+    // — those must still register (pinch), hence the mode === 'none' guard.
+    const isOverlayUi = (target: EventTarget | null): boolean => {
+      const el = target as Element | null
+      if (!el || typeof el.closest !== 'function') return false
+      return el.closest(GRAPH_OVERLAY_UI) !== null
+    }
+
     const screenToWorld = (clientX: number, clientY: number): { x: number; y: number } => {
       const rect = wrapEl!.getBoundingClientRect()
       const t = transformRef.current
@@ -2541,7 +2561,19 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
             if (Object.keys(patch).length) void saveLayoutPositionsRef.current(patch, false)
           }, 600)
         }
-        simRef.current?.alphaTarget(animateForcesRef.current ? OBSIDIAN_SIM.animateAlphaTarget : 0)
+        // Always end the node gesture back at the resting target — the grab
+        // raised it to dragAlphaTarget, and a plain click (tag/ghost without
+        // navigation) must not leave the graph simmering at that level forever.
+        const nodeEndSim = simRef.current
+        if (nodeEndSim) {
+          nodeEndSim.alphaTarget(animateForcesRef.current ? OBSIDIAN_SIM.animateAlphaTarget : 0)
+          if (moved) {
+            // Release recoil — let the stretched graph spring back softly (rubber)
+            nodeEndSim.alpha(Math.max(nodeEndSim.alpha(), OBSIDIAN_SIM.releaseAlpha)).restart()
+          } else {
+            nodeEndSim.restart()
+          }
+        }
       } else if ((mode === 'pan' || mode === 'pinch') && moved) {
         scheduleSaveCameraRef.current()
       }
@@ -2645,6 +2677,9 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
 
     const onPointerDown = (e: PointerEvent): void => {
       if (!wrapEl) return
+      // Overlay UI inside the stage keeps its own clicks. In-progress gestures
+      // (mode !== 'none') still accept extra fingers for pinch zoom.
+      if (mode === 'none' && isOverlayUi(e.target)) return
       if (e.pointerType === 'mouse' && e.button !== 0 && e.button !== 1) return
       e.preventDefault()
       // Cancel wheel debounce to prevent race with pointer gesture
@@ -2692,7 +2727,14 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
         dragIdRef.current = hit.id
         hit.fx = hit.x
         hit.fy = hit.y
-        simRef.current?.alphaTarget(OBSIDIAN_SIM.animateAlphaTarget).restart()
+        // Obsidian rubber-band: reheat the whole sim on grab so linked
+        // neighbors follow the drag with springy lag — a cooled-down graph
+        // would otherwise sit dead while the node slides away.
+        const dragSim = simRef.current
+        if (dragSim) {
+          dragSim.alphaTarget(OBSIDIAN_SIM.dragAlphaTarget)
+          dragSim.alpha(Math.max(dragSim.alpha(), OBSIDIAN_SIM.dragAlpha)).restart()
+        }
       } else if (hit && (e.ctrlKey || e.metaKey)) {
         setSelectedIds((prev) => {
           const next = new Set(prev)
@@ -2776,20 +2818,25 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
         user: true,
         save: true
       })
-      // Debounce: hide canvas + sync SVG after scrolling stops (280ms idle)
+      // Debounce: hide canvas + sync SVG after scrolling stops (280ms idle).
+      // Paint SYNCHRONOUSLY (not via rAF) so the zoomed frame is guaranteed to
+      // replace the stale SVG even if a sim-tick rAF starves the paint loop —
+      // otherwise the canvas hides and the old camera frame snaps back.
       if (wheelDebounceRef.current) clearTimeout(wheelDebounceRef.current)
       wheelDebounceRef.current = setTimeout(() => {
         wheelDebounceRef.current = null
         // Don't hide if a pointer gesture started during the debounce window
         if (pointerGestureRef.current) return
         hideInteractiveCanvas()
-        schedulePaint()
+        paintFnRef.current()
       }, 280)
     }
 
     const onHover = (e: PointerEvent): void => {
       if (mode !== 'none') return
       if (e.pointerType === 'touch') return
+      // Same overlay rule as pointerdown — no phantom tooltips over overlay UI
+      if (isOverlayUi(e.target)) return
       const hit = hitNodeRef.current(e.clientX, e.clientY)
       const next = hit?.id || null
       if (next !== hoverIdRef.current) {
@@ -2808,6 +2855,9 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
     }
 
     const onDbl = (e: MouseEvent): void => {
+      // Only unpin nodes when double-clicking the graph surface — rapid clicks
+      // on zoom controls must not hit nodes rendered behind the buttons.
+      if (isOverlayUi(e.target)) return
       const hit = hitNodeRef.current(e.clientX, e.clientY)
       if (!hit || hit.isGhost || hit.isTag) return
       hit.fx = null
