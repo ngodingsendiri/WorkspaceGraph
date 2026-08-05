@@ -5,7 +5,11 @@ import {
   FORCE_PRESETS,
   DEFAULT_FORCE_SETTINGS,
   chargeFor,
-  OBSIDIAN_SIM
+  OBSIDIAN_SIM,
+  nodeRadiusFor,
+  edgeWidthFor,
+  MIN_NODE_SCREEN_R,
+  MIN_EDGE_SCREEN_W
 } from './graphShared'
 import type { GraphForceSettings } from '../../store/graphStore'
 import type { SimNode, SimLink } from './graphTypes'
@@ -387,6 +391,40 @@ describe('Obsidian rubber-band drag physics', () => {
     sim.restart()
     sim.tick(60)
     expect(countMoved(sim, linkedIds, before, 12)).toBe(0)
+  })
+
+  it('nodeRadiusFor keeps nodes >= ~2.5px on screen at ANY zoom (shared SVG+Canvas rule)', () => {
+    // At deep zoom-out the world radius shrinks, but the screen floor wins
+    const rWorldFar = nodeRadiusFor(0, 1, false, 0.3)
+    expect(rWorldFar * 0.3).toBeGreaterThanOrEqual(MIN_NODE_SCREEN_R - 0.01)
+    // At zoom-in the floor backs off and the world radius (degree-driven) rules
+    const rWorldNear = nodeRadiusFor(8, 1, false, 2.5)
+    expect(rWorldNear).toBeGreaterThan(nodeRadiusFor(0, 1, false, 2.5))
+    expect(rWorldNear * 2.5).toBeGreaterThan(MIN_NODE_SCREEN_R)
+    // Never below the world radius — floor only ever enlarges
+    const kSafe = 0.01 // extreme zoom-out, floor clamps at 0.05
+    const rWorld = nodeRadiusFor(12, 1, false, kSafe)
+    expect(rWorld).toBeGreaterThanOrEqual(nodeRadiusFor(12, 1, false, 1) / 1)
+    expect(rWorld * 0.05).toBeGreaterThanOrEqual(MIN_NODE_SCREEN_R - 0.01)
+  })
+
+  it('nodeRadiusFor applies tag/ghost shrink and hub dim consistently', () => {
+    // Tags draw ~0.9x the base size in both renderers
+    const base = nodeRadiusFor(4, 1, false, 1)
+    const tag = nodeRadiusFor(4, 1, false, 1, 0.9)
+    expect(tag).toBeCloseTo(base * 0.9)
+    // Hub dim (0.7x) still applies on top of the shared floor
+    const dim = nodeRadiusFor(4, 1, true, 1)
+    expect(dim).toBeLessThan(nodeRadiusFor(4, 1, false, 1))
+    expect(dim).toBeGreaterThanOrEqual(MIN_NODE_SCREEN_R)
+  })
+
+  it('edgeWidthFor keeps edges visible when zoomed out (shared floor)', () => {
+    const far = edgeWidthFor(0.75, 0.3)
+    expect(far * 0.3).toBeGreaterThanOrEqual(MIN_EDGE_SCREEN_W - 0.01)
+    // World width passes through when it already exceeds the floor
+    expect(edgeWidthFor(1.6, 1)).toBe(1.6)
+    expect(edgeWidthFor(0.75, 2)).toBe(0.75)
   })
 
   it('releasing the grab leaves a soft recoil instead of a dead stop', () => {

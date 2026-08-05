@@ -13,7 +13,8 @@ import {
   lerp,
   labelZoomAlpha,
   canvasSafeColor,
-  radius,
+  nodeRadiusFor,
+  edgeWidthFor,
   nid,
   type LodLevel
 } from './graphShared'
@@ -128,7 +129,6 @@ export function drawCanvas2DScene(dc: DrawContext, hot: HotSet): void {
   const drawArrows = flags.arrows && k >= 0.4 && lod === 'full'
   const margin = lod === 'low' ? 24 : 48
   const kSafe = Math.max(k, 0.05)
-  const minWorldR = 5.5 / kSafe
 
   // Canvas setup
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
@@ -209,7 +209,8 @@ export function drawCanvas2DScene(dc: DrawContext, hot: HotSet): void {
     ctx.lineTo(tg.x, tg.y)
     ctx.strokeStyle = canvasSafeColor(edgeColor, 'rgba(170,175,190,0.38)')
     ctx.globalAlpha = Math.max(0.08, Math.min(0.95, edgeAlpha * (onPath ? 1 : 0.7)))
-    ctx.lineWidth = Math.max(edgeW / k, 0.6 / k)
+    // Shared screen-space floor (same rule as SVG) so edges don't jump on handoff
+    ctx.lineWidth = edgeWidthFor(edgeW, kSafe)
     if (e.type === 'tag' && !onPath) ctx.setLineDash([3 / k, 4 / k])
     else ctx.setLineDash([])
     ctx.stroke()
@@ -223,7 +224,13 @@ export function drawCanvas2DScene(dc: DrawContext, hot: HotSet): void {
         const isTgGhost = Boolean(tg.isGhost || tg.type === 'ghost')
         const isTgTag = Boolean(tg.isTag || tg.type === 'tag')
         const isTgHub = !isTgGhost && !isTgTag && tg.degree >= thr && dimHubsOn
-        const tgR = radius(tg, 1, isTgHub) * sizeMul
+        const tgR = nodeRadiusFor(
+          tg.degree ?? 0,
+          sizeMul,
+          isTgHub,
+          kSafe,
+          isTgGhost || isTgTag ? 0.9 : 1
+        )
         const ux = dx / len
         const uy = dy / len
         const ax = tg.x - ux * (tgR + 2 + edgeW * 0.5)
@@ -265,14 +272,14 @@ export function drawCanvas2DScene(dc: DrawContext, hot: HotSet): void {
     const isTag = Boolean(n.isTag || n.type === 'tag')
     const isAttachment = Boolean(n.isAttachment || n.type === 'attachment')
     const isHub = !isGhost && !isTag && n.degree >= thr
-    const hubScale = dimHubsOn && isHub ? 0.7 : 1
-    const rBase =
-      (isGhost
-        ? Math.max(2.4, radius(n, 0.9))
-        : isTag || isAttachment
-          ? Math.max(2.4, radius(n, 0.9))
-          : radius(n, hubScale)) * sizeMul
-    const r = Math.max(rBase, minWorldR * 0.85)
+    // Same rule as the SVG renderer: world radius + shared screen-space floor
+    const r = nodeRadiusFor(
+      n.degree ?? 0,
+      sizeMul,
+      dimHubsOn && isHub,
+      kSafe,
+      isGhost || isTag || isAttachment ? 0.9 : 1
+    )
     const col = canvasSafeColor(
       resolveObsidianNodeFill({
         isLight: pal.isLight,
@@ -335,7 +342,8 @@ export function drawCanvas2DScene(dc: DrawContext, hot: HotSet): void {
       ctx.fillStyle = pal.isLight ? 'rgba(255,255,255,0.35)' : 'rgba(20,22,28,0.4)'
       ctx.fill()
       ctx.strokeStyle = col
-      ctx.lineWidth = 1.2 / k
+      // Shared world-space rule with the SVG renderer (screen floor included)
+      ctx.lineWidth = edgeWidthFor(1, kSafe)
       ctx.setLineDash([2.5 / k, 2 / k])
       ctx.stroke()
       ctx.setLineDash([])
@@ -344,20 +352,19 @@ export function drawCanvas2DScene(dc: DrawContext, hot: HotSet): void {
       ctx.fill()
     }
 
-    // Node stroke
+    // Node stroke — same world-space values as the SVG renderer so the
+    // canvas→SVG handoff never shows a stroke-thickness jump
     const isPinned = Boolean(n.pinned || (n.fx != null && n.fy != null))
     const strokeW =
-      isSelected || isEndpoint || isFocus
-        ? 2.8
-        : onPath || isMatch
-          ? 2.2
-          : isPinned
-            ? 2
-            : isHoverNode
-              ? lerp(1, 1.7, hs)
-              : 1
+      isSelected || isEndpoint || isFocus || onPath || isMatch
+        ? 1.35
+        : isPinned
+          ? 1
+          : isHoverNode
+            ? lerp(0.7, 1.1, hs)
+            : 0.55
     if (!isGhost) {
-      ctx.lineWidth = strokeW / k
+      ctx.lineWidth = edgeWidthFor(strokeW, kSafe)
       ctx.strokeStyle =
         isSelected || onPath || isFocus || isMatch || isEndpoint
           ? pal.edgeHot
@@ -375,7 +382,7 @@ export function drawCanvas2DScene(dc: DrawContext, hot: HotSet): void {
       ctx.arc(n.x, n.y, r + 4.5, 0, Math.PI * 2)
       ctx.strokeStyle = pal.edgeHot
       ctx.globalAlpha = 0.85 * alpha
-      ctx.lineWidth = 1.8 / k
+      ctx.lineWidth = edgeWidthFor(0.9, kSafe)
       ctx.setLineDash([])
       ctx.stroke()
       ctx.globalAlpha = alpha
@@ -457,7 +464,7 @@ export function drawCanvas2DScene(dc: DrawContext, hot: HotSet): void {
         spotMul = lerp(1, 0.28, hs)
 
       const isHub = n.degree >= thr
-      const rWorld = radius(n, dimHubsOn && isHub ? 0.62 : 1) * sizeMul
+      const rWorld = nodeRadiusFor(n.degree ?? 0, sizeMul, dimHubsOn && isHub, kSafe)
       const sx = n.x * k + tx + rWorld * k + 6
       const sy = n.y * k + ty
       if (sx < -40 || sx > w + 40 || sy < -20 || sy > h + 20) continue

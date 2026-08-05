@@ -212,6 +212,40 @@ export function nodeRadius(degree: number, scale = 1, hubDim = false): number {
   return base * scale * (hubDim ? 0.7 : 1)
 }
 
+/**
+ * Minimum on-screen node radius (px) — both renderers keep nodes visible
+ * at low zoom so the SVG↔Canvas2D handoff never shows a size jump.
+ */
+export const MIN_NODE_SCREEN_R = 2.5
+/** Minimum on-screen edge width (px). */
+export const MIN_EDGE_SCREEN_W = 0.6
+
+/**
+ * Node radius in world units with a shared screen-space floor (~2.5px on
+ * screen at ANY zoom). k = current camera zoom. Both the SVG renderer and
+ * the Canvas2D gesture renderer must use this SAME rule so a wheel/pan
+ * handoff never pops.
+ */
+export function nodeRadiusFor(
+  degree: number,
+  scale: number,
+  hubDim: boolean,
+  k: number,
+  tagMul = 1
+): number {
+  const world = nodeRadius(degree, scale, hubDim) * tagMul
+  return Math.max(MIN_NODE_SCREEN_R / Math.max(k, 0.05), world)
+}
+
+/**
+ * Edge width in world units with a shared screen-space floor (~0.6px on
+ * screen). Shared by SVG + Canvas2D so stroke width never jumps between
+ * renderers.
+ */
+export function edgeWidthFor(world: number, k: number): number {
+  return Math.max(MIN_EDGE_SCREEN_W / Math.max(k, 0.05), world)
+}
+
 /** Ideal link distance — longer for hubs so clusters breathe (Obsidian-ish). */
 export function linkDistanceFor(sourceDegree: number, targetDegree: number, base: number): number {
   const d = Math.max(sourceDegree, 0) + Math.max(targetDegree, 0)

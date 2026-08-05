@@ -25,7 +25,6 @@ import {
   resolveObsidianNodeFill,
   labelDrawBudget,
   resolveLod,
-  nodeRadius,
   applyForceLayout,
   edgeKey,
   smooth01,
@@ -41,7 +40,8 @@ import {
   type LodLevel,
   canvasSafeColor,
   readPalette,
-  radius,
+  nodeRadiusFor,
+  edgeWidthFor,
   nid,
   safeTags,
   escapeHtml
@@ -1148,10 +1148,13 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
             else if (dimHover) op = lerp(op, 0.12, hs)
             else if (dimPath || dimFocus) op = 0.12
             else if (dimSearch) op = 0.14
-            // World-space stroke (scales with zoom via group transform)
-            const sw =
+            // World-space stroke (scales with zoom via group transform) with a
+            // shared screen-space floor so edges stay visible when zoomed out
+            const sw = edgeWidthFor(
               (onPath ? 1.6 : isHot ? lerp(0.85, 1.15, hs) : e.type === 'tag' ? 0.55 : 0.75) *
-              lineMul
+                lineMul,
+              t.k
+            )
             edgesOut.push({
               key: ek,
               x1: s.x,
@@ -1202,10 +1205,14 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
               pal.colors.default || '#7c6cf0'
             )
             const deg = typeof n.degree === 'number' ? n.degree : 0
-            // World radius — scales with zoom (Obsidian feel)
-            const rWorld = Math.max(
-              2.2,
-              nodeRadius(deg, sizeMul, dimHubsOn && isHub) * (isTag || isAtt ? 0.9 : 1)
+            // World radius — scales with zoom (Obsidian feel) with a shared
+            // screen-space floor (same rule as Canvas2D, no handoff jump)
+            const rWorld = nodeRadiusFor(
+              deg,
+              sizeMul,
+              dimHubsOn && isHub,
+              t.k,
+              isTag || isAtt ? 0.9 : 1
             )
             const isHover = n.id === hover
             const isSel = sel != null && sel.has(n.id)
@@ -1230,7 +1237,10 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
 
             const stroke =
               isHover || isSel || onPath || isMatch ? pal.edgeHot : isGhost ? col : pal.nodeStroke
-            const sw = isSel || onPath ? 1.35 : isHover ? lerp(0.7, 1.1, hs) : isGhost ? 1 : 0.55
+            const sw = edgeWidthFor(
+              isSel || onPath ? 1.35 : isHover ? lerp(0.7, 1.1, hs) : isGhost ? 1 : 0.55,
+              t.k
+            )
 
             nodesOut.push({
               key: n.id,
@@ -1776,9 +1786,18 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
       const dy = n.y - y
       const d = dx * dx + dy * dy
       const isGhost = Boolean(n.isGhost || n.type === 'ghost')
-      const hubScale = !isGhost && dimHubsOn && n.degree >= thr ? 0.62 : 1
-      const baseR = radius(n, hubScale) * sizeMul
-      // Generous hit pad — touch needs even larger grab area
+      const isTag = Boolean(n.isTag || n.type === 'tag')
+      const isAtt = Boolean(n.isAttachment || n.type === 'attachment')
+      const hubDim = !isGhost && dimHubsOn && n.degree >= thr
+      // Same radius rule as the renderers (screen-space floor) so hit-testing
+      // matches what is drawn, then a generous grab pad for touch
+      const baseR = nodeRadiusFor(
+        n.degree ?? 0,
+        sizeMul,
+        hubDim,
+        t.k,
+        isGhost || isTag || isAtt ? 0.9 : 1
+      )
       const pad = n.id === stickyId ? 22 : 16
       const r = baseR + pad
       if (d <= r * r) {
@@ -1799,8 +1818,8 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
         const dx = sn.x - x
         const dy = sn.y - y
         const d = dx * dx + dy * dy
-        const hubScale = dimHubsOn && sn.degree >= thr ? 0.62 : 1
-        const r = radius(sn, hubScale) * sizeMul + 14
+        const hubDim = dimHubsOn && sn.degree >= thr
+        const r = nodeRadiusFor(sn.degree ?? 0, sizeMul, hubDim, t.k) + 14
         if (d <= r * r) {
           sticky = sn
           stickyD = d
