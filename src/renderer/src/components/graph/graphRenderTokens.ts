@@ -210,6 +210,27 @@ export function nodeEntryOpacity(p: number): number {
 }
 
 /**
+ * G-perf: sim-motion SVG reconciliation throttle window (ms). While the force
+ * sim moves, the frame object is rebuilt every paint (~0.2ms) but the React
+ * commit of thousands of SVG elements happens at most once per window.
+ */
+export const SVG_PUSH_THROTTLE_MS = 100
+
+/**
+ * G-perf: latest-wins throttle decision for SVG frame commits.
+ * Returns true when a commit happened within the window (defer to pending),
+ * false when it is time to commit (or the caller is flushing).
+ */
+export function shouldThrottleSvgPush(
+  now: number,
+  lastCommitAt: number,
+  throttle = false
+): boolean {
+  if (!throttle) return false
+  return now - lastCommitAt < SVG_PUSH_THROTTLE_MS
+}
+
+/**
  * G20: edge stroke color — single source of truth for BOTH renderers.
  * `default` = Obsidian mono (wiki_link/folder/attachment share the neutral
  * edge color, tag gets the dimmer edgeTag tint). `type` = distinct per-type

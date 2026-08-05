@@ -391,9 +391,46 @@ describe('Renderer wiring', () => {
         'nodeEntryScale',
         'nodeEntryOpacity',
         // G20: edge color by type — single source for both renderers
-        'edgeColorFor'
+        'edgeColorFor',
+        // G-perf: sim-motion SVG reconciliation throttle
+        'shouldThrottleSvgPush',
+        'SVG_PUSH_THROTTLE_MS'
       )
     ).toBe(true)
+  })
+  it('sim-motion SVG throttle wired in GraphCanvas (G-perf)', () => {
+    const gc = read('src/renderer/src/components/graph/GraphCanvas.tsx')
+    // Throttle engaged only while the sim moves; flush on settle + gesture
+    expect(has(gc, 'svgThrottleRef.current = activeSim.alpha() >= 0.05')).toBe(true)
+    expect(has(gc, 'flushSvgFrameRef.current()')).toBe(true)
+    expect(has(gc, 'shouldThrottleSvgPush')).toBe(true)
+  })
+  it('real-browser perf overlay wired in GraphCanvas (G-perf)', () => {
+    const gc = read('src/renderer/src/components/graph/GraphCanvas.tsx')
+    const ps = read('src/renderer/src/components/graph/graphPerfStats.ts')
+    // Toggle key D + overlay panel + rolling stats module + layout-effect timing
+    expect(has(gc, "e.key === 'd' || e.key === 'D'")).toBe(true)
+    expect(has(gc, 'graph-perf-overlay')).toBe(true)
+    expect(has(gc, 'RollingPerfStats')).toBe(true)
+    expect(has(gc, 'useLayoutEffect')).toBe(true)
+    expect(has(gc, 'SVG_PUSH_THROTTLE_MS')).toBe(true)
+    expect(has(ps, 'export class RollingPerfStats')).toBe(true)
+    expect(has(ps, 'p95CommitMs')).toBe(true)
+  })
+  it('delta-merge structural sharing wired in GraphCanvas (G-perf)', () => {
+    const gc = read('src/renderer/src/components/graph/GraphCanvas.tsx')
+    // Prev-frame caches exist, merge runs right before push, reset on rebuild
+    expect(has(gc, 'prevEdgesRef')).toBe(true)
+    expect(has(gc, 'prevNodesRef')).toBe(true)
+    expect(has(gc, 'prevLabelsRef')).toBe(true)
+    expect(has(gc, 'deltaMerge(prevEdgesRef.current, edgesOut, sameSvgEdge)')).toBe(true)
+    expect(has(gc, 'deltaMerge(prevNodesRef.current, nodesOut, sameSvgNode)')).toBe(true)
+    expect(has(gc, 'deltaMerge(prevLabelsRef.current, labelsOut, sameSvgLabel)')).toBe(true)
+    expect(has(gc, 'resetFrameCache()')).toBe(true)
+    // Memoized per-element components bail on stable object references
+    expect(has(gc, 'const SvgEdgeItem = memo(')).toBe(true)
+    expect(has(gc, 'const SvgNodeItem = memo(')).toBe(true)
+    expect(has(gc, 'const SvgLabelItem = memo(')).toBe(true)
   })
   it('both renderers consume edgeColorFor (G20 anti-drift)', () => {
     const c2d = read('src/renderer/src/components/graph/graphCanvas2D.ts')

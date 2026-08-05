@@ -33,7 +33,9 @@ import {
   nodeEntryProgress,
   nodeEntryScale,
   nodeEntryOpacity,
-  edgeColorFor
+  edgeColorFor,
+  SVG_PUSH_THROTTLE_MS,
+  shouldThrottleSvgPush
 } from './graphRenderTokens'
 import type { GraphForceSettings } from '../../store/graphStore'
 import type { SimNode, SimLink } from './graphTypes'
@@ -676,6 +678,25 @@ describe('node entry animation (G19)', () => {
       expect(nodeEntryOpacity(0.5)).toBeGreaterThan(0)
       expect(nodeEntryOpacity(0.5)).toBeLessThan(1)
     })
+  })
+})
+
+describe('SVG push throttle (G-perf sim motion)', () => {
+  it('throttles commits within the window only when enabled', () => {
+    const t0 = 1000
+    // Within window + throttle on → defer (true)
+    expect(shouldThrottleSvgPush(t0 + 10, t0, true)).toBe(true)
+    // Just outside the window → commit (false)
+    expect(shouldThrottleSvgPush(t0 + SVG_PUSH_THROTTLE_MS + 1, t0, true)).toBe(false)
+    // Throttle off (interaction flush) always commits
+    expect(shouldThrottleSvgPush(t0 + 1, t0, false)).toBe(false)
+    // Never commit more often than the window
+    expect(shouldThrottleSvgPush(t0, t0, true)).toBe(true)
+  })
+
+  it('exposes the throttle window constant', () => {
+    expect(SVG_PUSH_THROTTLE_MS).toBeGreaterThan(0)
+    expect(SVG_PUSH_THROTTLE_MS).toBeLessThan(1000)
   })
 })
 

@@ -5,7 +5,15 @@
  * Physics goal (Obsidian benchmark): alive but stable — soft settle, hubs
  * breathe, filter/data updates soft-merge positions (no full explode).
  */
-import React, { useEffect, useRef, useState, useMemo, useCallback } from 'react'
+import React, {
+  useEffect,
+  useRef,
+  useState,
+  useMemo,
+  useCallback,
+  useLayoutEffect,
+  memo
+} from 'react'
 import * as d3 from 'd3'
 import {
   useGraphStore,
@@ -19,6 +27,7 @@ import {
 import { useEditorStore } from '../../store/editorStore'
 import { useWorkspaceStore } from '../../store/workspaceStore'
 import type { SimNode, SimLink, SvgEdge, SvgNode, SvgLabel, SvgFrame } from './graphTypes'
+import { deltaMerge, sameSvgEdge, sameSvgNode, sameSvgLabel } from './graphFrameDelta'
 import {
   DEFAULT_FORCE_SETTINGS,
   OBSIDIAN_SIM,
@@ -53,12 +62,15 @@ import {
   PATH_EDGE_W,
   baseEdgeWidth,
   edgeColorFor,
+  shouldThrottleSvgPush,
+  SVG_PUSH_THROTTLE_MS,
   NODE_ENTRY_MS,
   NODE_ENTRY_STAGGER_MS,
   nodeEntryProgress,
   nodeEntryScale,
   nodeEntryOpacity
 } from './graphRenderTokens'
+import { RollingPerfStats } from './graphPerfStats'
 import {
   SpatialHash2D,
   diagnoseEmptyFilter,
@@ -78,6 +90,62 @@ import {
   type ColorByMode
 } from './GraphFiltersPanel'
 import type { GraphSearchMode } from '../../store/graphStore'
+
+/**
+ * G-perf: memoized SVG element components. Each takes the element object as a
+ * single prop; React.memo's default shallow compare turns into a reference
+ * check, so elements whose object identity is stable across frames (delta
+ * merge) bail out without re-rendering or DOM diffing. Defined at module scope
+ * so the component identity is stable across GraphCanvas renders.
+ */
+const SvgEdgeItem = memo(function SvgEdgeItem({ e }: { e: SvgEdge }) {
+  return (
+    <line
+      x1={e.x1}
+      y1={e.y1}
+      x2={e.x2}
+      y2={e.y2}
+      stroke={e.stroke}
+      strokeWidth={e.sw}
+      strokeOpacity={e.op}
+      strokeLinecap="round"
+      strokeDasharray={e.dash}
+    />
+  )
+})
+
+const SvgNodeItem = memo(function SvgNodeItem({ n }: { n: SvgNode }) {
+  return (
+    <circle
+      cx={n.cx}
+      cy={n.cy}
+      r={n.r}
+      fill={n.fill === 'none' ? 'none' : n.fill}
+      stroke={n.stroke}
+      strokeWidth={n.sw}
+      fillOpacity={n.fill === 'none' ? 0 : n.fillOp}
+      strokeOpacity={n.strokeOp ?? (n.fill === 'none' ? n.fillOp : 1)}
+      strokeDasharray={n.kind === 'ghost' ? '2 2' : undefined}
+    />
+  )
+})
+
+const SvgLabelItem = memo(function SvgLabelItem({ lab }: { lab: SvgLabel }) {
+  return (
+    <text
+      x={lab.x}
+      y={lab.y}
+      fill={lab.fill}
+      fillOpacity={lab.op}
+      fontSize={11}
+      fontFamily='Inter, "Segoe UI", system-ui, sans-serif'
+      fontWeight={lab.bold ? 600 : 400}
+      dominantBaseline="middle"
+    >
+      {lab.text}
+    </text>
+  )
+})
 
 /** Obsidian-like display defaults (text fade soft at distance).
  *  textFade 0.75 (G6): labels reach solid earlier on zoom-in than 0.9. */
@@ -225,16 +293,116 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
   const startZoomTweenRef = useRef<(targetK: number, fx: number, fy: number) => void>(() => {})
   const cancelZoomTweenRef = useRef<() => void>(() => {})
   const [svgFrame, setSvgFrame] = useState<SvgFrame | null>(null)
+  /** Last React SVG frame COMMIT time (pushes can be throttled/deferred). */
   const lastSvgPushRef = useRef(0)
   const svgRef = useRef<SVGSVGElement | null>(null) // for PNG export clone
   const emptySvgFramesRef = useRef(0)
   const lastAutoFitOffscreenAtRef = useRef(0)
   /** Only paint hidden canvas when exporting PNG */
   const exportCanvasPaintRef = useRef(false)
-  const pushSvgFrame = useCallback((frame: SvgFrame) => {
-    lastSvgPushRef.current = performance.now()
+  /** G-perf: while the force sim moves, throttle React SVG reconciliation. */
+  const pendingSvgFrameRef = useRef<SvgFrame | null>(null)
+  const svgThrottleRef = useRef(false)
+  /** G-perf: previous frame element lists — delta merge reuses unchanged refs. */
+  const prevEdgesRef = useRef<SvgEdge[] | null>(null)
+  const prevNodesRef = useRef<SvgNode[] | null>(null)
+  const prevLabelsRef = useRef<SvgLabel[] | null>(null)
+  /**
+   * G-perf debug overlay: real-browser commit measurement + element counts.
+   * Toggle with `d` in the graph view. Samples are recorded only while the
+   * overlay is on (zero overhead in normal use).
+   */
+  const [perfOverlay, setPerfOverlay] = useState(false)
+  const perfOverlayRef = useRef(false)
+  perfOverlayRef.current = perfOverlay
+  const perfStatsRef = useRef<RollingPerfStats | null>(null)
+  const perfCommitStartRef = useRef(0)
+  /** Pushes deferred by the throttle (frames that never reached React). */
+  const perfThrottledRef = useRef(0)
+  const [perfSnap, setPerfSnap] = useState<ReturnType<RollingPerfStats['snapshot']> | null>(null)
+  const perfTickRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  /**
+   * Drop prev-frame references at structural rebuilds (filter change, empty,
+   * error path). deltaMerge is value-safe (equal fields ⇒ same rendering), but
+   * the caches would otherwise pin the previous graph generation's element
+   * objects in memory until the next non-empty merge replaces them.
+   */
+  const resetFrameCache = useCallback(() => {
+    prevEdgesRef.current = null
+    prevNodesRef.current = null
+    prevLabelsRef.current = null
+  }, [])
+  /**
+   * Commit an SVG frame to React. With `throttle`, when a commit happened
+   * within SVG_PUSH_THROTTLE_MS we keep the newest frame as pending (latest-wins)
+   * and skip setState — the frame object is still rebuilt every paint (cheap,
+   * ~0.2ms), but React does not reconcile thousands of elements every sim tick.
+   */
+  const pushSvgFrame = useCallback((frame: SvgFrame, throttle = false) => {
+    const now = performance.now()
+    if (shouldThrottleSvgPush(now, lastSvgPushRef.current, throttle)) {
+      if (perfOverlayRef.current) perfThrottledRef.current++
+      pendingSvgFrameRef.current = frame
+      return
+    }
+    pendingSvgFrameRef.current = null
+    lastSvgPushRef.current = now
+    if (perfOverlayRef.current) perfCommitStartRef.current = now
     setSvgFrame(frame)
   }, [])
+  /** Force-commit any throttled pending frame (sim settle / gesture start). */
+  const flushSvgFrame = useCallback(() => {
+    const pending = pendingSvgFrameRef.current
+    if (!pending) return
+    pendingSvgFrameRef.current = null
+    lastSvgPushRef.current = performance.now()
+    if (perfOverlayRef.current) perfCommitStartRef.current = performance.now()
+    setSvgFrame(pending)
+  }, [])
+  const flushSvgFrameRef = useRef(flushSvgFrame)
+  flushSvgFrameRef.current = flushSvgFrame
+
+  /**
+   * Real-browser commit measurement: stamp before setState (done in
+   * pushSvgFrame/flushSvgFrame), then useLayoutEffect fires synchronously after
+   * the DOM mutation — the delta is React render + reconciliation + DOM diff
+   * for exactly this frame, no rAF jitter. Sampled only when overlay is on.
+   */
+  useLayoutEffect(() => {
+    if (!perfOverlayRef.current || !svgFrame) return
+    const stats = perfStatsRef.current
+    if (!stats) return
+    const start = perfCommitStartRef.current
+    stats.push({
+      commitMs: start > 0 ? Math.max(0, performance.now() - start) : 0,
+      edges: svgFrame.edges.length,
+      nodes: svgFrame.nodes.length,
+      labels: svgFrame.labels.length,
+      ts: performance.now()
+    })
+  }, [svgFrame])
+
+  /**
+   * While the overlay is on, refresh the HUD panel a few times per second
+   * (the panel is a tiny React node — cheap; it never touches the SVG tree).
+   */
+  useEffect(() => {
+    // Pause sampling when the graph view is hidden — no commits happen anyway,
+    // so the 250 ms tick would only churn the hidden panel's React state.
+    if (!perfOverlay || activeView !== 'graph') return
+    perfStatsRef.current = new RollingPerfStats()
+    perfThrottledRef.current = 0
+    perfCommitStartRef.current = 0
+    setPerfSnap(perfStatsRef.current.snapshot())
+    perfTickRef.current = setInterval(() => {
+      if (perfStatsRef.current) setPerfSnap(perfStatsRef.current.snapshot())
+    }, 250)
+    return () => {
+      if (perfTickRef.current) clearInterval(perfTickRef.current)
+      perfTickRef.current = null
+      perfStatsRef.current = null
+    }
+  }, [perfOverlay, activeView])
   const simRef = useRef<d3.Simulation<SimNode, SimLink> | null>(null)
   const nodesRef = useRef<SimNode[]>([])
   const linksRef = useRef<SimLink[]>([])
@@ -1031,10 +1199,20 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
   const paint = useCallback(() => {
     // During interactive gestures, draw directly to Canvas 2D — skip SVG reconciliation
     if (interactiveCanvasRef.current) {
+      // Consume any leftover sim-motion throttle: a gesture can span a sim tick
+      // (grab a node mid-settle), so the paint right after hideInteractiveCanvas
+      // must commit the final frame — never inherit a stale throttle flag.
+      svgThrottleRef.current = false
+      pendingSvgFrameRef.current = null
       drawCanvas2DRef.current()
       dirtyRef.current = false
       return
     }
+    // G-perf: this paint may be a sim-motion frame — throttle the React commit.
+    // Read + reset here so only the sim-tick paints are throttled, not hover /
+    // entry / zoom tweens (those flush every frame for smooth interaction).
+    const svgThrottle = svgThrottleRef.current
+    svgThrottleRef.current = false
     try {
       // ── Size from STAGE (wrap) first — display must not depend on hidden canvas ──
       const wrap = wrapRef.current
@@ -1141,21 +1319,27 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
           const edgesOut: SvgEdge[] = []
           let edgeList = simLinks
           if (simLinks.length > maxE) {
-            edgeList = [...simLinks]
-              .sort((a, b) => {
-                const score = (e: SimLink): 0 | 3 | 2 => {
-                  const s = end(e.source as string | SimNode)
-                  const tg = end(e.target as string | SimNode)
-                  if (!s?.id || !tg?.id) return 0
-                  const ek = edgeKey(s.id, tg.id)
-                  if (pathE != null && pathE.has(ek)) return 3
-                  if (focE != null && focE.has(ek)) return 2
-                  if (hot && (s.id === hover || tg.id === hover)) return 2
-                  return 0
-                }
-                return score(b) - score(a)
-              })
-              .slice(0, maxE)
+            // Perf: priority sort is O(E·log E) per frame; without any highlight
+            // layer (path/focus/hover) every edge scores 0 so sort is pure waste
+            // on every sim tick of a large vault — slice directly instead.
+            const hasEdgePriority = pathE != null || focE != null || hot != null
+            edgeList = hasEdgePriority
+              ? [...simLinks]
+                  .sort((a, b) => {
+                    const score = (e: SimLink): 0 | 3 | 2 => {
+                      const s = end(e.source as string | SimNode)
+                      const tg = end(e.target as string | SimNode)
+                      if (!s?.id || !tg?.id) return 0
+                      const ek = edgeKey(s.id, tg.id)
+                      if (pathE != null && pathE.has(ek)) return 3
+                      if (focE != null && focE.has(ek)) return 2
+                      if (hot && (s.id === hover || tg.id === hover)) return 2
+                      return 0
+                    }
+                    return score(b) - score(a)
+                  })
+                  .slice(0, maxE)
+              : simLinks.slice(0, maxE)
           }
           for (const e of edgeList) {
             const s = end(e.source as string | SimNode)
@@ -1451,17 +1635,29 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
           }
 
           const hud = `${simNodes.length} notes · ${simLinks.length} links · k:${kSafe.toFixed(2)}`
-          pushSvgFrame({
-            w: Math.max(1, w),
-            h: Math.max(1, h),
-            tx: t.x,
-            ty: t.y,
-            k: kSafe,
-            edges: edgesOut,
-            nodes: nodesOut,
-            labels: labelsOut,
-            hud
-          })
+          // G-perf: structural sharing — reuse unchanged element references so
+          // the memoized SVG components bail out (no DOM diff) for everything
+          // that did not change this frame.
+          const mergedEdges = deltaMerge(prevEdgesRef.current, edgesOut, sameSvgEdge)
+          const mergedNodes = deltaMerge(prevNodesRef.current, nodesOut, sameSvgNode)
+          const mergedLabels = deltaMerge(prevLabelsRef.current, labelsOut, sameSvgLabel)
+          prevEdgesRef.current = mergedEdges
+          prevNodesRef.current = mergedNodes
+          prevLabelsRef.current = mergedLabels
+          pushSvgFrame(
+            {
+              w: Math.max(1, w),
+              h: Math.max(1, h),
+              tx: t.x,
+              ty: t.y,
+              k: kSafe,
+              edges: mergedEdges,
+              nodes: mergedNodes,
+              labels: mergedLabels,
+              hud
+            },
+            svgThrottle
+          )
         }
       } catch (svgErr) {
         console.error('[GraphCanvas] SVG frame failed:', svgErr)
@@ -1828,6 +2024,7 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
       const fNodes = filteredNodesRef.current
       const fEdges = filteredEdgesRef.current
       if (nodesRef.current.length === 0 && fNodes.length > 0) {
+        resetFrameCache()
         const wrap = wrapRef.current
         const w = Math.max(wrap?.clientWidth || 0, 400)
         const h = Math.max(wrap?.clientHeight || 0, 300)
@@ -2094,6 +2291,7 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
       simRef.current = null
       nodesRef.current = []
       linksRef.current = []
+      resetFrameCache()
       setStats({ nodes: 0, edges: 0 })
       hasAutoFitRef.current = false
       schedulePaint()
@@ -2202,6 +2400,7 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
       // G19: new nodes entered the sim → run the bounded entry repaint driver
       // so they fade+scale in. No-op when nothing changed (soft membership).
       if (newBatch > 0) entryKickRef.current()
+      resetFrameCache()
       // Prune posCache entries for nodes no longer in the simulation
       const activeIds = new Set(simNodes.map((n) => n.id))
       for (const key of posCache.current.keys()) {
@@ -2296,6 +2495,10 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
           if (interactiveCanvasRef.current) {
             drawCanvas2DRef.current()
           } else {
+            // G-perf: while the sim is actively moving, throttle the React SVG
+            // commit (latest-wins at most every SVG_PUSH_THROTTLE_MS). The final
+            // settle frame (alpha < 0.05) always commits immediately.
+            svgThrottleRef.current = activeSim.alpha() >= 0.05
             schedulePaint()
           }
         }
@@ -2343,6 +2546,8 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
         if (animateForcesRef.current) {
           activeSim.alphaTarget(OBSIDIAN_SIM.animateAlphaTarget).restart()
         }
+        // G-perf: force-commit any throttled frame so the settled graph is exact
+        flushSvgFrameRef.current()
         if (!interactiveCanvasRef.current) schedulePaint()
       })
 
@@ -2368,6 +2573,7 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
       console.error('[GraphCanvas] simulation build failed:', err)
       nodesRef.current = []
       linksRef.current = []
+      resetFrameCache()
       setStats({ nodes: 0, edges: 0 })
       schedulePaint()
       return () => {
@@ -3977,6 +4183,18 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
         setPathStatus(next ? 'Tags ON' : 'Tags OFF')
         return
       }
+      // D = toggle real-browser SVG perf overlay (commit ms + element counts)
+      if (e.key === 'd' || e.key === 'D') {
+        e.preventDefault()
+        const next = !perfOverlayRef.current
+        setPerfOverlay(next)
+        setPathStatus(
+          next
+            ? `Perf overlay ON — ukur commit SVG riil (throttle ${SVG_PUSH_THROTTLE_MS}ms)`
+            : 'Perf overlay OFF'
+        )
+        return
+      }
       // Delete = delete selected non-ghost nodes
       if (e.key === 'Delete' || e.key === 'Backspace') {
         const ids = [...selectedIdsRef.current]
@@ -4287,52 +4505,18 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
               >
                 <g className="g-edges">
                   {svgFrame.edges.map((e) => (
-                    <line
-                      key={e.key}
-                      x1={e.x1}
-                      y1={e.y1}
-                      x2={e.x2}
-                      y2={e.y2}
-                      stroke={e.stroke}
-                      strokeWidth={e.sw}
-                      strokeOpacity={e.op}
-                      strokeLinecap="round"
-                      strokeDasharray={e.dash}
-                    />
+                    <SvgEdgeItem key={e.key} e={e} />
                   ))}
                 </g>
                 <g className="g-nodes">
                   {svgFrame.nodes.map((n) => (
-                    <circle
-                      key={n.key}
-                      cx={n.cx}
-                      cy={n.cy}
-                      r={n.r}
-                      fill={n.fill === 'none' ? 'none' : n.fill}
-                      stroke={n.stroke}
-                      strokeWidth={n.sw}
-                      fillOpacity={n.fill === 'none' ? 0 : n.fillOp}
-                      strokeOpacity={n.strokeOp ?? (n.fill === 'none' ? n.fillOp : 1)}
-                      strokeDasharray={n.kind === 'ghost' ? '2 2' : undefined}
-                    />
+                    <SvgNodeItem key={n.key} n={n} />
                   ))}
                 </g>
               </g>
               <g className="g-labels">
                 {svgFrame.labels.map((lab) => (
-                  <text
-                    key={lab.key}
-                    x={lab.x}
-                    y={lab.y}
-                    fill={lab.fill}
-                    fillOpacity={lab.op}
-                    fontSize={11}
-                    fontFamily='Inter, "Segoe UI", system-ui, sans-serif'
-                    fontWeight={lab.bold ? 600 : 400}
-                    dominantBaseline="middle"
-                  >
-                    {lab.text}
-                  </text>
+                  <SvgLabelItem key={lab.key} lab={lab} />
                 ))}
               </g>
             </svg>
@@ -4552,6 +4736,38 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
             pointerEvents: 'none'
           }}
         />
+
+        {/* G-perf debug overlay — toggle with D, measures real React commit */}
+        {perfOverlay && perfSnap && (
+          <div className="graph-perf-overlay" role="status" aria-live="off">
+            <div className="graph-perf-row graph-perf-title">
+              SVG commit <span className="graph-perf-kbd">D</span> tutup · throttle{' '}
+              {SVG_PUSH_THROTTLE_MS}ms
+            </div>
+            <div className="graph-perf-row">
+              commit <strong>{perfSnap.avgCommitMs.toFixed(2)}ms</strong>
+              <span className="graph-perf-muted">
+                {' '}
+                p95 {perfSnap.p95CommitMs.toFixed(2)} · max {perfSnap.maxCommitMs.toFixed(2)}
+              </span>
+            </div>
+            <div className="graph-perf-row">
+              elemen <strong>{perfSnap.edges + perfSnap.nodes + perfSnap.labels}</strong>
+              <span className="graph-perf-muted">
+                {' '}
+                ({perfSnap.edges}E · {perfSnap.nodes}N · {perfSnap.labels}L)
+              </span>
+            </div>
+            <div className="graph-perf-row">
+              commit/s <strong>{perfSnap.fps}</strong>
+              <span className="graph-perf-muted">
+                {' '}
+                · {perfSnap.count} sample · throttle-defer{' '}
+                <strong>{perfThrottledRef.current}</strong>
+              </span>
+            </div>
+          </div>
+        )}
       </div>
       {/* .graph-stage */}
 

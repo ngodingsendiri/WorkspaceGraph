@@ -155,6 +155,11 @@ export function drawCanvas2DScene(dc: DrawContext, hot: HotSet): void {
   // ── Edges ──
   ctx.lineCap = 'round'
   const maxEdges = edgeDrawBudget(lod, simLinks.length)
+  // Perf: the priority sort is O(E·log E) per frame and only matters when
+  // highlight layers are active. When path/focus/hover/selection are ALL empty
+  // every edge scores 0 — sort would be a pure waste on every sim tick for
+  // large vaults, so slice directly (same selection the sort would produce).
+  const hasEdgePriority = pathE != null || focE != null || hotIds != null || sel != null
   const edgePriority = (e: SimLink): number => {
     const s = e.source as SimNode
     const tg = e.target as SimNode
@@ -169,7 +174,9 @@ export function drawCanvas2DScene(dc: DrawContext, hot: HotSet): void {
   const edgesToDraw =
     simLinks.length <= maxEdges
       ? simLinks
-      : [...simLinks].sort((a, b) => edgePriority(b) - edgePriority(a)).slice(0, maxEdges)
+      : hasEdgePriority
+        ? [...simLinks].sort((a, b) => edgePriority(b) - edgePriority(a)).slice(0, maxEdges)
+        : simLinks.slice(0, maxEdges)
 
   for (const e of edgesToDraw) {
     const s = e.source as SimNode

@@ -1811,6 +1811,51 @@ html:not([data-theme]) {
   background: var(--bg-hover);
 }
 
+/* G-perf debug overlay — real-browser SVG commit measurement (toggle: D) */
+.graph-perf-overlay {
+  position: absolute;
+  bottom: 14px;
+  left: 12px;
+  z-index: calc(var(--z-panel, 20) + 3);
+  pointer-events: none;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font: 11px/1.6 ui-monospace, 'SF Mono', 'Cascadia Code', Consolas, monospace;
+  color: var(--text-muted);
+  backdrop-filter: blur(8px);
+  box-shadow: var(--shadow-sm);
+  min-width: 220px;
+}
+.graph-perf-row {
+  white-space: nowrap;
+}
+.graph-perf-row strong {
+  color: var(--text-primary);
+  font-weight: 600;
+}
+.graph-perf-title {
+  color: var(--text-primary);
+  margin-bottom: 2px;
+  border-bottom: 1px solid var(--border-subtle);
+  padding-bottom: 3px;
+}
+.graph-perf-kbd {
+  display: inline-block;
+  padding: 0 4px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--text-primary);
+  background: var(--bg-hover);
+  margin: 0 2px;
+}
+.graph-perf-muted {
+  opacity: 0.7;
+}
+
 /* Icon-only toolbar chip (Obsidian-like gear) */
 .graph-chip-icon {
   display: inline-flex;
