@@ -11,13 +11,28 @@ import {
   edgeKey,
   smooth01,
   lerp,
-  labelZoomAlpha,
   canvasSafeColor,
-  nodeRadiusFor,
-  edgeWidthFor,
   nid,
   type LodLevel
 } from './graphShared'
+import {
+  labelZoomAlpha,
+  nodeRadiusFor,
+  edgeWidthFor,
+  HOVER_GLOW_ALPHA,
+  edgeGlowAlpha,
+  HOT_EDGE_COLOR_HS,
+  hotEdgeWidth,
+  baseEdgeOpacity,
+  hotEdgeOpacity,
+  PATH_EDGE_OP,
+  PATH_EDGE_W,
+  baseEdgeWidth,
+  edgeColorFor,
+  nodeEntryProgress,
+  nodeEntryScale,
+  nodeEntryOpacity
+} from './graphRenderTokens'
 
 /** Parameters needed by the drawing functions */
 export interface DrawContext {
@@ -38,14 +53,14 @@ export interface DrawContext {
   hoverStrength: number
   /** View flags (filters, path, focus, search, display) */
   flags: ViewFlags
-  /** Path pulse animation 0..1 */
-  pulse: number
   /** LOD level (pre-computed) */
   lod: LodLevel
   /** Whether graph is "large" (for label thinning) */
   large: boolean
   /** Whether labels are visible */
   showLabels: boolean
+  /** G19: force entry animation complete (PNG export never captures mid-fade) */
+  entryComplete?: boolean
 }
 
 /** Pre-computed hot set (hover neighbors) */
@@ -107,7 +122,6 @@ export function drawCanvas2DScene(dc: DrawContext, hot: HotSet): void {
     hover,
     hoverStrength: hs,
     flags,
-    pulse,
     lod,
     large,
     showLabels
@@ -185,30 +199,50 @@ export function drawCanvas2DScene(dc: DrawContext, hot: HotSet): void {
       !matchIds.has(s.id) &&
       !matchIds.has(tg.id)
 
-    const pathAlpha = onPath ? 0.9 + pulse * 0.08 : 1
-    let edgeAlpha = 1
-    if (dimHover) edgeAlpha = lerp(1, 0.38, hs)
-    else if (dimPath) edgeAlpha = 0.28
-    else if (dimFocus) edgeAlpha = 0.32
-    else if (dimSearch) edgeAlpha = 0.32
-    else if (onPath) edgeAlpha = pathAlpha
+    // Edge opacity ladder is IDENTICAL to the SVG renderer (G13/G15) — same
+    // base, same dim values (0.12/0.14), same hot ramp, same flat onPath 0.92 —
+    // so the hovered cluster and path mode pop identically across a gesture
+    // with no *0.7 rescale underneath.
+    let edgeAlpha = baseEdgeOpacity(e.type === 'tag')
+    if (onPath) edgeAlpha = PATH_EDGE_OP
+    else if (onFocus) edgeAlpha = 0.78
+    else if (isHot) edgeAlpha = hotEdgeOpacity(edgeAlpha, hs)
+    else if (dimHover) edgeAlpha = lerp(edgeAlpha, 0.12, hs)
+    else if (dimPath) edgeAlpha = 0.12
+    else if (dimFocus) edgeAlpha = 0.12
+    else if (dimSearch) edgeAlpha = 0.14
 
     const edgeW =
-      (onPath
-        ? 1.5 + pulse * 0.2
-        : isHot
-          ? lerp(0.85, 1.2, hs)
-          : e.type === 'wiki_link'
-            ? 0.75
-            : 0.55) * lineMul
-    const baseEdge = e.type === 'tag' ? pal.edgeTag : pal.edge
-    const edgeColor = onPath ? pal.edgeHot : isHot && hs > 0.4 ? pal.edgeHot : baseEdge
+      (onPath ? PATH_EDGE_W : isHot ? hotEdgeWidth(hs) : baseEdgeWidth(e.type)) * lineMul
+    const edgeColor = onPath
+      ? pal.edgeHot
+      : isHot && hs > HOT_EDGE_COLOR_HS
+        ? pal.edgeHot
+        : edgeColorFor(e.type, flags.edgeColorBy, pal)
+
+    // G8: glow underlay for edges touching the hovered node — a wide soft stroke
+    // beneath the main one, same rule as the SVG renderer (edgeGlowAlpha) so the
+    // canvas→SVG handoff glows identically. Hot edges only, full LOD like the
+    // node halo, and never in path/focus/search modes (their own highlights /
+    // dimming already apply — a search-dimmed edge must not glow brighter than
+    // its own stroke).
+    if (lod === 'full' && isHot && hs > 0.1 && !dimPath && !dimFocus && !dimSearch) {
+      ctx.beginPath()
+      ctx.moveTo(s.x, s.y)
+      ctx.lineTo(tg.x, tg.y)
+      ctx.strokeStyle = canvasSafeColor(pal.edgeHot, 'rgba(170,175,190,0.38)')
+      ctx.globalAlpha = edgeGlowAlpha(hs, onPath)
+      ctx.lineWidth = edgeWidthFor(edgeW * 2.4, kSafe)
+      ctx.setLineDash([])
+      ctx.stroke()
+    }
 
     ctx.beginPath()
     ctx.moveTo(s.x, s.y)
     ctx.lineTo(tg.x, tg.y)
     ctx.strokeStyle = canvasSafeColor(edgeColor, 'rgba(170,175,190,0.38)')
-    ctx.globalAlpha = Math.max(0.08, Math.min(0.95, edgeAlpha * (onPath ? 1 : 0.7)))
+    // Max is PATH_EDGE_OP 0.92 / min 0.12 (dims) — clamp kept as a safety net
+    ctx.globalAlpha = Math.max(0.08, Math.min(0.95, edgeAlpha))
     // Shared screen-space floor (same rule as SVG) so edges don't jump on handoff
     ctx.lineWidth = edgeWidthFor(edgeW, kSafe)
     if (e.type === 'tag' && !onPath) ctx.setLineDash([3 / k, 4 / k])
@@ -253,6 +287,14 @@ export function drawCanvas2DScene(dc: DrawContext, hot: HotSet): void {
   ctx.globalAlpha = 1
 
   // ── Nodes ──
+  // G19: entry animation — same time base + batch max order as the SVG
+  // renderer so the handoff mid-animation stays identical. PNG export passes
+  // entryComplete so it never captures a half-faded frame.
+  const entryNow = dc.entryComplete ? Number.POSITIVE_INFINITY : performance.now()
+  const entryMaxOrder = simNodes.reduce(
+    (m, nd) => (nd.enterOrder != null ? Math.max(m, nd.enterOrder) : m),
+    -1
+  )
   for (const n of simNodes) {
     if (n.x == null || n.y == null) continue
     const onPath = pathN != null && pathN.has(n.id)
@@ -273,13 +315,21 @@ export function drawCanvas2DScene(dc: DrawContext, hot: HotSet): void {
     const isAttachment = Boolean(n.isAttachment || n.type === 'attachment')
     const isHub = !isGhost && !isTag && n.degree >= thr
     // Same rule as the SVG renderer: world radius + shared screen-space floor
-    const r = nodeRadiusFor(
+    const rBase = nodeRadiusFor(
       n.degree ?? 0,
       sizeMul,
       dimHubsOn && isHub,
       kSafe,
       isGhost || isTag || isAttachment ? 0.9 : 1
     )
+    // G19: new nodes fade + scale in (same helper as the SVG renderer)
+    const entryP = nodeEntryProgress(
+      entryNow,
+      n.born,
+      n.enterOrder,
+      entryMaxOrder >= 0 ? entryMaxOrder + 1 : undefined
+    )
+    const r = rBase * nodeEntryScale(entryP)
     const col = canvasSafeColor(
       resolveObsidianNodeFill({
         isLight: pal.isLight,
@@ -307,14 +357,17 @@ export function drawCanvas2DScene(dc: DrawContext, hot: HotSet): void {
       onPath && (n.id === flags.pathFromId || n.id === flags.pathToId || n.id === flags.focusedId)
     const isHoverNode = n.id === hover && hs > 0.05
 
+    // Dim depths identical to the SVG renderer (0.22/0.22/0.26/0.3) so the
+    // canvas→SVG handoff never changes how deeply a hovered cluster dims.
     let alpha = isGhost ? 0.9 : 1
-    if (dimHover) alpha = lerp(1, pal.isLight ? 0.5 : 0.55, hs)
-    else if (dimPath) alpha = pal.isLight ? 0.4 : 0.42
-    else if (dimFocus) alpha = pal.isLight ? 0.42 : 0.45
-    else if (dimSearch) alpha = pal.isLight ? 0.45 : 0.48
+    if (dimHover) alpha = lerp(1, 0.22, hs)
+    else if (dimPath) alpha = 0.22
+    else if (dimFocus) alpha = 0.26
+    else if (dimSearch) alpha = 0.3
     else if (dimHubsOn && isHub && !isMatch && !isFocus && !onPath && !onFoc && !isSelected)
       alpha = 0.72
-    if (onPath) alpha = Math.min(1, alpha + pulse * 0.05)
+    // G19: entry fade on top of dim gates (parity with SVG fillOp)
+    alpha *= nodeEntryOpacity(entryP)
     ctx.globalAlpha = alpha
 
     // Soft glow: path/selection only
@@ -329,7 +382,8 @@ export function drawCanvas2DScene(dc: DrawContext, hot: HotSet): void {
       ctx.beginPath()
       ctx.arc(n.x, n.y, r + (onPath || isSelected ? 4.5 : 2.5), 0, Math.PI * 2)
       ctx.fillStyle = onPath || isMatch || isSelected ? pal.edgeHot : col
-      const glowA = isHoverNode && !onPath && !isSelected ? 0.08 * hs : pal.isLight ? 0.16 : 0.11
+      let glowA = pal.isLight ? 0.16 : 0.11
+      if (isHoverNode && !onPath && !isSelected) glowA = HOVER_GLOW_ALPHA * hs
       ctx.globalAlpha = glowA * alpha
       ctx.fill()
       ctx.globalAlpha = alpha
@@ -374,6 +428,30 @@ export function drawCanvas2DScene(dc: DrawContext, hot: HotSet): void {
               ? pal.edgeHot
               : pal.nodeStroke
       ctx.stroke()
+    }
+
+    // Neighbor ring (G7): subtle edgeHot ring on nodes directly connected to
+    // the hovered node — same rule as the SVG renderer (no handoff jump)
+    const isNeighbor =
+      hotIds != null &&
+      hotIds.has(n.id) &&
+      !isHoverNode &&
+      !isSelected &&
+      !onPath &&
+      !isFocus &&
+      !isEndpoint &&
+      !isMatch &&
+      !isGhost &&
+      !isPinned
+    if (isNeighbor) {
+      ctx.beginPath()
+      ctx.arc(n.x, n.y, r + 1.6, 0, Math.PI * 2)
+      ctx.strokeStyle = pal.edgeHot
+      ctx.globalAlpha = lerp(0.25, 0.6, hs) * alpha
+      ctx.lineWidth = edgeWidthFor(lerp(0.45, 0.8, hs), kSafe)
+      ctx.setLineDash([])
+      ctx.stroke()
+      ctx.globalAlpha = alpha
     }
 
     // Selection ring
@@ -449,9 +527,9 @@ export function drawCanvas2DScene(dc: DrawContext, hot: HotSet): void {
       labelsDrawn++
 
       // Spotlight dimming
+      // Same dim depths as the SVG label pass (0.15 hover/path, 0.18 search)
       let spotMul = 1
-      if (pathN != null && !onPath && !forceLabel) spotMul = 0.22
-      else if (pathN == null && focN != null && !onFoc && !forceLabel) spotMul = 0.25
+      if (pathN != null && !onPath && !forceLabel) spotMul = 0.15
       else if (
         pathN == null &&
         focN == null &&
@@ -459,9 +537,9 @@ export function drawCanvas2DScene(dc: DrawContext, hot: HotSet): void {
         !matchIds.has(n.id) &&
         !forceLabel
       )
-        spotMul = 0.28
+        spotMul = 0.18
       else if (hotIds && !hotIds.has(n.id) && pathN == null && focN == null)
-        spotMul = lerp(1, 0.28, hs)
+        spotMul = lerp(1, 0.15, hs)
 
       const isHub = n.degree >= thr
       const rWorld = nodeRadiusFor(n.degree ?? 0, sizeMul, dimHubsOn && isHub, kSafe)
@@ -471,14 +549,19 @@ export function drawCanvas2DScene(dc: DrawContext, hot: HotSet): void {
 
       const titleStr = String(n.title || n.relativePath || n.id || '')
       const text = titleStr.length > 28 ? titleStr.slice(0, 27) + '…' : titleStr
-      const labelAlpha = zA * spotMul * (forceLabel ? 1 : 0.88)
-
-      if (pal.isLight && labelAlpha > 0.25) {
-        const tw = ctx.measureText(text).width
-        ctx.fillStyle = pal.labelBg
-        ctx.globalAlpha = labelAlpha * 0.85
-        ctx.fillRect(sx - 2, sy - 7, tw + 4, 14)
-      }
+      // No non-hover multiplier: labels reach full zA opacity like the SVG
+      // renderer (G6) — the old *0.88 kept canvas labels permanently soft.
+      // G19: label fades in with its node (parity with SVG labOp)
+      const entryP = nodeEntryProgress(
+        entryNow,
+        n.born,
+        n.enterOrder,
+        entryMaxOrder >= 0 ? entryMaxOrder + 1 : undefined
+      )
+      const labelAlpha = zA * spotMul * nodeEntryOpacity(entryP)
+      // G9: no label background box — Obsidian graph labels are plain text
+      // floating over the canvas, and the SVG renderer never drew one. Removing
+      // it here gives the canvas→SVG handoff perfect parity in light theme.
       ctx.fillStyle = pal.label
       ctx.globalAlpha = labelAlpha
       ctx.fillText(text, sx, sy)

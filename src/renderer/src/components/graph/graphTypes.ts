@@ -9,6 +9,11 @@ import type { GraphNodeData, GraphPerfMode } from '../../store/graphStore'
 export interface SimNode extends d3.SimulationNodeDatum, GraphNodeData {
   pinned?: boolean
   isCenter?: boolean
+  /** Entry animation: performance.now() stamp when this node first entered the
+   *  sim (layout rebuild / filter change). Undefined on pre-existing nodes. */
+  born?: number
+  /** Entry animation: per-batch stagger order (0 = enters first). */
+  enterOrder?: number
 }
 
 export interface SimLink extends d3.SimulationLinkDatum<SimNode> {
@@ -26,9 +31,10 @@ export type Palette = {
   bg: string
   edge: string
   edgeTag: string
+  edgeFolder: string
+  edgeAttachment: string
   edgeHot: string
   label: string
-  labelBg: string
   nodeStroke: string
   colors: Record<string, string>
 }
@@ -96,6 +102,7 @@ export type ViewFlags = {
   focusNodeIds: Set<string> | null
   focusEdgeKeys: Set<string> | null
   colorBy: 'default' | 'type' | 'folder'
+  edgeColorBy: 'default' | 'type'
   perfMode: GraphPerfMode
   selectedIds: Set<string> | null
   arrows: boolean

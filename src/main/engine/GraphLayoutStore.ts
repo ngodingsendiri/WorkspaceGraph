@@ -44,6 +44,8 @@ export interface GraphDisplaySettings {
    * When false, show hollow ghost nodes for broken wikilinks.
    */
   existingFilesOnly: boolean
+  /** Edge stroke color mode — default = Obsidian mono, type = per-edge-type */
+  edgeColorBy: 'default' | 'type'
   /** Obsidian Tags filter — show #tag as nodes */
   showTags: boolean
   /** Obsidian Attachments filter — show non-md files */
@@ -149,7 +151,8 @@ export const DEFAULT_GRAPH_SETTINGS: GraphSettings = {
     existingFilesOnly: true,
     showTags: false,
     showAttachments: false,
-    animateForces: false
+    animateForces: false,
+    edgeColorBy: 'default'
   },
   filters: {
     hubDegreeThreshold: 12,
@@ -296,6 +299,7 @@ export function mergeGraphSettings(partial?: Partial<GraphSettings> | null): Gra
       showTags: d.showTags ?? DEFAULT_GRAPH_SETTINGS.display.showTags,
       showAttachments: d.showAttachments ?? DEFAULT_GRAPH_SETTINGS.display.showAttachments,
       animateForces: d.animateForces ?? DEFAULT_GRAPH_SETTINGS.display.animateForces,
+      edgeColorBy: d.edgeColorBy === 'type' ? 'type' : 'default',
       // Keep booleans in sync with modes (legacy consumers / dashboard)
       dimHubs: hubMode === 'dim',
       hideOrphans: orphanMode === 'hide'
@@ -454,6 +458,7 @@ export interface GraphViewSnapshot {
   showTags?: boolean
   showAttachments?: boolean
   animateForces?: boolean
+  edgeColorBy?: 'default' | 'type'
   /** Saved pan/zoom for this named view */
   camera?: GraphCamera | null
   groups: GraphColorGroup[]
@@ -494,6 +499,7 @@ export const DEFAULT_VIEW_SNAPSHOT: GraphViewSnapshot = {
   showTags: DEFAULT_GRAPH_SETTINGS.display.showTags,
   showAttachments: DEFAULT_GRAPH_SETTINGS.display.showAttachments,
   animateForces: DEFAULT_GRAPH_SETTINGS.display.animateForces,
+  edgeColorBy: DEFAULT_GRAPH_SETTINGS.display.edgeColorBy,
   camera: null,
   groups: []
 }
@@ -512,7 +518,8 @@ function sanitizeSnapshot(raw: Partial<GraphViewSnapshot> | null | undefined): G
     existingFilesOnly: s.existingFilesOnly ?? DEFAULT_VIEW_SNAPSHOT.existingFilesOnly,
     showTags: s.showTags ?? DEFAULT_VIEW_SNAPSHOT.showTags,
     showAttachments: s.showAttachments ?? DEFAULT_VIEW_SNAPSHOT.showAttachments,
-    animateForces: s.animateForces ?? DEFAULT_VIEW_SNAPSHOT.animateForces
+    animateForces: s.animateForces ?? DEFAULT_VIEW_SNAPSHOT.animateForces,
+    edgeColorBy: s.edgeColorBy === 'type' ? 'type' : 'default'
   }
   // Migration: snapshots saved with pre-tuning defaults adopt the tuned ones
   const forces = isLegacyDefaultForces(s.forces)
@@ -543,6 +550,7 @@ function sanitizeSnapshot(raw: Partial<GraphViewSnapshot> | null | undefined): G
     showTags: disp.showTags,
     showAttachments: disp.showAttachments,
     animateForces: disp.animateForces,
+    edgeColorBy: disp.edgeColorBy === 'type' ? 'type' : 'default',
     camera: normalizeCamera(s.camera),
     groups: normalizeColorGroups(s.groups)
   }

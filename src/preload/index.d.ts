@@ -120,6 +120,7 @@ export interface API {
       showTags: boolean
       showAttachments: boolean
       animateForces: boolean
+      edgeColorBy: 'default' | 'type'
     }
     filters: {
       hubDegreeThreshold: number

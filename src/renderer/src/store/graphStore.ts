@@ -52,6 +52,8 @@ export interface GraphDisplaySettings {
   showAttachments: boolean
   /** Keep force sim gently alive */
   animateForces: boolean
+  /** Edge stroke color mode — default = Obsidian mono, type = per-edge-type */
+  edgeColorBy: 'default' | 'type'
 }
 
 /** Obsidian-like color group: query match → node color override */
@@ -64,7 +66,7 @@ export interface GraphColorGroup {
 /** Obsidian-like display knobs (subset of GraphDisplaySettings) */
 export type GraphDisplayOpts = Pick<
   GraphDisplaySettings,
-  'arrows' | 'textFade' | 'nodeSize' | 'lineThickness'
+  'arrows' | 'textFade' | 'nodeSize' | 'lineThickness' | 'edgeColorBy'
 >
 
 export type GraphOrphanMode = 'all' | 'hide' | 'only'
@@ -133,6 +135,7 @@ export interface GraphViewSnapshot {
   showTags?: boolean
   showAttachments?: boolean
   animateForces?: boolean
+  edgeColorBy?: 'default' | 'type'
   camera?: GraphCamera | null
   groups: GraphColorGroup[]
 }
@@ -225,13 +228,14 @@ const emptySettingsHint: GraphSettings = {
     dimHubs: true,
     hideOrphans: false,
     arrows: false,
-    textFade: 0.9,
+    textFade: 0.75,
     nodeSize: 1,
     lineThickness: 1,
     existingFilesOnly: true,
     showTags: false,
     showAttachments: false,
-    animateForces: false
+    animateForces: false,
+    edgeColorBy: 'default'
   },
   filters: {
     hubDegreeThreshold: 12,

@@ -18,7 +18,8 @@ export const DEFAULT_DISPLAY_OPTS: GraphDisplayOpts = {
   arrows: false,
   textFade: 0.9,
   nodeSize: 1,
-  lineThickness: 1
+  lineThickness: 1,
+  edgeColorBy: 'default'
 }
 
 /**

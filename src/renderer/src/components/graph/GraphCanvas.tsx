@@ -29,23 +29,44 @@ import {
   edgeKey,
   smooth01,
   lerp,
-  labelZoomAlpha,
-  SpatialHash2D,
+  easeOutCubic,
   FORCE_PRESETS,
-  diagnoseEmptyFilter,
-  diagnoseViewportBlank,
-  diagnosePathResult,
-  formatGraphDiag,
-  type GraphDiag,
   type LodLevel,
   canvasSafeColor,
   readPalette,
-  nodeRadiusFor,
-  edgeWidthFor,
   nid,
   safeTags,
   escapeHtml
 } from './graphShared'
+import {
+  labelZoomAlpha,
+  nodeRadiusFor,
+  edgeWidthFor,
+  hoverEaseStep,
+  HOVER_GLOW_ALPHA,
+  edgeGlowAlpha,
+  HOT_EDGE_COLOR_HS,
+  hotEdgeWidth,
+  baseEdgeOpacity,
+  hotEdgeOpacity,
+  PATH_EDGE_OP,
+  PATH_EDGE_W,
+  baseEdgeWidth,
+  edgeColorFor,
+  NODE_ENTRY_MS,
+  NODE_ENTRY_STAGGER_MS,
+  nodeEntryProgress,
+  nodeEntryScale,
+  nodeEntryOpacity
+} from './graphRenderTokens'
+import {
+  SpatialHash2D,
+  diagnoseEmptyFilter,
+  diagnoseViewportBlank,
+  diagnosePathResult,
+  formatGraphDiag,
+  type GraphDiag
+} from './graphDiagnostics'
 import { computeHotSet, drawCanvas2DScene, type DrawContext } from './graphCanvas2D'
 import { Icon } from '../ui/Icons'
 import { confirmDialog } from '../ui/Dialog'
@@ -58,13 +79,15 @@ import {
 } from './GraphFiltersPanel'
 import type { GraphSearchMode } from '../../store/graphStore'
 
-/** Obsidian-like display defaults (text fade soft at distance). */
+/** Obsidian-like display defaults (text fade soft at distance).
+ *  textFade 0.75 (G6): labels reach solid earlier on zoom-in than 0.9. */
 // eslint-disable-next-line react-refresh/only-export-components -- shared const, not a component
 export const DEFAULT_DISPLAY_OPTS: GraphDisplayOpts = {
   arrows: false,
-  textFade: 0.9,
+  textFade: 0.75,
   nodeSize: 1,
-  lineThickness: 1
+  lineThickness: 1,
+  edgeColorBy: 'default'
 }
 
 /**
@@ -73,6 +96,10 @@ export const DEFAULT_DISPLAY_OPTS: GraphDisplayOpts = {
  * events on the graph surface arrive with target = .graph-stage itself — only
  * these overlay containers (pointer-events:auto) produce their own targets.
  */
+/** G18: zoom-ease duration (ms) — Obsidian-feel smooth landing for button /
+ *  wheel zooms. Short enough to feel responsive, long enough to read as motion. */
+const ZOOM_EASE_MS = 150
+
 const GRAPH_OVERLAY_UI =
   '.graph-zoom-controls, .graph-filter-live-chip, .graph-diag-banner, .graph-empty'
 
@@ -192,6 +219,11 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
 
   const wrapRef = useRef<HTMLDivElement | null>(null)
   const canvasRef = useRef<HTMLCanvasElement | null>(null)
+  /** G18: running zoom-ease rAF id (0 = none) — camera animates toward target */
+  const zoomTweenRafRef = useRef(0)
+  /** G18: exposed so gesture handlers can start / cancel the zoom tween */
+  const startZoomTweenRef = useRef<(targetK: number, fx: number, fy: number) => void>(() => {})
+  const cancelZoomTweenRef = useRef<() => void>(() => {})
   const [svgFrame, setSvgFrame] = useState<SvgFrame | null>(null)
   const lastSvgPushRef = useRef(0)
   const svgRef = useRef<SVGSVGElement | null>(null) // for PNG export clone
@@ -199,7 +231,6 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
   const lastAutoFitOffscreenAtRef = useRef(0)
   /** Only paint hidden canvas when exporting PNG */
   const exportCanvasPaintRef = useRef(false)
-  const pathPulseFrameRef = useRef(0)
   const pushSvgFrame = useCallback((frame: SvgFrame) => {
     lastSvgPushRef.current = performance.now()
     setSvgFrame(frame)
@@ -244,13 +275,15 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
   const saveCameraTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   /** Wheel zoom debounce — hide interactive canvas after scrolling stops */
   const wheelDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  /** G19: bounded entry-animation driver — repaints while new nodes fade in */
+  const entryEndRef = useRef(0)
+  const entryRafRef = useRef(0)
+  const entryKickRef = useRef<() => void>(() => {})
 
   /** True only when auto recovery may steal the camera */
   const canAutoFitCamera = (): boolean =>
     !userCameraTouchedRef.current && !cameraHydratedRef.current && !hasAutoFitRef.current
   const forcesRef = useRef<GraphForceSettings>({ ...DEFAULT_FORCE_SETTINGS })
-  /** Phase 7: path edge pulse 0..1 */
-  const pathPulseRef = useRef(0)
   const selectedIdsRef = useRef<Set<string>>(new Set())
   /** Phase 2–4 paint flags — read each frame */
   const viewFlagsRef = useRef({
@@ -265,11 +298,12 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
     focusNodeIds: null as Set<string> | null,
     focusEdgeKeys: null as Set<string> | null,
     colorBy: 'default' as ColorByMode,
+    edgeColorBy: 'default' as 'default' | 'type',
     perfMode: 'auto' as GraphPerfMode,
     selectedIds: null as Set<string> | null,
     /** Obsidian-like display knobs */
     arrows: false,
-    textFade: 0.9,
+    textFade: 0.75,
     nodeSize: 1,
     lineThickness: 1,
     groupColors: null as Map<string, string> | null
@@ -406,15 +440,21 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
     return { w, h, ready: true }
   }, [])
 
-  /** Ease hoverStrengthRef toward 1 (hovering) / 0 (clear) — soft Obsidian feel */
+  /** Ease hoverStrengthRef toward 1 (hovering) / 0 (clear) — soft Obsidian feel.
+   *  Time-based exponential smoothing (G5): identical transition on any refresh
+   *  rate — ~150 ms in, ~240 ms out (snappier in, softer out). */
   const kickHoverAnim = useCallback(() => {
     if (hoverAnimRafRef.current) return
-    const step = (): void => {
+    let lastTs = 0
+    const step = (ts: number): void => {
       const target = hoverIdRef.current ? 1 : 0
       const cur = hoverStrengthRef.current
-      // slightly snappier in, softer out
-      const rate = target > cur ? 0.28 : 0.18
-      const next = cur + (target - cur) * rate
+      // First frame has no previous timestamp — start the clock, keep value.
+      if (!lastTs) lastTs = ts
+      // dt drives the easing; clamp stale gaps (e.g. hidden tab) to avoid jumps.
+      const dt = Math.min(Math.max(ts - lastTs, 0), 50)
+      lastTs = ts
+      const next = hoverEaseStep(cur, target, dt)
       if (Math.abs(next - target) < 0.012) {
         hoverStrengthRef.current = target
         hoverAnimRafRef.current = 0
@@ -519,7 +559,10 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
 
   /** Set camera transform (Fit / restore / keyboard / pan) */
   const setCameraTransform = useCallback(
-    (t: d3.ZoomTransform, opts?: { user?: boolean; save?: boolean }) => {
+    (t: d3.ZoomTransform, opts?: { user?: boolean; save?: boolean; tween?: boolean }) => {
+      // A user-initiated camera jump (Fit / reset / restore / keyboard) cancels
+      // any running zoom ease — the tween's own steps pass tween:true to skip.
+      if (!opts?.tween) cancelZoomTweenRef.current()
       transformRef.current = t
       if (opts?.user) {
         userCameraTouchedRef.current = true
@@ -728,7 +771,8 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
         arrows: gd.arrows ?? DEFAULT_DISPLAY_OPTS.arrows,
         textFade: gd.textFade ?? DEFAULT_DISPLAY_OPTS.textFade,
         nodeSize: gd.nodeSize ?? DEFAULT_DISPLAY_OPTS.nodeSize,
-        lineThickness: gd.lineThickness ?? DEFAULT_DISPLAY_OPTS.lineThickness
+        lineThickness: gd.lineThickness ?? DEFAULT_DISPLAY_OPTS.lineThickness,
+        edgeColorBy: gd.edgeColorBy === 'type' ? 'type' : 'default'
       })
       setExistingFilesOnly(gd.existingFilesOnly !== false)
       setShowTags(Boolean(gd.showTags))
@@ -973,6 +1017,7 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
   viewFlagsRef.current.textFade = displayOpts.textFade
   viewFlagsRef.current.nodeSize = displayOpts.nodeSize
   viewFlagsRef.current.lineThickness = displayOpts.lineThickness
+  viewFlagsRef.current.edgeColorBy = displayOpts.edgeColorBy
   viewFlagsRef.current.groupColors = groupColorById
 
   const nodeOptions = useMemo(
@@ -1141,20 +1186,35 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
               matchIds != null &&
               !matchIds.has(s.id) &&
               !matchIds.has(tg.id)
-            let op = e.type === 'tag' ? 0.45 : 0.55
-            if (onPath) op = 0.92
+            let op = baseEdgeOpacity(e.type === 'tag')
+            if (onPath) op = PATH_EDGE_OP
             else if (onFoc) op = 0.78
-            else if (isHot) op = lerp(op, 0.88, hs)
+            else if (isHot) op = hotEdgeOpacity(op, hs)
             else if (dimHover) op = lerp(op, 0.12, hs)
             else if (dimPath || dimFocus) op = 0.12
             else if (dimSearch) op = 0.14
             // World-space stroke (scales with zoom via group transform) with a
             // shared screen-space floor so edges stay visible when zoomed out
             const sw = edgeWidthFor(
-              (onPath ? 1.6 : isHot ? lerp(0.85, 1.15, hs) : e.type === 'tag' ? 0.55 : 0.75) *
-                lineMul,
+              (onPath ? PATH_EDGE_W : isHot ? hotEdgeWidth(hs) : baseEdgeWidth(e.type)) * lineMul,
               t.k
             )
+            // G8: glow underlay for edges touching the hovered node — wide soft
+            // stroke beneath the main edge, same rule as Canvas2D (edgeGlowAlpha)
+            // so the SVG→canvas handoff glows identically. Hot edges only, full
+            // LOD like the node halo, never in path/focus/search modes.
+            if (lod === 'full' && isHot && hs > 0.1 && !dimPath && !dimFocus && !dimSearch) {
+              edgesOut.push({
+                key: ek + ':glow',
+                x1: s.x,
+                y1: s.y,
+                x2: tg.x,
+                y2: tg.y,
+                stroke: pal.edgeHot,
+                sw: edgeWidthFor(hotEdgeWidth(hs) * lineMul * 2.4, t.k),
+                op: edgeGlowAlpha(hs, onPath)
+              })
+            }
             edgesOut.push({
               key: ek,
               x1: s.x,
@@ -1162,11 +1222,9 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
               x2: tg.x,
               y2: tg.y,
               stroke:
-                onPath || (isHot && hs > 0.45)
+                onPath || (isHot && hs > HOT_EDGE_COLOR_HS)
                   ? pal.edgeHot
-                  : e.type === 'tag'
-                    ? pal.edgeTag
-                    : pal.edge,
+                  : edgeColorFor(e.type, flags.edgeColorBy, pal),
               sw,
               op,
               dash: e.type === 'tag' && !onPath ? '3 4' : undefined
@@ -1179,6 +1237,13 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
           const maxLabels = labelsOn ? labelDrawBudget(lod) : 0
           let labCount = 0
           const sel = flags.selectedIds
+          // G19: entry animation — same time base + batch max order for all
+          // nodes of this paint so the stagger is stable frame to frame.
+          const entryNow = performance.now()
+          const entryMaxOrder = simNodes.reduce(
+            (m, nd) => (nd.enterOrder != null ? Math.max(m, nd.enterOrder) : m),
+            -1
+          )
           for (const n of simNodes) {
             if (n.x == null || n.y == null || !Number.isFinite(n.x) || !Number.isFinite(n.y))
               continue
@@ -1207,18 +1272,37 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
             const deg = typeof n.degree === 'number' ? n.degree : 0
             // World radius — scales with zoom (Obsidian feel) with a shared
             // screen-space floor (same rule as Canvas2D, no handoff jump)
-            const rWorld = nodeRadiusFor(
+            const rWorldBase = nodeRadiusFor(
               deg,
               sizeMul,
               dimHubsOn && isHub,
               t.k,
               isTag || isAtt ? 0.9 : 1
             )
+            // G19: new nodes fade + scale in (same helper as Canvas2D).
+            const entryP = nodeEntryProgress(
+              entryNow,
+              n.born,
+              n.enterOrder,
+              entryMaxOrder >= 0 ? entryMaxOrder + 1 : undefined
+            )
+            const rWorld = rWorldBase * nodeEntryScale(entryP)
             const isHover = n.id === hover
             const isSel = sel != null && sel.has(n.id)
             const onPath = pathN != null && pathN.has(n.id)
             const onFoc = focN != null && focN.has(n.id)
             const isMatch = matchIds != null && matchIds.has(n.id)
+            // G7: nodes directly connected to the hovered node get a subtle
+            // highlight ring — Obsidian lights up the cluster, not just the node
+            const isNeighbor =
+              hot != null &&
+              hot.has(n.id) &&
+              !isHover &&
+              !isSel &&
+              !onPath &&
+              !onFoc &&
+              !isMatch &&
+              !isGhost
             let fillOp = isGhost ? 0.5 : 1
             if (pathN != null && !onPath && !isSel && !isHover) fillOp *= 0.22
             else if (pathN == null && focN != null && !onFoc && !isSel && !isHover) fillOp *= 0.26
@@ -1233,6 +1317,43 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
               fillOp *= 0.3
             } else if (hot && !hot.has(n.id) && pathN == null && focN == null) {
               fillOp *= lerp(1, 0.22, hs)
+            }
+            // G19: entry fade — new nodes fade in on top of any dim gates
+            fillOp *= nodeEntryOpacity(entryP)
+            // Dim gates mirror the Canvas2D node pass exactly (G3 parity): a
+            // selected node is never "dimmed", so its glow can still show.
+            const dimHoverNode = Boolean(
+              hot && !hot.has(n.id) && pathN == null && focN == null && !isSel
+            )
+            const dimPathNode = pathN != null && !onPath && !isSel
+            const dimFocusNode = pathN == null && focN != null && !onFoc && !isSel
+
+            // G8: soft halo on the hovered/path/match/selected node — same
+            // opacity rule as Canvas2D (HOVER_GLOW_ALPHA for hover-only, theme
+            // 0.16/0.11 otherwise) so the handoff glows identically. Pushed
+            // before the node circle so it renders underneath it.
+            if (
+              lod === 'full' &&
+              !isGhost &&
+              (onPath || isSel || isMatch || isHover) &&
+              !dimHoverNode &&
+              !dimPathNode &&
+              !dimFocusNode
+            ) {
+              let glowA = pal.isLight ? 0.16 : 0.11
+              if (isHover && !onPath && !isSel) glowA = HOVER_GLOW_ALPHA * hs
+              nodesOut.push({
+                key: n.id + ':glow',
+                kind: 'circle',
+                cx: n.x,
+                cy: n.y,
+                r: rWorld + (onPath || isSel ? 4.5 : 2.5),
+                fill: onPath || isMatch || isSel ? pal.edgeHot : col,
+                stroke: 'none',
+                sw: 0,
+                fillOp: glowA,
+                strokeOp: 0
+              })
             }
 
             const stroke =
@@ -1268,6 +1389,23 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
                 strokeOp: 0.75
               })
             }
+            if (isNeighbor) {
+              // Ring eases in/out with hover strength; thinner than the hover
+              // ring. strokeOp multiplies fillOp so the ring dims together with
+              // the node in focus/search/path modes (parity with Canvas2D).
+              nodesOut.push({
+                key: n.id + ':nbr',
+                kind: 'circle',
+                cx: n.x,
+                cy: n.y,
+                r: rWorld + 1.6,
+                fill: 'none',
+                stroke: pal.edgeHot,
+                sw: edgeWidthFor(lerp(0.45, 0.8, hs), t.k),
+                fillOp: 0,
+                strokeOp: lerp(0.25, 0.6, hs) * fillOp
+              })
+            }
 
             // Labels: screen-space + Obsidian text fade by zoom
             const forceLab = isHover || isSel || onPath || onFoc || n.id === focusId || isMatch
@@ -1282,6 +1420,8 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
             if (hot && !hot.has(n.id) && !forceLab) labOp *= lerp(1, 0.15, hs)
             else if (pathN != null && !onPath && !forceLab) labOp *= 0.15
             else if (matchIds != null && !matchIds.has(n.id) && !forceLab) labOp *= 0.18
+            // G19: label fades in with its node
+            labOp *= nodeEntryOpacity(entryP)
 
             const titleStr = String(n.title || n.relativePath || n.id || '')
             const text = titleStr.length > 28 ? titleStr.slice(0, 27) + '…' : titleStr
@@ -1405,10 +1545,11 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
           hover,
           hoverStrength: hs,
           flags,
-          pulse: pathPulseRef.current,
           lod,
           large,
-          showLabels: showLabelsRef.current
+          showLabels: showLabelsRef.current,
+          // G19: PNG export captures fully-entered nodes, never mid-fade
+          entryComplete: true
         }
         const hotExport = computeHotSet(hover, hs, simLinks)
         drawCanvas2DScene(dc, hotExport)
@@ -1476,7 +1617,6 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
         hover,
         hoverStrength: hs,
         flags,
-        pulse: pathPulseRef.current,
         lod,
         large,
         showLabels: showLabelsRef.current
@@ -1499,6 +1639,43 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
   }, [])
 
   drawCanvas2DRef.current = drawCanvas2D
+
+  /**
+   * G19: bounded entry-animation repaint driver. When the sim rebuild adds new
+   * nodes, this repaints the active renderer every frame until every new node's
+   * fade+scale-in window has elapsed, then stops itself (unlike the removed
+   * G17 pulse loop — never an infinite rAF).
+   */
+  const kickEntryAnimation = useCallback(() => {
+    // Extend the window for the newest batch (stagger pushes later nodes out)
+    entryEndRef.current = Math.max(
+      entryEndRef.current,
+      performance.now() + NODE_ENTRY_MS + NODE_ENTRY_STAGGER_MS + 40
+    )
+    if (entryRafRef.current) return
+    const tick = (): void => {
+      if (performance.now() >= entryEndRef.current) {
+        entryRafRef.current = 0
+        return
+      }
+      // Drive whichever renderer is live so mid-animation handoffs stay smooth
+      if (interactiveCanvasRef.current) drawCanvas2DRef.current()
+      else paintFnRef.current()
+      entryRafRef.current = requestAnimationFrame(tick)
+    }
+    entryRafRef.current = requestAnimationFrame(tick)
+  }, [])
+  entryKickRef.current = kickEntryAnimation
+
+  // Never leave the entry rAF running after unmount — read the ref inside the
+  // cleanup (capturing at mount time would always see 0 and cancel nothing)
+  useEffect(
+    () => () => {
+      if (entryRafRef.current) cancelAnimationFrame(entryRafRef.current)
+      entryRafRef.current = 0
+    },
+    []
+  )
 
   /**
    * Show canvas on top of SVG during interactive gestures.
@@ -1546,6 +1723,61 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
   const schedulePaint = useCallback(() => {
     requestPaint()
   }, [requestPaint])
+
+  /** G18: cancel the running zoom-ease tween (idempotent). */
+  const cancelZoomTween = useCallback(() => {
+    if (zoomTweenRafRef.current) {
+      cancelAnimationFrame(zoomTweenRafRef.current)
+      zoomTweenRafRef.current = 0
+    }
+  }, [])
+  cancelZoomTweenRef.current = cancelZoomTween
+
+  /**
+   * G18: eased zoom (Obsidian feel) — animate the camera from its current
+   * transform toward `targetK` over ZOOM_EASE_MS with easeOutCubic, keeping the
+   * focal point (fx, fy) anchored on screen. Runs on the interactive canvas so
+   * the zoom is fluid; hands back to the SVG renderer when it lands.
+   */
+  const startZoomTween = useCallback(
+    (targetK: number, fx: number, fy: number) => {
+      cancelZoomTween()
+      const t = transformRef.current
+      const fromK = t.k || 1
+      if (Math.abs(targetK - fromK) < 0.001) return
+      const fromX = t.x
+      const fromY = t.y
+      const start = performance.now()
+      showInteractiveCanvas()
+      const step = (now: number): void => {
+        const p = easeOutCubic((now - start) / ZOOM_EASE_MS)
+        const k = fromK + (targetK - fromK) * p
+        // Keep the focal point fixed on screen while k changes
+        const x = fx - ((fx - fromX) * k) / fromK
+        const y = fy - ((fy - fromY) * k) / fromK
+        setCameraTransformRef.current(d3.zoomIdentity.translate(x, y).scale(k), {
+          user: true,
+          save: true,
+          tween: true
+        })
+        if (p < 1) {
+          zoomTweenRafRef.current = requestAnimationFrame(step)
+        } else {
+          zoomTweenRafRef.current = 0
+          // Tween landed — hand back to the SVG renderer (sync paint so the
+          // canvas never snaps back to a stale SVG camera frame)
+          hideInteractiveCanvas()
+          paintFnRef.current()
+        }
+      }
+      zoomTweenRafRef.current = requestAnimationFrame(step)
+    },
+    [cancelZoomTween, showInteractiveCanvas, hideInteractiveCanvas]
+  )
+  startZoomTweenRef.current = startZoomTween
+
+  // Never leave a tween running after unmount
+  useEffect(() => () => cancelZoomTweenRef.current(), [])
 
   /**
    * Graph View open: seed nodes + restore vault camera (BUG-1).
@@ -1710,35 +1942,6 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
     }, 100)
     return () => clearTimeout(t)
   }, [activeView, stats.nodes, stats.edges, svgFrame])
-
-  // Phase 7: gentle path pulse — throttle SVG rebuilds (was 60fps full innerHTML)
-  useEffect(() => {
-    if (!pathNodeIds || pathNodeIds.size === 0) {
-      pathPulseRef.current = 0
-      pathPulseFrameRef.current = 0
-      return
-    }
-    let raf = 0
-    let alive = true
-    const loop = (t: number): void => {
-      if (!alive) return
-      pathPulseRef.current = (Math.sin(t / 520) + 1) / 2
-      pathPulseFrameRef.current++
-      // ~20fps is enough for soft pulse; full SVG rewrite every frame caused lag/flicker
-      if (pathPulseFrameRef.current % 3 === 0) {
-        if (interactiveCanvasRef.current) drawCanvas2DRef.current()
-        else schedulePaint()
-      }
-      raf = requestAnimationFrame(loop)
-    }
-    raf = requestAnimationFrame(loop)
-    return () => {
-      alive = false
-      cancelAnimationFrame(raf)
-      pathPulseRef.current = 0
-      pathPulseFrameRef.current = 0
-    }
-  }, [pathNodeIds, schedulePaint])
 
   // Labels toggle must repaint (paint closes over showLabels)
   useEffect(() => {
@@ -1941,7 +2144,11 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
       const f0 = forcesRef.current
       const prevById = new Map(nodesRef.current.map((n) => [n.id, n]))
       const prevCount = nodesRef.current.length
-
+      // G19: stamp entry-animation state on NEW nodes only (filter change /
+      // cold start). Pre-existing nodes keep their stamp so they never
+      // re-animate on soft updates. Pure visual — sim physics untouched.
+      const now = performance.now()
+      let newBatch = 0
       const simNodes: SimNode[] = filteredNodes.map((n, i) => {
         const prev = prevById.get(n.id)
         const c = posCache.current.get(n.id)
@@ -1954,6 +2161,8 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
           prev?.fx != null || c?.fx != null || Boolean(layout?.pinned) || Boolean(prev?.pinned)
         const fx = pinned ? (prev?.fx ?? c?.fx ?? layout?.x ?? x) : null
         const fy = pinned ? (prev?.fy ?? c?.fy ?? layout?.y ?? y) : null
+        const isNew = prev == null
+        if (isNew) newBatch++
         return {
           ...n,
           title: n.title || n.relativePath || n.id,
@@ -1965,7 +2174,9 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
           fy,
           pinned,
           vx: prev?.vx,
-          vy: prev?.vy
+          vy: prev?.vy,
+          born: isNew ? now : prev?.born,
+          enterOrder: isNew ? newBatch - 1 : prev?.enterOrder
         }
       })
       const idSet = new Set(simNodes.map((n) => n.id))
@@ -1988,6 +2199,9 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
 
       nodesRef.current = simNodes
       linksRef.current = simLinks
+      // G19: new nodes entered the sim → run the bounded entry repaint driver
+      // so they fade+scale in. No-op when nothing changed (soft membership).
+      if (newBatch > 0) entryKickRef.current()
       // Prune posCache entries for nodes no longer in the simulation
       const activeIds = new Set(simNodes.map((n) => n.id))
       for (const key of posCache.current.keys()) {
@@ -2463,12 +2677,8 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
       const t = transformRef.current
       const k0 = t.k || 1
       const nextK = Math.max(0.08, Math.min(6, k0 * factor))
-      const x = cx - ((cx - t.x) * nextK) / k0
-      const y = cy - ((cy - t.y) * nextK) / k0
-      setCameraTransformRef.current(d3.zoomIdentity.translate(x, y).scale(nextK), {
-        user: true,
-        save: true
-      })
+      // G18: eased zoom around the viewport center (buttons / keyboard)
+      startZoomTweenRef.current(nextK, cx, cy)
     },
     [syncCanvasSize]
   )
@@ -2662,6 +2872,8 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
       }
 
       if (mode === 'pan') {
+        // G18: user takes over with a pan — stop any running zoom ease
+        cancelZoomTweenRef.current()
         const dx = e.clientX - panLast.x
         const dy = e.clientY - panLast.y
         if (!moved && Math.hypot(dx, dy) < DRAG_THRESH) return
@@ -2711,6 +2923,8 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
 
       if (pointers.size >= 2) {
         mode = 'pinch'
+        // G18: pinch takes over — stop any running zoom ease
+        cancelZoomTweenRef.current()
         pointerGestureRef.current = true
         const pts = [...pointers.values()]
         pinchStartDist = distPts(pts[0], pts[1]) || 1
@@ -2829,14 +3043,9 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
       // jumps) so trackpads and fast flicks zoom smoothly without stutter.
       const dy = e.deltaMode === 1 ? e.deltaY * 16 : e.deltaMode === 2 ? e.deltaY * 120 : e.deltaY
       const nextK = Math.max(0.08, Math.min(6, k0 * Math.exp(-dy * 0.0012)))
-      const x = mx - ((mx - t.x) * nextK) / k0
-      const y = my - ((my - t.y) * nextK) / k0
-      // Show Canvas 2D for smooth wheel zoom (bypass React SVG reconciliation)
-      showInteractiveCanvas()
-      setCameraTransformRef.current(d3.zoomIdentity.translate(x, y).scale(nextK), {
-        user: true,
-        save: true
-      })
+      // G18: eased wheel zoom anchored at the cursor — the tween shows the
+      // interactive canvas itself (bypass React SVG reconciliation)
+      startZoomTweenRef.current(nextK, mx, my)
       // Debounce: hide canvas + sync SVG after scrolling stops (280ms idle).
       // Paint SYNCHRONOUSLY (not via rAF) so the zoomed frame is guaranteed to
       // replace the stale SVG even if a sim-tick rAF starves the paint loop —
@@ -2860,6 +3069,8 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
       const next = hit?.id || null
       if (next !== hoverIdRef.current) {
         setHoverIdRef.current(next)
+        // Obsidian affordance: pointer cursor over a draggable node
+        wrapEl?.classList.toggle('node-hover', next != null)
         if (hit) showTooltipDomRef.current(hit, e.clientX, e.clientY)
         else hideTooltipDomRef.current()
       } else if (hit) {
@@ -2869,6 +3080,7 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
 
     const onLeave = (): void => {
       if (mode !== 'none') return
+      wrapEl?.classList.remove('node-hover')
       setHoverIdRef.current(null)
       hideTooltipDomRef.current()
     }
@@ -3409,6 +3621,10 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
       setShowTags(Boolean(s.showTags))
       setShowAttachments(Boolean(s.showAttachments))
       setAnimateForces(Boolean(s.animateForces))
+      setDisplayOpts((prev) => ({
+        ...prev,
+        edgeColorBy: s.edgeColorBy === 'type' ? 'type' : 'default'
+      }))
       // Persist forces/display to app settings so they stick
       void updateGraphSettings({
         forces: s.forces || DEFAULT_FORCE_SETTINGS,
@@ -3425,7 +3641,8 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
           existingFilesOnly: s.existingFilesOnly !== false,
           showTags: Boolean(s.showTags),
           showAttachments: Boolean(s.showAttachments),
-          animateForces: Boolean(s.animateForces)
+          animateForces: Boolean(s.animateForces),
+          edgeColorBy: s.edgeColorBy === 'type' ? 'type' : 'default'
         },
         filters: {
           hubDegreeThreshold: s.hubDegreeThreshold ?? 12,
@@ -4040,6 +4257,14 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
           displayOpts={displayOpts}
           onDisplayOptsChange={handleDisplayOptsChange}
           onDisplayOptsCommit={handleDisplayOptsCommit}
+          // G20: edge-type legend swatches mirror the actual palette colors
+          // (single source: pal.edge/edgeTag/edgeFolder/edgeAttachment)
+          edgeLegend={[
+            { type: 'wikilink', color: paletteRef.current.edge },
+            { type: 'tag', color: paletteRef.current.edgeTag },
+            { type: 'folder', color: paletteRef.current.edgeFolder },
+            { type: 'lampiran', color: paletteRef.current.edgeAttachment }
+          ]}
           colorGroups={colorGroups}
           onColorGroupsChange={handleColorGroupsChange}
           onPersist={(partial) => {

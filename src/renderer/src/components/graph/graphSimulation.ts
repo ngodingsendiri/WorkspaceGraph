@@ -12,7 +12,8 @@ import { useEffect, useRef, type MutableRefObject, type RefObject } from 'react'
 import * as d3 from 'd3'
 import type { GraphNodeData, GraphEdgeData, GraphForceSettings } from '../../store/graphStore'
 import type { SimNode, SimLink } from './graphTypes'
-import { OBSIDIAN_SIM, resolveLod, SpatialHash2D, safeTags } from './graphShared'
+import { OBSIDIAN_SIM, resolveLod, safeTags } from './graphShared'
+import { SpatialHash2D } from './graphDiagnostics'
 import { applyForces, spiralSeed } from './graphQuery'
 import type { ColorByMode } from './GraphFiltersPanel'
 
@@ -29,6 +30,8 @@ export interface GraphViewFlags {
   focusNodeIds: Set<string> | null
   focusEdgeKeys: Set<string> | null
   colorBy: ColorByMode
+  /** G20: must stay in sync with ViewFlags (graphTypes) — edge stroke color mode */
+  edgeColorBy: 'default' | 'type'
   perfMode: 'auto' | 'quality' | 'speed'
   selectedIds: Set<string> | null
   arrows: boolean

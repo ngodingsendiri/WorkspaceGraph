@@ -336,7 +336,14 @@ describe('Renderer wiring', () => {
     expect(has(gc, 'fitViewRef', 'GraphFiltersPanel', 'readPalette')).toBe(true)
     expect(hasAny(gc, 'dragged.x = w.x', 'dragged.x = dragged.fx', 'dragged.fx = w.x')).toBe(true)
     expect(has(gc, 'ensureGraphVisible', 'diagnoseEmptyFilter', 'diagnosePathResult')).toBe(true)
-    expect(has(gc, 'pathNodeIds', 'pathEdgeKeys', 'pathPulseRef', 'Math.sin')).toBe(true)
+    expect(has(gc, 'pathNodeIds', 'pathEdgeKeys')).toBe(true)
+    // G17: the path-pulse subsystem (pathPulseRef + sine loop) was removed for
+    // renderer parity — a canvas-only breathing highlight broke the SVG↔canvas
+    // handoff. Guard it stays gone.
+    expect(gc).not.toContain('pathPulseRef')
+    // G-series module split: the renderer must consume the parity + diagnostics
+    // modules (never re-derive a per-renderer literal)
+    expect(has(gc, "from './graphRenderTokens'", "from './graphDiagnostics'")).toBe(true)
     expect(has(gc, 'selectedIds', 'setSelectedIds', 'setSelectedIds(new Set())')).toBe(true)
     expect(has(gc, 'ctrlKey', 'metaKey', 'clipboard', '[[')).toBe(true)
     expect(has(gc, 'layoutNodes', 'saveLayoutPositions', 'toDataURL')).toBe(true)
@@ -354,19 +361,77 @@ describe('Renderer wiring', () => {
   })
   it('graphShared utilities', () => {
     const shared = read('src/renderer/src/components/graph/graphShared.ts')
-    expect(
-      has(
-        shared,
-        'chargeFor',
-        'linkDistanceFor',
-        'SpatialHash2D',
-        'edgeDrawBudget',
-        'FORCE_PRESETS'
-      )
-    ).toBe(true)
+    expect(has(shared, 'chargeFor', 'linkDistanceFor', 'edgeDrawBudget', 'FORCE_PRESETS')).toBe(
+      true
+    )
     expect(has(shared, 'css(', 'getPropertyValue', 'readPalette')).toBe(true)
     // Shared force layout is the single source of truth for the global graph
     expect(has(shared, 'applyForceLayout')).toBe(true)
+  })
+  it('renderer parity tokens live in graphRenderTokens (G1–G17 anti-drift)', () => {
+    const tokens = read('src/renderer/src/components/graph/graphRenderTokens.ts')
+    expect(
+      has(
+        tokens,
+        'nodeRadiusFor',
+        'edgeWidthFor',
+        'hoverEaseStep',
+        'HOVER_GLOW_ALPHA',
+        'edgeGlowAlpha',
+        'HOT_EDGE_COLOR_HS',
+        'hotEdgeWidth',
+        'baseEdgeOpacity',
+        'hotEdgeOpacity',
+        'PATH_EDGE_OP',
+        'PATH_EDGE_W',
+        'baseEdgeWidth',
+        'labelZoomAlpha',
+        // G19: node entry animation lives here too (shared by both renderers)
+        'nodeEntryProgress',
+        'nodeEntryScale',
+        'nodeEntryOpacity',
+        // G20: edge color by type — single source for both renderers
+        'edgeColorFor'
+      )
+    ).toBe(true)
+  })
+  it('both renderers consume edgeColorFor (G20 anti-drift)', () => {
+    const c2d = read('src/renderer/src/components/graph/graphCanvas2D.ts')
+    const gc = read('src/renderer/src/components/graph/GraphCanvas.tsx')
+    expect(has(c2d, 'edgeColorFor(e.type, flags.edgeColorBy, pal)')).toBe(true)
+    expect(has(gc, 'edgeColorFor(e.type, flags.edgeColorBy, pal)')).toBe(true)
+    // Per-renderer edge literals must not creep back in (handoff parity)
+    expect(c2d).not.toContain("e.type === 'tag' ? pal.edgeTag : pal.edge")
+  })
+  it('GraphViewFlags stays in sync with ViewFlags (G20 flags parity)', () => {
+    const sim = read('src/renderer/src/components/graph/graphSimulation.ts')
+    const types = read('src/renderer/src/components/graph/graphTypes.ts')
+    // edgeColorBy must exist in BOTH flag interfaces so wiring useGraphSimulation
+    // later can never silently drop the edge stroke mode (latent drift guard)
+    expect(has(sim, 'GraphViewFlags', 'edgeColorBy')).toBe(true)
+    expect(has(types, 'ViewFlags', 'edgeColorBy')).toBe(true)
+  })
+  it('entry animation stamped only on new sim nodes + export never mid-fade (G19)', () => {
+    const gc = read('src/renderer/src/components/graph/GraphCanvas.tsx')
+    const c2d = read('src/renderer/src/components/graph/graphCanvas2D.ts')
+    // Sim rebuild stamps born/enterOrder on new nodes and kicks a bounded driver
+    expect(has(gc, 'born: isNew', 'enterOrder: isNew', 'entryKickRef.current()')).toBe(true)
+    // Both renderers consume the same helpers; PNG export forces full entry
+    expect(has(c2d, 'nodeEntryProgress', 'nodeEntryOpacity')).toBe(true)
+    expect(has(c2d, 'entryComplete')).toBe(true)
+    expect(has(gc, 'entryComplete: true')).toBe(true)
+  })
+  it('graph diagnostics live in graphDiagnostics', () => {
+    const diag = read('src/renderer/src/components/graph/graphDiagnostics.ts')
+    expect(
+      has(
+        diag,
+        'diagnoseEmptyFilter',
+        'diagnoseViewportBlank',
+        'diagnosePathResult',
+        'SpatialHash2D'
+      )
+    ).toBe(true)
   })
   it('graphCanvas2D owns edge budget logic', () => {
     const c2d = read('src/renderer/src/components/graph/graphCanvas2D.ts')

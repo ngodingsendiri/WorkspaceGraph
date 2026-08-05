@@ -104,6 +104,8 @@ export interface GraphFiltersPanelProps {
   displayOpts: GraphDisplayOpts
   onDisplayOptsChange: (next: GraphDisplayOpts) => void
   onDisplayOptsCommit: (next: GraphDisplayOpts) => void
+  /** G20: edge color legend swatches for the current theme (for color-by-type) */
+  edgeLegend?: { type: string; color: string }[]
   colorGroups: GraphColorGroup[]
   onColorGroupsChange: (next: GraphColorGroup[]) => void
   onPersist?: (partial: Partial<GraphSettings>) => void
@@ -124,13 +126,14 @@ function displayPatch(
     dimHubs: hubMode === 'dim',
     hideOrphans: orphanMode === 'hide',
     arrows: extra?.arrows ?? false,
-    textFade: extra?.textFade ?? 0.9,
+    textFade: extra?.textFade ?? 0.75,
     nodeSize: extra?.nodeSize ?? 1,
     lineThickness: extra?.lineThickness ?? 1,
     existingFilesOnly: extra?.existingFilesOnly ?? true,
     showTags: extra?.showTags ?? false,
     showAttachments: extra?.showAttachments ?? false,
-    animateForces: extra?.animateForces ?? false
+    animateForces: extra?.animateForces ?? false,
+    edgeColorBy: extra?.edgeColorBy ?? 'default'
   }
 }
 
@@ -216,7 +219,7 @@ const FORCE_SLIDERS: {
 ]
 
 const DISPLAY_SLIDERS: {
-  key: Exclude<keyof GraphDisplayOpts, 'arrows'>
+  key: Exclude<keyof GraphDisplayOpts, 'arrows' | 'edgeColorBy'>
   label: string
   min: number
   max: number
@@ -363,6 +366,7 @@ export const GraphFiltersPanel: React.FC<GraphFiltersPanelProps> = ({
   displayOpts,
   onDisplayOptsChange,
   onDisplayOptsCommit,
+  edgeLegend,
   colorGroups,
   onColorGroupsChange,
   onPersist
@@ -846,6 +850,46 @@ export const GraphFiltersPanel: React.FC<GraphFiltersPanelProps> = ({
           </div>
           <p className="graph-filter-hint">
             Default = mono Obsidian; grup warna menimpa. Folder/Tipe = ekstensi.
+          </p>
+        </div>
+
+        <div className="graph-settings-row">
+          <label>Warna link</label>
+          <div className="graph-filter-seg" role="group" aria-label="Edge color by">
+            {(
+              [
+                ['default', 'Default'],
+                ['type', 'Tipe']
+              ] as const
+            ).map(([id, lab]) => (
+              <button
+                key={id}
+                type="button"
+                className={`local-graph-chip ${displayOpts.edgeColorBy === id ? 'active' : ''}`}
+                aria-pressed={displayOpts.edgeColorBy === id}
+                title={
+                  id === 'type'
+                    ? 'Tiap jenis link dapat warna sendiri (wikilink/tag/folder/lampiran)'
+                    : 'Link mono Obsidian'
+                }
+                onClick={() => onDisplayOptsCommit({ ...displayOpts, edgeColorBy: id })}
+              >
+                {lab}
+              </button>
+            ))}
+          </div>
+          {displayOpts.edgeColorBy === 'type' && edgeLegend && edgeLegend.length > 0 && (
+            <div className="graph-edge-legend">
+              {edgeLegend.map((e) => (
+                <span key={e.type} className="graph-legend-item">
+                  <span className="graph-legend-dot" style={{ background: e.color }} />
+                  <span>{e.type}</span>
+                </span>
+              ))}
+            </div>
+          )}
+          <p className="graph-filter-hint">
+            Default = mono Obsidian · Tipe = warna per jenis link (legend di atas).
           </p>
         </div>
       </Section>
