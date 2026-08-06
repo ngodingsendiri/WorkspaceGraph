@@ -50,7 +50,8 @@ export function sameSvgNode(a: SvgNode, b: SvgNode): boolean {
     a.stroke === b.stroke &&
     a.sw === b.sw &&
     a.fillOp === b.fillOp &&
-    a.strokeOp === b.strokeOp
+    a.strokeOp === b.strokeOp &&
+    a.dash === b.dash
   )
 }
 

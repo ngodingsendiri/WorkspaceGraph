@@ -34,6 +34,8 @@ export interface GraphViewFlags {
   edgeColorBy: 'default' | 'type'
   perfMode: 'auto' | 'quality' | 'speed'
   selectedIds: Set<string> | null
+  /** P2-8: must stay in sync with ViewFlags — camera-focused selected node */
+  focusSelId: string | null
   arrows: boolean
   textFade: number
   nodeSize: number

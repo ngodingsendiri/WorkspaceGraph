@@ -15,6 +15,10 @@ function sample(
     edges: 500,
     nodes: 400,
     labels: 100,
+    totalEdges: 3000,
+    totalNodes: 1000,
+    renderedEdges: 500,
+    renderedNodes: 400,
     ts: performance.now(),
     ...opts
   }
@@ -76,6 +80,28 @@ describe('RollingPerfStats', () => {
     expect(s.edges).toBe(15)
     expect(s.nodes).toBe(25)
     expect(s.labels).toBe(35)
+  })
+
+  it('records LOD culling pre→post counts of the latest sample', () => {
+    stats.push(
+      sample(1, {
+        totalEdges: 3000,
+        totalNodes: 1000,
+        renderedEdges: 3000,
+        renderedNodes: 1000
+      })
+    )
+    stats.push(
+      sample(2, { totalEdges: 3000, totalNodes: 1000, renderedEdges: 412, renderedNodes: 86 })
+    )
+    const s = stats.snapshot()
+    expect(s.totalEdges).toBe(3000)
+    expect(s.totalNodes).toBe(1000)
+    expect(s.renderedEdges).toBe(412)
+    expect(s.renderedNodes).toBe(86)
+    // Overlay derives culled = total - rendered
+    expect(s.totalEdges - s.renderedEdges).toBe(2588)
+    expect(s.totalNodes - s.renderedNodes).toBe(914)
   })
 
   it('recent returns the last n commit durations oldest→newest', () => {

@@ -210,6 +210,32 @@ export function nodeEntryOpacity(p: number): number {
 }
 
 /**
+ * G19 parity: edge entry fade — an edge fades in with its SLOWEST endpoint
+ * (min of both nodes' entry progress), so a link between two entering nodes
+ * only appears once both are visible, and a link to a pre-existing node fades
+ * with the new endpoint. Pre-existing nodes (no `born`) progress to 1, so
+ * steady-state edges are unaffected. Both renderers must multiply their edge
+ * opacity (and hot-edge glow) by this EXACT value — a handoff mid-entry must
+ * never show the edge pop.
+ */
+export function edgeEntryOpacity(
+  now: number,
+  bornA: number | undefined,
+  enterOrderA: number | undefined,
+  bornB: number | undefined,
+  enterOrderB: number | undefined,
+  maxOrder: number | undefined
+): number {
+  const m = maxOrder != null && maxOrder >= 0 ? maxOrder + 1 : undefined
+  return nodeEntryOpacity(
+    Math.min(
+      nodeEntryProgress(now, bornA, enterOrderA, m),
+      nodeEntryProgress(now, bornB, enterOrderB, m)
+    )
+  )
+}
+
+/**
  * LOD viewport culling — shared by BOTH renderers so a gesture handoff never
  * pops a node/edge at the frustum edge. The SVG renderer reconciles every
  * element it is handed, so culling off-screen geometry here is what actually
@@ -310,3 +336,27 @@ export function edgeColorFor(
   }
   return type === 'tag' ? pal.edgeTag : pal.edge
 }
+
+// ── P2-5: Obsidian dot-grain underlay ──
+
+/** Screen-space dot grid spacing (px) — dots are viewport-fixed, not world. */
+export const DOT_GRID_SPACING = 24
+/** Dot radius (px). */
+export const DOT_GRID_RADIUS = 0.9
+
+/**
+ * Theme-aware dot-grain color (Obsidian graph paper): a very faint tint that
+ * reads as texture on the plain background. Shared by BOTH renderers so the
+ * SVG ↔ Canvas2D handoff never shows a pattern/alpha jump.
+ */
+export function dotGrainColor(isLight: boolean): string {
+  // ~0.03 as requested — just enough to read as texture, never as noise
+  return isLight ? 'rgba(45, 50, 66, 0.04)' : 'rgba(214, 219, 232, 0.032)'
+}
+
+/**
+ * P2-8: dash pattern (on/off, world units) of the camera-focused selection
+ * ring. Shared by BOTH renderers so the SVG ↔ Canvas2D handoff never drifts:
+ * SVG joins it (`'4 3'`), Canvas2D divides by k (its dash is in user space).
+ */
+export const FOCUS_RING_DASH = [4, 3] as const

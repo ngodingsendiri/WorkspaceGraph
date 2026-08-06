@@ -33,9 +33,13 @@ import {
   nodeEntryProgress,
   nodeEntryScale,
   nodeEntryOpacity,
+  edgeEntryOpacity,
   edgeColorFor,
   SVG_PUSH_THROTTLE_MS,
-  shouldThrottleSvgPush
+  shouldThrottleSvgPush,
+  DOT_GRID_SPACING,
+  DOT_GRID_RADIUS,
+  dotGrainColor
 } from './graphRenderTokens'
 import type { GraphForceSettings } from '../../store/graphStore'
 import type { SimNode, SimLink } from './graphTypes'
@@ -679,6 +683,45 @@ describe('node entry animation (G19)', () => {
       expect(nodeEntryOpacity(0.5)).toBeLessThan(1)
     })
   })
+
+  describe('edgeEntryOpacity (P1-1 — edges fade with their slowest endpoint)', () => {
+    it('steady-state edges (no born stamps) are unaffected (×1)', () => {
+      expect(edgeEntryOpacity(5000, undefined, undefined, undefined, undefined, -1)).toBe(1)
+    })
+
+    it('edge to a fresh node starts invisible and fades in with it', () => {
+      const born = 5000
+      // Both endpoints fresh, order 0 → progress 0 at birth
+      expect(edgeEntryOpacity(born, born, 0, born, 0, 0)).toBe(NODE_ENTRY_START_OP)
+      // A pre-existing node (no born) does not speed the edge up: min wins
+      expect(edgeEntryOpacity(born, born, 0, undefined, undefined, 0)).toBe(NODE_ENTRY_START_OP)
+    })
+
+    it('reaches 1 once the entry window + stagger elapsed', () => {
+      const born = 5000
+      const full = born + NODE_ENTRY_MS + NODE_ENTRY_STAGGER_MS + 10
+      expect(edgeEntryOpacity(full, born, 0, undefined, undefined, 5)).toBe(1)
+      expect(edgeEntryOpacity(full, born, 5, born, 5, 5)).toBe(1)
+    })
+
+    it('uses the SLOWEST endpoint (min progress) — parity rule for both renderers', () => {
+      const born = 5000
+      const mid = born + NODE_ENTRY_MS / 2
+      // New (order 0) + old → edge follows the new node exactly
+      const withOld = edgeEntryOpacity(mid, born, 0, undefined, undefined, 0)
+      expect(withOld).toBe(nodeEntryOpacity(nodeEntryProgress(mid, born, 0, 1)))
+      // Two new nodes: slower one (higher order, later stagger) wins
+      const a = nodeEntryProgress(mid, born, 0, 2)
+      const b = nodeEntryProgress(mid, born, 1, 2)
+      expect(edgeEntryOpacity(mid, born, 0, born, 1, 1)).toBe(nodeEntryOpacity(Math.min(a, b)))
+      expect(b).toBeLessThan(a)
+    })
+
+    it('PNG export (now = +Infinity) renders edges fully', () => {
+      const born = 5000
+      expect(edgeEntryOpacity(Number.POSITIVE_INFINITY, born, 0, born, 3, 5)).toBe(1)
+    })
+  })
 })
 
 describe('SVG push throttle (G-perf sim motion)', () => {
@@ -722,5 +765,28 @@ describe('edgeColorFor (G20)', () => {
     expect(edgeColorFor('folder', 'type', pal)).toBe('#folder')
     expect(edgeColorFor('attachment', 'type', pal)).toBe('#att')
     expect(edgeColorFor('unknown', 'type', pal)).toBe('#edge')
+  })
+})
+
+describe('dot-grain underlay (P2-5)', () => {
+  it('is a faint rgba in both themes, never a solid fill', () => {
+    const dark = dotGrainColor(false)
+    const light = dotGrainColor(true)
+    for (const c of [dark, light]) {
+      expect(c.startsWith('rgba(')).toBe(true)
+      const alpha = Number(c.slice(c.lastIndexOf(',') + 1, -1))
+      expect(alpha).toBeGreaterThan(0)
+      expect(alpha).toBeLessThanOrEqual(0.06)
+    }
+  })
+
+  it('differs between themes so light bg gets darker dots and vice versa', () => {
+    expect(dotGrainColor(true)).not.toBe(dotGrainColor(false))
+  })
+
+  it('tile geometry is a small, even screen-space grid', () => {
+    expect(DOT_GRID_SPACING).toBeGreaterThan(8)
+    expect(DOT_GRID_RADIUS).toBeLessThan(DOT_GRID_SPACING / 6)
+    expect(DOT_GRID_RADIUS).toBeGreaterThan(0)
   })
 })

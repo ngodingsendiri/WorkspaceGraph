@@ -390,6 +390,8 @@ describe('Renderer wiring', () => {
         'nodeEntryProgress',
         'nodeEntryScale',
         'nodeEntryOpacity',
+        // P1-1: edge entry fade (slowest-endpoint rule) shared by both renderers
+        'edgeEntryOpacity',
         // G20: edge color by type — single source for both renderers
         'edgeColorFor',
         // G-perf: sim-motion SVG reconciliation throttle
@@ -413,6 +415,34 @@ describe('Renderer wiring', () => {
     expect(has(c2d, 'const margin = cullMargin(lod)')).toBe(true)
     expect(has(c2d, 'edgeOnScreen(')).toBe(true)
     expect(has(c2d, 'pointOnScreen(n.x * k + tx, n.y * k + ty, w, h, margin)')).toBe(true)
+  })
+  it('edge entry animation wired in BOTH renderers (P1-1 parity)', () => {
+    const gc = read('src/renderer/src/components/graph/GraphCanvas.tsx')
+    const c2d = read('src/renderer/src/components/graph/graphCanvas2D.ts')
+    const rt = read('src/renderer/src/components/graph/graphRenderTokens.ts')
+    // Shared helper exists and both renderers multiply edge op by it
+    expect(has(rt, 'export function edgeEntryOpacity')).toBe(true)
+    expect(has(gc, 'op *= entryOp')).toBe(true)
+    expect(has(gc, 'op: edgeGlowAlpha(hs, onPath) * entryOp')).toBe(true)
+    expect(has(c2d, 'edgeAlpha *= entryOp')).toBe(true)
+    expect(has(c2d, 'edgeGlowAlpha(hs, onPath) * entryOp')).toBe(true)
+    // Same time base for the whole scene (edges + nodes share entryNow)
+    expect(has(gc, 'const entryNow = performance.now()')).toBe(true)
+    expect(has(c2d, 'const entryNow = dc.entryComplete')).toBe(true)
+  })
+  it('perf overlay shows LOD culling pre→post counts (D)', () => {
+    const gc = read('src/renderer/src/components/graph/GraphCanvas.tsx')
+    const ps = read('src/renderer/src/components/graph/graphPerfStats.ts')
+    const gt = read('src/renderer/src/components/graph/graphTypes.ts')
+    // Frame carries culling stats; the sampler records them; overlay derives culled
+    expect(has(gc, 'culled: {')).toBe(true)
+    expect(has(gc, 'renderedEdges: edgeList.length')).toBe(true)
+    expect(has(gc, 'renderedNodes: nodesRendered')).toBe(true)
+    expect(has(gc, 'totalEdges: svgFrame.culled?.totalEdges ?? 0')).toBe(true)
+    expect(has(gc, 'totalEdges - perfSnap.renderedEdges')).toBe(true)
+    expect(has(ps, 'totalEdges: number')).toBe(true)
+    expect(has(ps, 'renderedNodes: number')).toBe(true)
+    expect(has(gt, 'export type CulledStats')).toBe(true)
   })
   it('sim-motion SVG throttle wired in GraphCanvas (G-perf)', () => {
     const gc = read('src/renderer/src/components/graph/GraphCanvas.tsx')
@@ -483,6 +513,101 @@ describe('Renderer wiring', () => {
     expect(has(gc, 'const SvgEdgeItem = memo(')).toBe(true)
     expect(has(gc, 'const SvgNodeItem = memo(')).toBe(true)
     expect(has(gc, 'const SvgLabelItem = memo(')).toBe(true)
+  })
+  it('tooltip hover-delay goes through the shared scheduler (P1-2)', () => {
+    const gc = read('src/renderer/src/components/graph/GraphCanvas.tsx')
+    const sch = read('src/renderer/src/components/graph/graphTooltipScheduler.ts')
+    // The scheduler factory owns the delay; GraphCanvas must consume it (never
+    // re-implement raw setTimeout per pointermove — that reintroduces flicker)
+    expect(has(gc, "from './graphTooltipScheduler'", 'createTooltipScheduler<SimNode>')).toBe(true)
+    expect(has(gc, 'tooltipSchedulerRef.current?.hover')).toBe(true)
+    expect(has(gc, 'tooltipSchedulerRef.current?.leave')).toBe(true)
+    expect(has(gc, 'tooltipSchedulerRef.current?.dispose')).toBe(true)
+    expect(has(sch, 'export const TOOLTIP_DELAY_MS = 250')).toBe(true)
+    expect(has(sch, 'export function createTooltipScheduler')).toBe(true)
+  })
+  it('tooltip note-preview goes through the shared cache (P1-3)', () => {
+    const gc = read('src/renderer/src/components/graph/GraphCanvas.tsx')
+    const pv = read('src/renderer/src/components/graph/graphTooltipPreview.ts')
+    // Preview content must come from the per-note cache (never raw file reads
+    // in the tooltip hot path) and the markdown-stripping must be shared
+    expect(has(gc, "from './graphTooltipPreview'", 'new TooltipPreviewCache')).toBe(true)
+    expect(has(gc, 'window.api.readFile', 'tooltipPreviewCacheRef.current?.get')).toBe(true)
+    expect(has(gc, 'previewSeqRef.current++')).toBe(true)
+    expect(has(gc, 'gt-preview')).toBe(true)
+    expect(has(pv, 'export function markdownToPlainText')).toBe(true)
+    expect(has(pv, 'export function previewLines')).toBe(true)
+  })
+  it('keyboard selection control + orphan pruning (P2-7)', () => {
+    const gc = read('src/renderer/src/components/graph/GraphCanvas.tsx')
+    // Esc deselects first; the full reset only runs when nothing is selected
+    expect(has(gc, 'selectedIdsRef.current.size > 0', "setPathStatus('Selection cleared')")).toBe(
+      true
+    )
+    // [ / ] cycle the camera through the ordered selection; Enter opens focus
+    expect(has(gc, "e.key === '[' || e.key === ']'", 'selectionNavIndexRef.current')).toBe(true)
+    expect(has(gc, "e.key === 'Enter'", 'openTab(focus.path)')).toBe(true)
+    // Selection ids are pruned against the visible graph on filter/rebuild
+    expect(has(gc, '[...selectedIds].filter((id) => filteredNodeIds.has(id))')).toBe(true)
+  })
+  it('focused-selection dashed ring is shared between both renderers (P2-8)', () => {
+    const gc = read('src/renderer/src/components/graph/GraphCanvas.tsx')
+    const c2d = read('src/renderer/src/components/graph/graphCanvas2D.ts')
+    const types = read('src/renderer/src/components/graph/graphTypes.ts')
+    const sim = read('src/renderer/src/components/graph/graphSimulation.ts')
+    const rt = read('src/renderer/src/components/graph/graphRenderTokens.ts')
+    // [/] marks the focused id in the shared paint flags (never per-renderer)
+    expect(has(gc, 'viewFlagsRef.current.focusSelId = target.id')).toBe(true)
+    expect(has(gc, 'flags.focusSelId === n.id', "FOCUS_RING_DASH.join(' ')")).toBe(true)
+    expect(has(c2d, 'flags.focusSelId === n.id', 'FOCUS_RING_DASH.map((v) => v / k)')).toBe(true)
+    // The dash pattern lives in the parity module (no per-renderer literal)
+    expect(has(rt, 'export const FOCUS_RING_DASH = [4, 3] as const')).toBe(true)
+    // ViewFlags + GraphViewFlags stay in sync (G20 parity contract)
+    expect(has(types, 'focusSelId: string | null')).toBe(true)
+    expect(has(sim, 'focusSelId: string | null')).toBe(true)
+  })
+  it('dot-grain underlay is shared between both renderers (P2-5)', () => {
+    const gc = read('src/renderer/src/components/graph/GraphCanvas.tsx')
+    const c2d = read('src/renderer/src/components/graph/graphCanvas2D.ts')
+    const rt = read('src/renderer/src/components/graph/graphRenderTokens.ts')
+    // Both renderers consume the SAME spacing/radius/color tokens (never a
+    // per-renderer literal — a handoff would otherwise show a pattern jump)
+    expect(has(rt, 'export const DOT_GRID_SPACING = 24')).toBe(true)
+    expect(has(rt, 'export const DOT_GRID_RADIUS = 0.9')).toBe(true)
+    expect(has(rt, 'export function dotGrainColor')).toBe(true)
+    expect(has(c2d, 'dotGrainColor(pal.isLight)')).toBe(true)
+    expect(has(c2d, 'DOT_GRID_SPACING', "createPattern(c, 'repeat')")).toBe(true)
+    expect(has(gc, 'dotGrainColor(paletteRef.current.isLight)')).toBe(true)
+    expect(has(gc, 'patternUnits="userSpaceOnUse"', 'wg-dotgrain-pattern')).toBe(true)
+  })
+  it('dblclick is Obsidian-like: node opens, empty space zooms (P2-4)', () => {
+    const gc = read('src/renderer/src/components/graph/GraphCanvas.tsx')
+    // Node: open tab (attachment → external app); legacy unpin retained
+    expect(has(gc, 'const onDbl = (e: MouseEvent)', 'openTabRef.current(hit.path)')).toBe(true)
+    expect(has(gc, 'hit.pinned = false', 'hit.isGhost || hit.isTag')).toBe(true)
+    // Empty space: eased zoom anchored at the cursor (same tween as wheel)
+    expect(has(gc, 'startZoomTweenRef.current(nextK, mx, my)')).toBe(true)
+    expect(has(gc, 'k0 * 1.5')).toBe(true)
+    // No zoom when double-clicking a special node (must not zoom into ghosts)
+    expect(has(gc, 'if (hit.isGhost || hit.isTag) return')).toBe(true)
+  })
+  it('single-click selects, dblclick is the only open gesture (P2-6)', () => {
+    const gc = read('src/renderer/src/components/graph/GraphCanvas.tsx')
+    // Plain click on a node replaces the selection — never navigates
+    expect(has(gc, 'setSelectedIds(new Set([d.id]))')).toBe(true)
+    expect(has(gc, 'cur.size !== 1 || !cur.has(d.id)')).toBe(true)
+    // The old click-to-open in endGesture must be gone (no accidental nav)
+    expect(gc).not.toContain('void openTabRef.current(d.path)')
+    // Tag keeps its filter shortcut
+    expect(has(gc, "setSearchMode('filter')")).toBe(true)
+    // Empty-space click clears the selection; pan with motion keeps it
+    expect(has(gc, "mode === 'pan' && !moved", 'setSelectedIds(new Set())')).toBe(true)
+    // Attachments now open on dblclick (single-click no longer opens → no
+    // double-launch risk)
+    expect(has(gc, 'openFileExternal(hit.path)')).toBe(true)
+    // Hint reflects the new gesture map (+ P2-7 keyboard line)
+    expect(has(gc, 'klik select · dblklik buka · Ctrl+klik multi')).toBe(true)
+    expect(has(gc, '[ ] siklus seleksi · Enter buka · Esc deselect')).toBe(true)
   })
   it('both renderers consume edgeColorFor (G20 anti-drift)', () => {
     const c2d = read('src/renderer/src/components/graph/graphCanvas2D.ts')

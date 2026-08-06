@@ -32,10 +32,44 @@ import {
   nodeEntryProgress,
   nodeEntryScale,
   nodeEntryOpacity,
+  edgeEntryOpacity,
   cullMargin,
   pointOnScreen,
-  edgeOnScreen
+  edgeOnScreen,
+  DOT_GRID_SPACING,
+  DOT_GRID_RADIUS,
+  dotGrainColor,
+  FOCUS_RING_DASH
 } from './graphRenderTokens'
+
+/**
+ * P2-5: cached dot-grain tile. One 24×24 offscreen tile per color (theme
+ * changes are rare) — creating a pattern per frame would burn allocations on
+ * the interactive-canvas hot path.
+ */
+const dotGrainTiles = new Map<string, CanvasPattern | null>()
+function dotGrainPattern(color: string): CanvasPattern | null {
+  const hit = dotGrainTiles.get(color)
+  if (hit !== undefined) return hit
+  let tile: CanvasPattern | null = null
+  try {
+    const c = document.createElement('canvas')
+    c.width = DOT_GRID_SPACING
+    c.height = DOT_GRID_SPACING
+    const g = c.getContext('2d')
+    if (g) {
+      g.fillStyle = color
+      g.beginPath()
+      g.arc(DOT_GRID_SPACING / 2, DOT_GRID_SPACING / 2, DOT_GRID_RADIUS, 0, Math.PI * 2)
+      g.fill()
+      tile = g.createPattern(c, 'repeat')
+    }
+  } catch {
+    tile = null
+  }
+  dotGrainTiles.set(color, tile)
+  return tile
+}
 
 /** Parameters needed by the drawing functions */
 export interface DrawContext {
@@ -136,9 +170,25 @@ export function drawCanvas2DScene(dc: DrawContext, hot: HotSet): void {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
   ctx.fillStyle = pal.bg || '#1e1e22'
   ctx.fillRect(0, 0, w, h)
+  // P2-5: Obsidian dot-grain underlay — screen-space (viewport-fixed) pattern,
+  // drawn BEFORE the world transform so dots stay put while the graph pans
+  const dotPat = dotGrainPattern(dotGrainColor(pal.isLight))
+  if (dotPat) {
+    ctx.fillStyle = dotPat
+    ctx.fillRect(0, 0, w, h)
+  }
   ctx.save()
   ctx.translate(tx, ty)
   ctx.scale(k, k)
+
+  // G19: one entry time base + batch max order for the WHOLE scene (nodes,
+  // labels AND edges) so the SVG↔canvas handoff mid-animation is identical.
+  // PNG export passes entryComplete so it never captures a half-faded frame.
+  const entryNow = dc.entryComplete ? Number.POSITIVE_INFINITY : performance.now()
+  const entryMaxOrder = simNodes.reduce(
+    (m, nd) => (nd.enterOrder != null ? Math.max(m, nd.enterOrder) : m),
+    -1
+  )
 
   // ── Edges ──
   ctx.lineCap = 'round'
@@ -208,6 +258,18 @@ export function drawCanvas2DScene(dc: DrawContext, hot: HotSet): void {
     else if (dimPath) edgeAlpha = 0.12
     else if (dimFocus) edgeAlpha = 0.12
     else if (dimSearch) edgeAlpha = 0.14
+    // G19 parity: edges fade in with their SLOWEST endpoint (same rule as SVG
+    // — edgeEntryOpacity), applied AFTER the dim ladder. Steady-state edges
+    // (no `born`) are unaffected (×1).
+    const entryOp = edgeEntryOpacity(
+      entryNow,
+      s.born,
+      s.enterOrder,
+      tg.born,
+      tg.enterOrder,
+      entryMaxOrder
+    )
+    edgeAlpha *= entryOp
 
     const edgeW =
       (onPath ? PATH_EDGE_W : isHot ? hotEdgeWidth(hs) : baseEdgeWidth(e.type)) * lineMul
@@ -228,7 +290,7 @@ export function drawCanvas2DScene(dc: DrawContext, hot: HotSet): void {
       ctx.moveTo(s.x, s.y)
       ctx.lineTo(tg.x, tg.y)
       ctx.strokeStyle = canvasSafeColor(pal.edgeHot, 'rgba(170,175,190,0.38)')
-      ctx.globalAlpha = edgeGlowAlpha(hs, onPath)
+      ctx.globalAlpha = edgeGlowAlpha(hs, onPath) * entryOp
       ctx.lineWidth = edgeWidthFor(edgeW * 2.4, kSafe)
       ctx.setLineDash([])
       ctx.stroke()
@@ -284,14 +346,6 @@ export function drawCanvas2DScene(dc: DrawContext, hot: HotSet): void {
   ctx.globalAlpha = 1
 
   // ── Nodes ──
-  // G19: entry animation — same time base + batch max order as the SVG
-  // renderer so the handoff mid-animation stays identical. PNG export passes
-  // entryComplete so it never captures a half-faded frame.
-  const entryNow = dc.entryComplete ? Number.POSITIVE_INFINITY : performance.now()
-  const entryMaxOrder = simNodes.reduce(
-    (m, nd) => (nd.enterOrder != null ? Math.max(m, nd.enterOrder) : m),
-    -1
-  )
   for (const n of simNodes) {
     if (n.x == null || n.y == null) continue
     const onPath = pathN != null && pathN.has(n.id)
@@ -425,6 +479,19 @@ export function drawCanvas2DScene(dc: DrawContext, hot: HotSet): void {
               ? pal.edgeHot
               : pal.nodeStroke
       ctx.stroke()
+    }
+
+    // P2-8: dashed ring on the camera-focused selected node ([ / ] navigation)
+    // — same world-space rule as the SVG renderer (dash divided by k, matching
+    // the existing tag-edge convention)
+    if (isSelected && flags.focusSelId === n.id) {
+      ctx.beginPath()
+      ctx.arc(n.x, n.y, r + 6, 0, Math.PI * 2)
+      ctx.strokeStyle = pal.edgeHot
+      ctx.lineWidth = edgeWidthFor(0.8, kSafe)
+      ctx.setLineDash(FOCUS_RING_DASH.map((v) => v / k))
+      ctx.stroke()
+      ctx.setLineDash([])
     }
 
     // Neighbor ring (G7): subtle edgeHot ring on nodes directly connected to

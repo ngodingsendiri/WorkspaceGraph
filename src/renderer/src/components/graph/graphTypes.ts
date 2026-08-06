@@ -64,6 +64,8 @@ export type SvgNode = {
   sw: number
   fillOp: number
   strokeOp?: number
+  /** stroke-dasharray in world units (P2-8 focus ring, ghost handled by kind) */
+  dash?: string
 }
 
 export type SvgLabel = {
@@ -76,6 +78,18 @@ export type SvgLabel = {
   op: number
 }
 
+/**
+ * LOD culling stats for one committed frame (perf overlay "pre→post").
+ * `total*` are the sim counts BEFORE culling, `rendered*` what actually made
+ * it into this frame — the delta is the DOM the user never had to pay for.
+ */
+export type CulledStats = {
+  totalEdges: number
+  totalNodes: number
+  renderedEdges: number
+  renderedNodes: number
+}
+
 export type SvgFrame = {
   w: number
   h: number
@@ -86,6 +100,7 @@ export type SvgFrame = {
   nodes: SvgNode[]
   labels: SvgLabel[]
   hud: string
+  culled: CulledStats
 }
 
 // ── View flags (paint input) ──
@@ -105,6 +120,8 @@ export type ViewFlags = {
   edgeColorBy: 'default' | 'type'
   perfMode: GraphPerfMode
   selectedIds: Set<string> | null
+  /** P2-8: id of the camera-focused selected node ([/] navigation ring) */
+  focusSelId: string | null
   arrows: boolean
   textFade: number
   nodeSize: number

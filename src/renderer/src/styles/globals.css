@@ -2072,7 +2072,7 @@ html:not([data-theme]) {
   border-radius: 8px;
   padding: 8px 10px;
   box-shadow: var(--shadow-lg);
-  max-width: 220px;
+  max-width: 260px;
   z-index: var(--z-tooltip);
   /* Soft fade only — position updates via style.left/top (no layout thrash blink) */
   transition: opacity 0.15s ease;
@@ -2095,8 +2095,30 @@ html:not([data-theme]) {
   color: var(--text-secondary);
   margin-top: 5px;
 }
+.graph-tooltip .gt-path {
+  font-size: 10px;
+  color: var(--text-muted);
+  margin-top: 3px;
+  word-break: break-all;
+}
+.graph-tooltip .gt-preview {
+  margin-top: 6px;
+  padding-top: 6px;
+  border-top: 1px solid var(--border-subtle, rgba(128, 128, 128, 0.25));
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.graph-tooltip .gt-preview-loading {
+  color: var(--text-muted);
+  font-style: italic;
+  opacity: 0.8;
+}
 .graph-tooltip .gt-hint {
   font-size: 10px;
+  line-height: 1.5;
   color: var(--text-muted);
   margin-top: 6px;
   opacity: 0.75;

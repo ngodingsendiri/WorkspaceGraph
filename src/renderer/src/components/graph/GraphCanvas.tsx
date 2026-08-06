@@ -69,9 +69,14 @@ import {
   nodeEntryProgress,
   nodeEntryScale,
   nodeEntryOpacity,
+  edgeEntryOpacity,
   cullMargin,
   pointOnScreen,
-  edgeOnScreen
+  edgeOnScreen,
+  DOT_GRID_SPACING,
+  DOT_GRID_RADIUS,
+  dotGrainColor,
+  FOCUS_RING_DASH
 } from './graphRenderTokens'
 import {
   RollingPerfStats,
@@ -91,6 +96,12 @@ import {
   type GraphDiag
 } from './graphDiagnostics'
 import { computeHotSet, drawCanvas2DScene, type DrawContext } from './graphCanvas2D'
+import {
+  createTooltipScheduler,
+  TOOLTIP_DELAY_MS,
+  type TooltipScheduler
+} from './graphTooltipScheduler'
+import { TooltipPreviewCache } from './graphTooltipPreview'
 import { Icon } from '../ui/Icons'
 import { confirmDialog } from '../ui/Dialog'
 
@@ -136,7 +147,7 @@ const SvgNodeItem = memo(function SvgNodeItem({ n }: { n: SvgNode }) {
       strokeWidth={n.sw}
       fillOpacity={n.fill === 'none' ? 0 : n.fillOp}
       strokeOpacity={n.strokeOp ?? (n.fill === 'none' ? n.fillOp : 1)}
-      strokeDasharray={n.kind === 'ghost' ? '2 2' : undefined}
+      strokeDasharray={n.kind === 'ghost' ? '2 2' : n.dash}
     />
   )
 })
@@ -441,6 +452,10 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
       edges: svgFrame.edges.length,
       nodes: svgFrame.nodes.length,
       labels: svgFrame.labels.length,
+      totalEdges: svgFrame.culled?.totalEdges ?? 0,
+      totalNodes: svgFrame.culled?.totalNodes ?? 0,
+      renderedEdges: svgFrame.culled?.renderedEdges ?? 0,
+      renderedNodes: svgFrame.culled?.renderedNodes ?? 0,
       ts: performance.now()
     })
   }, [svgFrame])
@@ -524,6 +539,12 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
   /** DOM tooltip — avoid React setState on every hover (was causing blink/rebind) */
   const tooltipElRef = useRef<HTMLDivElement | null>(null)
   const tooltipNodeIdRef = useRef<string | null>(null)
+  /** P1-2: hover-delay scheduler (timer + cancel) — lazy-built after DOM callbacks */
+  const tooltipSchedulerRef = useRef<TooltipScheduler<SimNode> | null>(null)
+  /** P1-3: per-note content-preview cache (readFile + strip markdown) */
+  const tooltipPreviewCacheRef = useRef<TooltipPreviewCache | null>(null)
+  /** P1-3: monotonic guard — a slow read must never overwrite a newer tooltip */
+  const previewSeqRef = useRef(0)
   const showLabelsRef = useRef(true)
   const pathFromIdRef = useRef('')
   const pathToIdRef = useRef('')
@@ -554,6 +575,8 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
     !userCameraTouchedRef.current && !cameraHydratedRef.current && !hasAutoFitRef.current
   const forcesRef = useRef<GraphForceSettings>({ ...DEFAULT_FORCE_SETTINGS })
   const selectedIdsRef = useRef<Set<string>>(new Set())
+  /** P2-7: index of the camera-focused node within the ordered selection ([/]) */
+  const selectionNavIndexRef = useRef(0)
   /** Phase 2–4 paint flags — read each frame */
   const viewFlagsRef = useRef({
     searchMatchIds: null as Set<string> | null,
@@ -570,6 +593,8 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
     edgeColorBy: 'default' as 'default' | 'type',
     perfMode: 'auto' as GraphPerfMode,
     selectedIds: null as Set<string> | null,
+    /** P2-8: camera-focused selected node ([ / ] navigation dashed ring) */
+    focusSelId: null as string | null,
     /** Obsidian-like display knobs */
     arrows: false,
     textFade: 0.75,
@@ -754,6 +779,8 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
 
   /** Imperative tooltip — no React re-render on pointermove */
   const hideTooltipDom = useCallback(() => {
+    // P1-3: invalidate any in-flight preview so it cannot write into a fresh tooltip
+    previewSeqRef.current++
     const el = tooltipElRef.current
     if (!el) return
     el.style.opacity = '0'
@@ -769,11 +796,31 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
     if (tooltipNodeIdRef.current !== hit.id) {
       const tags = safeTags(hit)
       const deg = typeof hit.degree === 'number' ? hit.degree : 0
+      const showPath = hit.relativePath || hit.path || ''
       el.innerHTML = `<div class="gt-title">${escapeHtml(hit.title || '')}</div>
         <div class="gt-meta">${escapeHtml(hit.type || 'note')} · ${deg} link${deg !== 1 ? 's' : ''}</div>
+        ${showPath ? `<div class="gt-path">${escapeHtml(showPath)}</div>` : ''}
         ${tags.length ? `<div class="gt-tags">${tags.map((t) => '#' + escapeHtml(String(t))).join(' ')}</div>` : ''}
-        <div class="gt-hint">klik buka · Ctrl+klik select · Shift path · Alt focus</div>`
+        <div class="gt-preview gt-preview-loading">memuat…</div>
+        <div class="gt-hint">klik select · dblklik buka · Ctrl+klik multi · Shift path · Alt focus<br>[ ] siklus seleksi · Enter buka · Esc deselect</div>`
       tooltipNodeIdRef.current = hit.id
+      // P1-3: fill the preview from the per-note cache; a later show/hide bumps
+      // previewSeqRef so this read can never paint into a different tooltip
+      const seq = ++previewSeqRef.current
+      const pid = hit.id
+      void tooltipPreviewCacheRef.current?.get(hit).then((text) => {
+        if (seq !== previewSeqRef.current) return
+        // The tooltip may have been re-targeted — only paint into pid's own preview
+        if (tooltipNodeIdRef.current !== pid) return
+        const pv = tooltipElRef.current?.querySelector('.gt-preview')
+        if (!pv) return
+        if (text) {
+          pv.textContent = text
+          pv.classList.remove('gt-preview-loading')
+        } else {
+          pv.remove()
+        }
+      })
     }
     el.style.left = `${x}px`
     el.style.top = `${y}px`
@@ -795,6 +842,8 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
     const unsub = window.api.onGraphUpdated(() => {
       void fetchGraph().finally(() => setGraphLoaded(true))
       void fetchGraphMeta()
+      // P1-3: note bodies may have changed (edit/save) — drop stale previews
+      tooltipPreviewCacheRef.current?.invalidate()
     })
     return () => {
       unsub()
@@ -1265,6 +1314,14 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
   filteredNodesRef.current = filteredNodes
   filteredEdgesRef.current = filteredEdges
 
+  // P2-7: never keep a selection on ids that left the visible graph (note
+  // deleted, filter changed, rebuild) — Delete/O/arrows must not act on ghosts
+  useEffect(() => {
+    if (selectedIds.size === 0) return
+    const kept = new Set([...selectedIds].filter((id) => filteredNodeIds.has(id)))
+    if (kept.size !== selectedIds.size) setSelectedIds(kept)
+  }, [filteredNodeIds, selectedIds])
+
   // Obsidian-like color groups: node id → group color (first match wins)
   const groupColorById = useMemo(() => resolveGroupColors(nodes, colorGroups), [nodes, colorGroups])
 
@@ -1381,6 +1438,7 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
               edges: [],
               nodes: [],
               labels: [],
+              culled: { totalEdges: 0, totalNodes: 0, renderedEdges: 0, renderedNodes: 0 },
               hud: 'sim:0 · kosong — cek filter / data vault'
             })
           }
@@ -1415,6 +1473,15 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
             if (typeof x === 'string') return byId.get(x) || null
             return null
           }
+
+          // G19: entry animation — one time base + batch max order for the WHOLE
+          // paint (nodes, labels AND edges) so the stagger is stable frame to
+          // frame and the SVG↔canvas handoff mid-animation stays identical.
+          const entryNow = performance.now()
+          const entryMaxOrder = simNodes.reduce(
+            (m, nd) => (nd.enterOrder != null ? Math.max(m, nd.enterOrder) : m),
+            -1
+          )
 
           // LOD culling BEFORE the budget: off-frustum edges never consume the
           // LOD budget, so a zoomed-in cluster keeps full detail instead of
@@ -1510,6 +1577,19 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
             else if (dimHover) op = lerp(op, 0.12, hs)
             else if (dimPath || dimFocus) op = 0.12
             else if (dimSearch) op = 0.14
+            // G19 parity: edges fade in with their SLOWEST endpoint — same rule
+            // as Canvas2D (edgeEntryOpacity), applied AFTER the dim ladder so
+            // dims still apply and the entry fade sits on top. Steady-state
+            // edges (no `born`) are unaffected (×1).
+            const entryOp = edgeEntryOpacity(
+              entryNow,
+              s.born,
+              s.enterOrder,
+              tg.born,
+              tg.enterOrder,
+              entryMaxOrder
+            )
+            op *= entryOp
             // World-space stroke (scales with zoom via group transform) with a
             // shared screen-space floor so edges stay visible when zoomed out
             const sw = edgeWidthFor(
@@ -1529,7 +1609,7 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
                 y2: tg.y,
                 stroke: pal.edgeHot,
                 sw: edgeWidthFor(hotEdgeWidth(hs) * lineMul * 2.4, t.k),
-                op: edgeGlowAlpha(hs, onPath)
+                op: edgeGlowAlpha(hs, onPath) * entryOp
               })
             }
             edgesOut.push({
@@ -1553,14 +1633,9 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
           const labelsOn = showLabelsRef.current
           const maxLabels = labelsOn ? labelDrawBudget(lod) : 0
           let labCount = 0
+          /** Unique nodes that passed the frustum — perf overlay pre→post. */
+          let nodesRendered = 0
           const sel = flags.selectedIds
-          // G19: entry animation — same time base + batch max order for all
-          // nodes of this paint so the stagger is stable frame to frame.
-          const entryNow = performance.now()
-          const entryMaxOrder = simNodes.reduce(
-            (m, nd) => (nd.enterOrder != null ? Math.max(m, nd.enterOrder) : m),
-            -1
-          )
           for (const n of simNodes) {
             if (n.x == null || n.y == null || !Number.isFinite(n.x) || !Number.isFinite(n.y))
               continue
@@ -1584,6 +1659,7 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
               !pointOnScreen(sx, sy, w, h, margin)
             )
               continue
+            nodesRendered++
 
             const isTag = Boolean(n.isTag || n.type === 'tag')
             const isGhost = Boolean(n.isGhost || n.type === 'ghost')
@@ -1717,6 +1793,23 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
                 strokeOp: 0.75
               })
             }
+            // P2-8: dashed ring on the camera-focused selected node ([ / ]) —
+            // same world-space rule as Canvas2D (no handoff jump)
+            if (isSel && flags.focusSelId === n.id) {
+              nodesOut.push({
+                key: n.id + ':fsel',
+                kind: 'circle',
+                cx: n.x,
+                cy: n.y,
+                r: rWorld + 6,
+                fill: 'none',
+                stroke: pal.edgeHot,
+                sw: 0.8,
+                fillOp: 0,
+                strokeOp: 0.9,
+                dash: FOCUS_RING_DASH.join(' ')
+              })
+            }
             if (isNeighbor) {
               // Ring eases in/out with hover strength; thinner than the hover
               // ring. strokeOp multiplies fillOp so the ring dims together with
@@ -1798,6 +1891,12 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
               edges: mergedEdges,
               nodes: mergedNodes,
               labels: mergedLabels,
+              culled: {
+                totalEdges: simLinks.length,
+                totalNodes: simNodes.length,
+                renderedEdges: edgeList.length,
+                renderedNodes: nodesRendered
+              },
               hud
             },
             svgThrottle
@@ -1814,6 +1913,12 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
           edges: [],
           nodes: [],
           labels: [],
+          culled: {
+            totalEdges: simLinks.length,
+            totalNodes: simNodes.length,
+            renderedEdges: 0,
+            renderedNodes: 0
+          },
           hud: `SVG error · sim:${simNodes.length}`
         })
       }
@@ -1974,6 +2079,12 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
           edges: simLinks.length,
           nodes: simNodes.length,
           labels: 0,
+          // Canvas2D row measures draw-time only — culling isn't tracked here,
+          // so pre==post (the SVG commit row owns the culled counter).
+          totalEdges: simLinks.length,
+          totalNodes: simNodes.length,
+          renderedEdges: simLinks.length,
+          renderedNodes: simNodes.length,
           ts: performance.now()
         })
       }
@@ -3066,6 +3177,25 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
   hideTooltipDomRef.current = hideTooltipDom
   const moveTooltipDomRef = useRef(moveTooltipDom)
   moveTooltipDomRef.current = moveTooltipDom
+  // P1-2: hover-delay — built once; callbacks read refs at call time (never stale)
+  if (!tooltipSchedulerRef.current) {
+    tooltipSchedulerRef.current = createTooltipScheduler<SimNode>({
+      delay: TOOLTIP_DELAY_MS,
+      show: (node, x, y) => showTooltipDomRef.current(node, x, y),
+      move: (x, y) => moveTooltipDomRef.current(x, y),
+      hide: () => hideTooltipDomRef.current(),
+      isVisible: () => tooltipNodeIdRef.current != null
+    })
+  }
+  // P1-3: preview cache — reads note bodies through the sandboxed main-process API
+  if (!tooltipPreviewCacheRef.current) {
+    tooltipPreviewCacheRef.current = new TooltipPreviewCache({
+      read: async (p) => {
+        const res = await window.api.readFile(p)
+        return { content: res?.content ?? '' }
+      }
+    })
+  }
   const setHoverIdRef = useRef(setHoverId)
   setHoverIdRef.current = setHoverId
 
@@ -3130,14 +3260,18 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
         const d = dragged
         if (!moved) {
           if (d.isTag || d.type === 'tag') {
+            // Tag shortcut (unchanged): click a tag node → filter by it
             setSearchQuery((d.title || '').replace(/^#/, ''))
             setSearchMode('filter')
-          } else if (d.isAttachment && d.path && window.api?.openFileExternal) {
-            // Attachments (image/pdf) open with OS default app, not the editor
-            void window.api.openFileExternal(d.path)
-          } else if (d.path && !d.isGhost && !d.isAttachment && d.type !== 'ghost') {
-            void openTabRef.current(d.path)
-            setActiveViewRef.current('editor')
+          } else {
+            // Obsidian: single-click SELECTS — double-click is the only open
+            // gesture. A plain click replaces the selection (Ctrl+click toggles
+            // in pointerdown). Never navigates away from the graph.
+            const cur = selectedIdsRef.current
+            if (cur.size !== 1 || !cur.has(d.id)) {
+              setSelectedIds(new Set([d.id]))
+              schedulePaint()
+            }
           }
         } else {
           d.pinned = true
@@ -3169,6 +3303,13 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
         }
       } else if ((mode === 'pan' || mode === 'pinch') && moved) {
         scheduleSaveCameraRef.current()
+      } else if (mode === 'pan' && !moved) {
+        // Obsidian: clicking empty space clears the selection (pan with motion
+        // keeps it — matches how Obsidian drags don't deselect)
+        if (selectedIdsRef.current.size > 0) {
+          setSelectedIds(new Set())
+          schedulePaint()
+        }
       }
       // Hide interactive canvas and sync final state back to React SVG
       if (wheelDebounceRef.current) {
@@ -3283,6 +3424,8 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
         wheelDebounceRef.current = null
       }
       setCtxMenu(null)
+      // P1-2: any gesture (pan/drag/pinch) cancels a pending tooltip + hides it
+      tooltipSchedulerRef.current?.leave()
       pointers.set(e.pointerId, { x: e.clientX, y: e.clientY })
 
       if (pointers.size >= 2) {
@@ -3435,10 +3578,11 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
         setHoverIdRef.current(next)
         // Obsidian affordance: pointer cursor over a draggable node
         wrapEl?.classList.toggle('node-hover', next != null)
-        if (hit) showTooltipDomRef.current(hit, e.clientX, e.clientY)
-        else hideTooltipDomRef.current()
+        // P1-2: delay before showing; switching node re-arms the timer
+        tooltipSchedulerRef.current?.hover(hit ?? null, e.clientX, e.clientY)
       } else if (hit) {
-        moveTooltipDomRef.current(e.clientX, e.clientY)
+        // Same node: follow the cursor (or refresh the pending anchor)
+        tooltipSchedulerRef.current?.hover(hit, e.clientX, e.clientY)
       }
     }
 
@@ -3446,22 +3590,45 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
       if (mode !== 'none') return
       wrapEl?.classList.remove('node-hover')
       setHoverIdRef.current(null)
-      hideTooltipDomRef.current()
+      tooltipSchedulerRef.current?.leave()
     }
 
     const onDbl = (e: MouseEvent): void => {
-      // Only unpin nodes when double-clicking the graph surface — rapid clicks
-      // on zoom controls must not hit nodes rendered behind the buttons.
+      // Rapid clicks on zoom controls must not zoom/open nodes behind the buttons
       if (isOverlayUi(e.target)) return
       const hit = hitNodeRef.current(e.clientX, e.clientY)
-      if (!hit || hit.isGhost || hit.isTag) return
-      hit.fx = null
-      hit.fy = null
-      hit.pinned = false
-      posCache.current.set(hit.id, { x: hit.x!, y: hit.y!, fx: null, fy: null })
-      setPinnedCount(nodesRef.current.filter((n) => n.pinned || n.fx != null).length)
-      simRef.current?.alpha(0.3).restart()
-      schedulePaint()
+      if (hit) {
+        // Ghosts (unresolved wikilinks) and tags have no note to open — ignore
+        if (hit.isGhost || hit.isTag) return
+        // P2-4: double-click a node → open it (Obsidian). Keep the legacy
+        // unpin — dragging only ever pins, so dblclick stays the release path.
+        hit.fx = null
+        hit.fy = null
+        hit.pinned = false
+        posCache.current.set(hit.id, { x: hit.x!, y: hit.y!, fx: null, fy: null })
+        setPinnedCount(nodesRef.current.filter((n) => n.pinned || n.fx != null).length)
+        simRef.current?.alpha(0.3).restart()
+        schedulePaint()
+        // Obsidian: dblclick is THE open gesture — single-click only selects
+        // now, so both notes (editor tab) and attachments (OS app) open here
+        // without any double-launch risk.
+        if (hit.path && !hit.isAttachment) {
+          void openTabRef.current(hit.path)
+          setActiveViewRef.current('editor')
+        } else if (hit.isAttachment && hit.path && window.api?.openFileExternal) {
+          void window.api.openFileExternal(hit.path)
+        }
+        return
+      }
+      // P2-4: double-click empty space → zoom in at the cursor (Obsidian
+      // canvas feel), using the same eased tween as wheel/buttons (G18)
+      const rect = wrapRef.current?.getBoundingClientRect()
+      if (!rect) return
+      const mx = e.clientX - rect.left
+      const my = e.clientY - rect.top
+      const k0 = transformRef.current.k || 1
+      const nextK = Math.max(0.08, Math.min(6, k0 * 1.5))
+      startZoomTweenRef.current(nextK, mx, my)
     }
 
     const onContextMenu = (e: MouseEvent): void => {
@@ -3509,6 +3676,8 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
         clearTimeout(wheelDebounceRef.current)
         wheelDebounceRef.current = null
       }
+      // P1-2: drop any pending tooltip timer on unbind (never fire after cleanup)
+      tooltipSchedulerRef.current?.dispose()
       // Reset interactive canvas state on cleanup
       if (interactiveCanvasRef.current) {
         interactiveCanvasRef.current = false
@@ -4155,7 +4324,16 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
       const el = e.target as HTMLElement | null
       if (!el) return
       const tag = el.tagName
-      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || el.isContentEditable) {
+      // Interactive targets own their keys — Enter must activate a focused
+      // panel BUTTON, not open a selected node (P2-7 regression guard)
+      if (
+        tag === 'INPUT' ||
+        tag === 'TEXTAREA' ||
+        tag === 'SELECT' ||
+        tag === 'BUTTON' ||
+        tag === 'A' ||
+        el.isContentEditable
+      ) {
         if (e.key === 'Escape') {
           ;(el as HTMLInputElement).blur?.()
           return
@@ -4185,13 +4363,79 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
 
       if (e.key === 'Escape') {
         e.preventDefault()
+        // Obsidian: Esc deselects FIRST — the full path/focus/spotlight reset
+        // only runs once nothing is selected (two-step, never destructive)
+        if (selectedIdsRef.current.size > 0) {
+          setSelectedIds(new Set())
+          schedulePaint()
+          setPathStatus('Selection cleared')
+          return
+        }
         handleClearPath()
         handleClearFocus()
-        setSelectedIds(new Set())
         setSearchQuery('')
         setShowFilters(false)
         setPathStatus('Cleared path/focus/selection/spotlight')
         schedulePaint()
+        return
+      }
+      // P2-7: [ / ] cycle the camera between selected nodes (keyboard
+      // inspection of a multi-selection); Enter opens the node the camera
+      // is currently on
+      if (e.key === '[' || e.key === ']') {
+        const ids = [...selectedIdsRef.current]
+        if (ids.length < 2) return
+        e.preventDefault()
+        // Only actionable nodes are navigable — ghosts (unresolved) and tags
+        // cannot open, and a ghost is already dashed (no double-dash visual)
+        const ordered = nodesRef.current.filter(
+          (n) =>
+            ids.includes(n.id) && !n.isGhost && n.type !== 'ghost' && !n.isTag && n.type !== 'tag'
+        )
+        if (ordered.length < 2) return
+        let idx = selectionNavIndexRef.current
+        if (idx >= ordered.length) idx = 0
+        idx = (idx + (e.key === ']' ? 1 : -1) + ordered.length) % ordered.length
+        selectionNavIndexRef.current = idx
+        const target = ordered[idx]
+        // P2-8: mark the focused node for the dashed ring (read at paint time
+        // by both renderers; stale ids render nothing because renderers also
+        // require flags.selectedIds.has(id))
+        viewFlagsRef.current.focusSelId = target.id
+        // Guarantee a repaint even if the camera transform doesn't change
+        // (overlapping selected nodes) — setCameraTransformRef may short-circuit
+        schedulePaint()
+        const sized = syncCanvasSize()
+        const cx = (sized.ready ? sized.w : wrapRef.current?.clientWidth || 400) / 2
+        const cy = (sized.ready ? sized.h : wrapRef.current?.clientHeight || 300) / 2
+        const t = transformRef.current
+        const k = Math.max(t.k || 1, 0.8)
+        setCameraTransformRef.current(
+          d3.zoomIdentity.translate(cx - (target.x ?? 0) * k, cy - (target.y ?? 0) * k).scale(k),
+          { user: true, save: true }
+        )
+        return
+      }
+      if (e.key === 'Enter') {
+        const ids = [...selectedIdsRef.current]
+        if (ids.length === 0) return
+        e.preventDefault()
+        const ordered = nodesRef.current.filter((n) => ids.includes(n.id))
+        const idx = Math.min(selectionNavIndexRef.current, ordered.length - 1)
+        const focus = ordered[idx] ?? ordered[0]
+        if (!focus) return
+        if (focus.isAttachment && focus.path && window.api?.openFileExternal) {
+          void window.api.openFileExternal(focus.path)
+        } else if (
+          focus.path &&
+          !focus.isGhost &&
+          !focus.isAttachment &&
+          !focus.isTag &&
+          focus.type !== 'tag'
+        ) {
+          void openTab(focus.path)
+          setActiveView('editor')
+        }
         return
       }
       if (e.key === 'o' || e.key === 'O') {
@@ -4657,6 +4901,28 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
         <div className="graph-svg-host" role="img" aria-label="Knowledge graph">
           {svgFrame ? (
             <svg ref={svgRef} className="graph-svg" width={svgFrame.w} height={svgFrame.h}>
+              <defs>
+                {/* P2-5: Obsidian dot-grain — userSpaceOnUse pins the tile to
+                    screen space, so dots stay fixed while the world pans (same
+                    rule as the Canvas2D pattern). Rebuilt with the frame so a
+                    theme switch repaints it via paletteRef. */}
+                <pattern
+                  id="wg-dotgrain-pattern"
+                  width={DOT_GRID_SPACING}
+                  height={DOT_GRID_SPACING}
+                  patternUnits="userSpaceOnUse"
+                >
+                  <circle
+                    cx={DOT_GRID_SPACING / 2}
+                    cy={DOT_GRID_SPACING / 2}
+                    r={DOT_GRID_RADIUS}
+                    fill={dotGrainColor(paletteRef.current.isLight)}
+                  />
+                </pattern>
+              </defs>
+              {svgFrame.w > 0 && svgFrame.h > 0 && (
+                <rect width={svgFrame.w} height={svgFrame.h} fill="url(#wg-dotgrain-pattern)" />
+              )}
               <g
                 className="g-world"
                 transform={`translate(${svgFrame.tx},${svgFrame.ty}) scale(${svgFrame.k})`}
@@ -4919,6 +5185,18 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
               <span className="graph-perf-muted">
                 {' '}
                 ({perfSnap.edges}E · {perfSnap.nodes}N · {perfSnap.labels}L)
+              </span>
+            </div>
+            {/* LOD culling win: pre→post. `post` = node unik / edge utama yang
+                lolos frustum — baris elemen di atas menghitung DOM incl. glow/
+                ring, jadi dua baris bisa beda saat hover (disengaja). */}
+            <div className="graph-perf-row">
+              culled <strong>{Math.max(0, perfSnap.totalEdges - perfSnap.renderedEdges)}E</strong> ·{' '}
+              <strong>{Math.max(0, perfSnap.totalNodes - perfSnap.renderedNodes)}N</strong>
+              <span className="graph-perf-muted">
+                {' '}
+                pre→post: E {perfSnap.totalEdges}→{perfSnap.renderedEdges} · N {perfSnap.totalNodes}
+                →{perfSnap.renderedNodes} (node unik)
               </span>
             </div>
             <div className="graph-perf-row">

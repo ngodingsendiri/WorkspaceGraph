@@ -19,6 +19,11 @@ export interface PerfSample {
   edges: number
   nodes: number
   labels: number
+  /** LOD culling: sim counts before cull + what actually rendered (overlay). */
+  totalEdges: number
+  totalNodes: number
+  renderedEdges: number
+  renderedNodes: number
   /** performance.now() at commit — for fps windowing. */
   ts: number
 }
@@ -33,6 +38,10 @@ export interface PerfSnapshot {
   edges: number
   nodes: number
   labels: number
+  totalEdges: number
+  totalNodes: number
+  renderedEdges: number
+  renderedNodes: number
 }
 
 const WINDOW_CAPACITY = 90
@@ -144,7 +153,11 @@ export class RollingPerfStats {
       fps,
       edges: last?.edges ?? 0,
       nodes: last?.nodes ?? 0,
-      labels: last?.labels ?? 0
+      labels: last?.labels ?? 0,
+      totalEdges: last?.totalEdges ?? 0,
+      totalNodes: last?.totalNodes ?? 0,
+      renderedEdges: last?.renderedEdges ?? 0,
+      renderedNodes: last?.renderedNodes ?? 0
     }
   }
 }

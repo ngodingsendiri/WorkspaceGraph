@@ -71,6 +71,7 @@ function makeFlags(over: Partial<ViewFlags> = {}): ViewFlags {
     edgeColorBy: 'default',
     perfMode: 'auto',
     selectedIds: null,
+    focusSelId: null,
     arrows: false,
     textFade: 0.75,
     nodeSize: 1,
