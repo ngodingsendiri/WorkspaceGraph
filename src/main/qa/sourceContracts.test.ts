@@ -417,6 +417,42 @@ describe('Renderer wiring', () => {
     expect(has(ps, 'export class RollingPerfStats')).toBe(true)
     expect(has(ps, 'p95CommitMs')).toBe(true)
   })
+  it('adaptive throttle window wired in GraphCanvas (G-perf)', () => {
+    const gc = read('src/renderer/src/components/graph/GraphCanvas.tsx')
+    const ps = read('src/renderer/src/components/graph/graphPerfStats.ts')
+    const rt = read('src/renderer/src/components/graph/graphRenderTokens.ts')
+    // Controller + live window feed pushSvgFrame each commit
+    expect(has(gc, 'new AdaptiveThrottle(SVG_PUSH_THROTTLE_MS)')).toBe(true)
+    expect(has(gc, 'throttleWindowMsRef.current')).toBe(true)
+    expect(
+      has(
+        gc,
+        'shouldThrottleSvgPush(now, lastSvgPushRef.current, throttle, throttleWindowMsRef.current)'
+      )
+    ).toBe(true)
+    expect(has(gc, 'ctrl.consider(snap.p95CommitMs, snap.count, performance.now())')).toBe(true)
+    expect(has(ps, 'export class AdaptiveThrottle')).toBe(true)
+    expect(has(ps, 'THROTTLE_MIN_MS')).toBe(true)
+    expect(has(ps, 'THROTTLE_MAX_MS')).toBe(true)
+    expect(has(rt, 'windowMs = SVG_PUSH_THROTTLE_MS')).toBe(true)
+  })
+  it('canvas2D gesture draw-time + spark chart wired (G-perf)', () => {
+    const gc = read('src/renderer/src/components/graph/GraphCanvas.tsx')
+    const ps = read('src/renderer/src/components/graph/graphPerfStats.ts')
+    const sp = read('src/renderer/src/components/graph/graphPerfSpark.ts')
+    // Canvas2D gesture path timed only while the overlay is on, into its own stats
+    expect(has(gc, 'canvasStatsRef')).toBe(true)
+    expect(has(gc, 'perfOverlayRef.current ? performance.now() : 0')).toBe(true)
+    expect(has(gc, 'canvasStatsRef.current.push')).toBe(true)
+    // Spark chart: last SPARK_BARS commit durations rendered on a mini canvas
+    expect(has(gc, 'PerfSparkChart')).toBe(true)
+    expect(has(gc, 'sparkLayout(samples, width, height, THROTTLE_TARGET_P95_MS)')).toBe(true)
+    expect(has(gc, 'perfStatsRef.current.recent(SPARK_BARS)')).toBe(true)
+    expect(has(ps, 'recent(n: number): number[]')).toBe(true)
+    expect(has(sp, 'export function sparkLayout')).toBe(true)
+    expect(has(sp, 'export function drawSparkBars')).toBe(true)
+    expect(has(sp, 'export const SPARK_BARS')).toBe(true)
+  })
   it('delta-merge structural sharing wired in GraphCanvas (G-perf)', () => {
     const gc = read('src/renderer/src/components/graph/GraphCanvas.tsx')
     // Prev-frame caches exist, merge runs right before push, reset on rebuild

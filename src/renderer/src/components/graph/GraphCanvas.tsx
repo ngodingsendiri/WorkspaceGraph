@@ -70,7 +70,15 @@ import {
   nodeEntryScale,
   nodeEntryOpacity
 } from './graphRenderTokens'
-import { RollingPerfStats } from './graphPerfStats'
+import {
+  RollingPerfStats,
+  AdaptiveThrottle,
+  THROTTLE_TARGET_P95_MS,
+  THROTTLE_MIN_MS,
+  THROTTLE_MAX_MS,
+  type PerfSnapshot
+} from './graphPerfStats'
+import { drawSparkBars, sparkLayout, SPARK_BARS } from './graphPerfSpark'
 import {
   SpatialHash2D,
   diagnoseEmptyFilter,
@@ -145,6 +153,45 @@ const SvgLabelItem = memo(function SvgLabelItem({ lab }: { lab: SvgLabel }) {
       {lab.text}
     </text>
   )
+})
+
+/**
+ * G-perf overlay spark chart: last SPARK_BARS commit durations as bars on a
+ * tiny canvas. Theme-aware via CSS vars (read once per draw — cheap, and the
+ * chart only draws while the overlay is visible). Renders empty until samples
+ * arrive; bars over the target p95 are tinted to flag throttling spikes.
+ */
+function readThemeVar(name: string, fallback: string): string {
+  if (typeof document === 'undefined') return fallback
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback
+}
+
+const PerfSparkChart = memo(function PerfSparkChart({
+  samples,
+  width = 200,
+  height = 30
+}: {
+  samples: number[]
+  width?: number
+  height?: number
+}) {
+  const ref = useRef<HTMLCanvasElement | null>(null)
+  useEffect(() => {
+    const cv = ref.current
+    if (!cv) return
+    const dpr = Math.min(window.devicePixelRatio || 1, 2)
+    cv.width = width * dpr
+    cv.height = height * dpr
+    const ctx = cv.getContext('2d')
+    if (!ctx) return
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+    drawSparkBars(ctx, sparkLayout(samples, width, height, THROTTLE_TARGET_P95_MS), {
+      bar: readThemeVar('--color-info', '#4cc9f0'),
+      over: readThemeVar('--color-error', '#f0567c'),
+      targetLine: readThemeVar('--color-warning', '#f5a623')
+    })
+  }, [samples, width, height])
+  return <canvas ref={ref} className="graph-perf-spark" />
 })
 
 /** Obsidian-like display defaults (text fade soft at distance).
@@ -309,8 +356,10 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
   const prevLabelsRef = useRef<SvgLabel[] | null>(null)
   /**
    * G-perf debug overlay: real-browser commit measurement + element counts.
-   * Toggle with `d` in the graph view. Samples are recorded only while the
-   * overlay is on (zero overhead in normal use).
+   * Toggle with `d` in the graph view. The sampler itself is ALWAYS on (one
+   * timestamp diff + one array push per commit — negligible) because the
+   * adaptive throttle window reads the same p95 even while the overlay is
+   * hidden; the overlay only adds a 250 ms panel refresh tick.
    */
   const [perfOverlay, setPerfOverlay] = useState(false)
   const perfOverlayRef = useRef(false)
@@ -320,7 +369,15 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
   /** Pushes deferred by the throttle (frames that never reached React). */
   const perfThrottledRef = useRef(0)
   const [perfSnap, setPerfSnap] = useState<ReturnType<RollingPerfStats['snapshot']> | null>(null)
+  /** Canvas2D gesture-path draw stats (sampled only while the overlay is on). */
+  const canvasStatsRef = useRef<RollingPerfStats | null>(null)
+  const [canvasSnap, setCanvasSnap] = useState<PerfSnapshot | null>(null)
+  /** Last SPARK_BARS SVG commit durations — fed to the overlay spark chart. */
+  const [sparkSamples, setSparkSamples] = useState<number[]>([])
   const perfTickRef = useRef<ReturnType<typeof setInterval> | null>(null)
+  /** Current adaptive throttle window (ms) — pushSvgFrame reads this each commit. */
+  const throttleWindowMsRef = useRef(SVG_PUSH_THROTTLE_MS)
+  const adaptiveThrottleRef = useRef<AdaptiveThrottle | null>(null)
   /**
    * Drop prev-frame references at structural rebuilds (filter change, empty,
    * error path). deltaMerge is value-safe (equal fields ⇒ same rendering), but
@@ -334,20 +391,22 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
   }, [])
   /**
    * Commit an SVG frame to React. With `throttle`, when a commit happened
-   * within SVG_PUSH_THROTTLE_MS we keep the newest frame as pending (latest-wins)
-   * and skip setState — the frame object is still rebuilt every paint (cheap,
-   * ~0.2ms), but React does not reconcile thousands of elements every sim tick.
+   * within the current throttle window (throttleWindowMsRef — base
+   * SVG_PUSH_THROTTLE_MS, widened/narrowed at runtime by AdaptiveThrottle) we
+   * keep the newest frame as pending (latest-wins) and skip setState — the
+   * frame object is still rebuilt every paint (cheap, ~0.2ms), but React does
+   * not reconcile thousands of elements every sim tick.
    */
   const pushSvgFrame = useCallback((frame: SvgFrame, throttle = false) => {
     const now = performance.now()
-    if (shouldThrottleSvgPush(now, lastSvgPushRef.current, throttle)) {
+    if (shouldThrottleSvgPush(now, lastSvgPushRef.current, throttle, throttleWindowMsRef.current)) {
       if (perfOverlayRef.current) perfThrottledRef.current++
       pendingSvgFrameRef.current = frame
       return
     }
     pendingSvgFrameRef.current = null
     lastSvgPushRef.current = now
-    if (perfOverlayRef.current) perfCommitStartRef.current = now
+    perfCommitStartRef.current = now
     setSvgFrame(frame)
   }, [])
   /** Force-commit any throttled pending frame (sim settle / gesture start). */
@@ -356,7 +415,7 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
     if (!pending) return
     pendingSvgFrameRef.current = null
     lastSvgPushRef.current = performance.now()
-    if (perfOverlayRef.current) perfCommitStartRef.current = performance.now()
+    perfCommitStartRef.current = performance.now()
     setSvgFrame(pending)
   }, [])
   const flushSvgFrameRef = useRef(flushSvgFrame)
@@ -368,10 +427,11 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
    * the DOM mutation — the delta is React render + reconciliation + DOM diff
    * for exactly this frame, no rAF jitter. Sampled only when overlay is on.
    */
+  /** Always-on commit sampler (cheap; feeds the adaptive throttle + overlay). */
   useLayoutEffect(() => {
-    if (!perfOverlayRef.current || !svgFrame) return
+    if (!svgFrame) return
+    if (!perfStatsRef.current) perfStatsRef.current = new RollingPerfStats()
     const stats = perfStatsRef.current
-    if (!stats) return
     const start = perfCommitStartRef.current
     stats.push({
       commitMs: start > 0 ? Math.max(0, performance.now() - start) : 0,
@@ -386,23 +446,61 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
    * While the overlay is on, refresh the HUD panel a few times per second
    * (the panel is a tiny React node — cheap; it never touches the SVG tree).
    */
+  /**
+   * While the overlay is on, refresh the HUD panel a few times per second
+   * (the panel is a tiny React node — cheap; it never touches the SVG tree).
+   * Paused when the graph view is hidden (no commits happen anyway).
+   * NOTE: does NOT null perfStatsRef — the sampler stays alive for the
+   * adaptive throttle; the overlay just gets a fresh window on enable.
+   */
   useEffect(() => {
-    // Pause sampling when the graph view is hidden — no commits happen anyway,
-    // so the 250 ms tick would only churn the hidden panel's React state.
     if (!perfOverlay || activeView !== 'graph') return
+    // Fresh window for the panel. The adaptive controller keeps its own
+    // windowMs, so only its ≥10-sample gate restarts (~1s of sim motion) —
+    // acceptable, adaptation recovers quickly.
     perfStatsRef.current = new RollingPerfStats()
     perfThrottledRef.current = 0
     perfCommitStartRef.current = 0
+    canvasStatsRef.current = new RollingPerfStats()
     setPerfSnap(perfStatsRef.current.snapshot())
+    setCanvasSnap(null)
+    setSparkSamples([])
     perfTickRef.current = setInterval(() => {
-      if (perfStatsRef.current) setPerfSnap(perfStatsRef.current.snapshot())
+      if (perfStatsRef.current) {
+        setPerfSnap(perfStatsRef.current.snapshot())
+        setSparkSamples(perfStatsRef.current.recent(SPARK_BARS))
+      }
+      if (canvasStatsRef.current) setCanvasSnap(canvasStatsRef.current.snapshot())
     }, 250)
     return () => {
       if (perfTickRef.current) clearInterval(perfTickRef.current)
       perfTickRef.current = null
-      perfStatsRef.current = null
     }
   }, [perfOverlay, activeView])
+
+  /**
+   * Adaptive throttle: sample commit p95 once per second while the graph is
+   * visible and let the controller widen/narrow the window (hard bounds
+   * THROTTLE_MIN/MAX_MS). pushSvgFrame reads throttleWindowMsRef live, so the
+   * very next commit uses the new window.
+   */
+  useEffect(() => {
+    if (activeView !== 'graph') return
+    if (!adaptiveThrottleRef.current) {
+      adaptiveThrottleRef.current = new AdaptiveThrottle(SVG_PUSH_THROTTLE_MS)
+    }
+    const id = setInterval(() => {
+      const stats = perfStatsRef.current
+      const ctrl = adaptiveThrottleRef.current
+      if (!stats || !ctrl) return
+      const snap = stats.snapshot()
+      // Gate on recent activity: a stale p95 from a long-past busy phase must
+      // not silently widen/narrow the window while the user is idle.
+      if (snap.fps === 0) return
+      throttleWindowMsRef.current = ctrl.consider(snap.p95CommitMs, snap.count, performance.now())
+    }, 1000)
+    return () => clearInterval(id)
+  }, [activeView])
   const simRef = useRef<d3.Simulation<SimNode, SimLink> | null>(null)
   const nodesRef = useRef<SimNode[]>([])
   const linksRef = useRef<SimLink[]>([])
@@ -1818,7 +1916,21 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
         showLabels: showLabelsRef.current
       }
       const hot = computeHotSet(hover, hs, simLinks)
+      // G-perf: measure the gesture-path draw while the overlay is on so the
+      // Canvas2D renderer can be compared head-to-head with SVG commits in the
+      // same HUD. Gated on the overlay to keep the gesture path zero-cost.
+      const t0 = perfOverlayRef.current ? performance.now() : 0
       drawCanvas2DScene(dc, hot)
+      if (perfOverlayRef.current) {
+        if (!canvasStatsRef.current) canvasStatsRef.current = new RollingPerfStats()
+        canvasStatsRef.current.push({
+          commitMs: performance.now() - t0,
+          edges: simLinks.length,
+          nodes: simNodes.length,
+          labels: 0,
+          ts: performance.now()
+        })
+      }
     } catch (err) {
       console.error('[GraphCanvas] drawCanvas2D failed:', err)
       // Reset flag AND DOM — without DOM reset, canvas stays visible with SVG hidden
@@ -4190,7 +4302,7 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
         setPerfOverlay(next)
         setPathStatus(
           next
-            ? `Perf overlay ON — ukur commit SVG riil (throttle ${SVG_PUSH_THROTTLE_MS}ms)`
+            ? `Perf overlay ON — throttle adaptif ${throttleWindowMsRef.current}ms (target p95 ${THROTTLE_TARGET_P95_MS}ms)`
             : 'Perf overlay OFF'
         )
         return
@@ -4742,7 +4854,12 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
           <div className="graph-perf-overlay" role="status" aria-live="off">
             <div className="graph-perf-row graph-perf-title">
               SVG commit <span className="graph-perf-kbd">D</span> tutup · throttle{' '}
-              {SVG_PUSH_THROTTLE_MS}ms
+              <strong>{throttleWindowMsRef.current}ms</strong>
+              <span className="graph-perf-muted">
+                {' '}
+                (target p95 {THROTTLE_TARGET_P95_MS}ms · batas {THROTTLE_MIN_MS}–{THROTTLE_MAX_MS}
+                ms)
+              </span>
             </div>
             <div className="graph-perf-row">
               commit <strong>{perfSnap.avgCommitMs.toFixed(2)}ms</strong>
@@ -4765,6 +4882,27 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
                 · {perfSnap.count} sample · throttle-defer{' '}
                 <strong>{perfThrottledRef.current}</strong>
               </span>
+            </div>
+            <div className="graph-perf-row graph-perf-row-canvas">
+              {canvasSnap && canvasSnap.count > 0 ? (
+                <>
+                  canvas2D <strong>{canvasSnap.avgCommitMs.toFixed(2)}ms</strong>
+                  <span className="graph-perf-muted">
+                    {' '}
+                    p95 {canvasSnap.p95CommitMs.toFixed(2)} · max{' '}
+                    {canvasSnap.maxCommitMs.toFixed(2)}· {canvasSnap.fps}/s · {canvasSnap.count}{' '}
+                    sample
+                  </span>
+                </>
+              ) : (
+                <span className="graph-perf-muted">canvas2D — pan/pinch untuk ukur draw-time</span>
+              )}
+            </div>
+            <div className="graph-perf-row graph-perf-row-spark">
+              <span className="graph-perf-muted">
+                commit 60 terakhir (baris = target {THROTTLE_TARGET_P95_MS}ms)
+              </span>
+              <PerfSparkChart samples={sparkSamples} />
             </div>
           </div>
         )}

@@ -214,20 +214,25 @@ export function nodeEntryOpacity(p: number): number {
  * sim moves, the frame object is rebuilt every paint (~0.2ms) but the React
  * commit of thousands of SVG elements happens at most once per window.
  */
+/** Base/initial throttle window (ms). The adaptive controller in
+ *  graphPerfStats may widen/narrow it at runtime within hard bounds. */
 export const SVG_PUSH_THROTTLE_MS = 100
 
 /**
  * G-perf: latest-wins throttle decision for SVG frame commits.
  * Returns true when a commit happened within the window (defer to pending),
  * false when it is time to commit (or the caller is flushing).
+ * `windowMs` is the current adaptive window — defaults to the base constant
+ * so callers/tests that don't care about adaptation keep working.
  */
 export function shouldThrottleSvgPush(
   now: number,
   lastCommitAt: number,
-  throttle = false
+  throttle = false,
+  windowMs = SVG_PUSH_THROTTLE_MS
 ): boolean {
   if (!throttle) return false
-  return now - lastCommitAt < SVG_PUSH_THROTTLE_MS
+  return now - lastCommitAt < windowMs
 }
 
 /**

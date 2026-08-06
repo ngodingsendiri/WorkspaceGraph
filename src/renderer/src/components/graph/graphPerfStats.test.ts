@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { RollingPerfStats } from './graphPerfStats'
+import {
+  RollingPerfStats,
+  AdaptiveThrottle,
+  THROTTLE_MIN_MS,
+  THROTTLE_MAX_MS
+} from './graphPerfStats'
 
 function sample(
   commitMs: number,
@@ -73,10 +78,87 @@ describe('RollingPerfStats', () => {
     expect(s.labels).toBe(35)
   })
 
+  it('recent returns the last n commit durations oldest→newest', () => {
+    for (let i = 1; i <= 5; i++) stats.push(sample(i))
+    expect(stats.recent(3)).toEqual([3, 4, 5])
+    expect(stats.recent(10)).toEqual([1, 2, 3, 4, 5])
+    expect(stats.recent(0)).toEqual([])
+  })
+
+  it('recent keeps only commit durations (no element fields)', () => {
+    stats.push(sample(7, { edges: 10, nodes: 20, labels: 30 }))
+    expect(stats.recent(1)).toEqual([7])
+  })
+
   it('reset clears everything', () => {
     stats.push(sample(1))
     stats.reset()
     expect(stats.count).toBe(0)
     expect(stats.snapshot().avgCommitMs).toBe(0)
+  })
+})
+
+describe('AdaptiveThrottle', () => {
+  const T = 1000
+  let ctrl: AdaptiveThrottle
+
+  beforeEach(() => {
+    ctrl = new AdaptiveThrottle(100)
+    vi.useFakeTimers()
+  })
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('starts at the base window', () => {
+    expect(ctrl.windowMs).toBe(100)
+  })
+
+  it('ignores decisions until enough samples exist', () => {
+    expect(ctrl.consider(50, 5, T)).toBe(100) // 5 < MIN_SAMPLES
+    expect(ctrl.consider(50, 10, T)).not.toBe(100) // now it can react
+  })
+
+  it('widens the window when commit p95 is above target (expensive commits)', () => {
+    // p95 = 40ms >> target 16ms → widen (100 * 1.6 = 160)
+    expect(ctrl.consider(40, 12, T)).toBe(160)
+    // cooldown: a second call in the same tick must not change again
+    expect(ctrl.consider(40, 12, T + 100)).toBe(160)
+  })
+
+  it('narrows the window when commit p95 is well below target (cheap commits)', () => {
+    // p95 = 5ms < 16*0.6=9.6 → narrow (100 / 1.6 ≈ 63)
+    expect(ctrl.consider(5, 12, T)).toBe(63)
+  })
+
+  it('keeps the window in the hysteresis band (no thrash)', () => {
+    // 18ms is within [target*0.6, target*1.25] = [9.6, 20] → no change
+    expect(ctrl.consider(18, 12, T)).toBe(100)
+    // 20.1ms is just above the band → widen
+    expect(ctrl.consider(20.5, 12, T + 3000)).toBe(160)
+  })
+
+  it('clamps to hard bounds (never below MIN, never above MAX)', () => {
+    const c = new AdaptiveThrottle(THROTTLE_MIN_MS)
+    // already at min + cheap commits → stays at min
+    expect(c.consider(1, 12, T)).toBe(THROTTLE_MIN_MS)
+    const wide = new AdaptiveThrottle(THROTTLE_MAX_MS)
+    expect(wide.consider(100, 12, T)).toBe(THROTTLE_MAX_MS)
+  })
+
+  it('respects the cooldown between successive adaptations', () => {
+    expect(ctrl.consider(40, 12, T)).toBe(160) // adapt at T
+    vi.setSystemTime(T + 500)
+    expect(ctrl.consider(5, 12, T + 500)).toBe(160) // within cooldown (500 < 2000)
+    vi.setSystemTime(T + 2500)
+    expect(ctrl.consider(5, 12, T + 2500)).toBe(100) // cooldown passed → narrow back
+  })
+
+  it('reset restores the base window and cooldown state', () => {
+    ctrl.consider(40, 12, T)
+    ctrl.reset(100)
+    expect(ctrl.windowMs).toBe(100)
+    expect(ctrl.consider(40, 12, T + 100)).toBe(160) // can adapt immediately again
   })
 })
