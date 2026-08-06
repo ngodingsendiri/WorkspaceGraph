@@ -68,7 +68,10 @@ import {
   NODE_ENTRY_STAGGER_MS,
   nodeEntryProgress,
   nodeEntryScale,
-  nodeEntryOpacity
+  nodeEntryOpacity,
+  cullMargin,
+  pointOnScreen,
+  edgeOnScreen
 } from './graphRenderTokens'
 import {
   RollingPerfStats,
@@ -1346,6 +1349,9 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
       const flags = viewFlagsRef.current
       const lod = resolveLod(simNodes.length, flags.perfMode)
       const large = lod !== 'full' || simNodes.length > 100
+      // LOD culling: shared frustum margin (same rule as Canvas2D — no handoff
+      // pop at the viewport edge, and low LOD culls tighter on huge vaults).
+      const margin = cullMargin(lod)
 
       const kSafe = Math.max(t.k, 0.05)
 
@@ -1400,7 +1406,7 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
               continue
             const sx = n.x * t.k + t.x
             const sy = n.y * t.k + t.y
-            if (sx >= -40 && sx <= w + 40 && sy >= -40 && sy <= h + 40) drawn++
+            if (pointOnScreen(sx, sy, w, h, margin)) drawn++
           }
 
           const byId = new Map(simNodes.map((n) => [n.id, n]))
@@ -1410,19 +1416,47 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
             return null
           }
 
+          // LOD culling BEFORE the budget: off-frustum edges never consume the
+          // LOD budget, so a zoomed-in cluster keeps full detail instead of
+          // wasting slots on edges the user can't see. Path/focus edges always
+          // pass (they are the point of the highlight).
+          const visibleLinks: SimLink[] = []
+          for (const e of simLinks) {
+            const s = end(e.source as string | SimNode)
+            const tg = end(e.target as string | SimNode)
+            if (!s?.id || !tg?.id || s.x == null || s.y == null || tg.x == null || tg.y == null)
+              continue
+            if (
+              !Number.isFinite(s.x) ||
+              !Number.isFinite(s.y) ||
+              !Number.isFinite(tg.x) ||
+              !Number.isFinite(tg.y)
+            )
+              continue
+            const ek = edgeKey(s.id, tg.id)
+            if ((pathE != null && pathE.has(ek)) || (focE != null && focE.has(ek))) {
+              visibleLinks.push(e)
+              continue
+            }
+            const esx1 = s.x * t.k + t.x
+            const esy1 = s.y * t.k + t.y
+            const esx2 = tg.x * t.k + t.x
+            const esy2 = tg.y * t.k + t.y
+            if (edgeOnScreen(esx1, esy1, esx2, esy2, w, h, margin)) visibleLinks.push(e)
+          }
           const maxE = Math.min(
-            simLinks.length,
+            visibleLinks.length,
             lod === 'low' ? 500 : lod === 'medium' ? 1500 : 6000
           )
           const edgesOut: SvgEdge[] = []
-          let edgeList = simLinks
-          if (simLinks.length > maxE) {
+          let edgeList = visibleLinks
+          if (visibleLinks.length > maxE) {
             // Perf: priority sort is O(E·log E) per frame; without any highlight
             // layer (path/focus/hover) every edge scores 0 so sort is pure waste
             // on every sim tick of a large vault — slice directly instead.
             const hasEdgePriority = pathE != null || focE != null || hot != null
             edgeList = hasEdgePriority
-              ? [...simLinks]
+              ? [...visibleLinks]
                   .sort((a, b) => {
                     const score = (e: SimLink): 0 | 3 | 2 => {
                       const s = end(e.source as string | SimNode)
@@ -1437,7 +1471,7 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
                     return score(b) - score(a)
                   })
                   .slice(0, maxE)
-              : simLinks.slice(0, maxE)
+              : visibleLinks.slice(0, maxE)
           }
           for (const e of edgeList) {
             const s = end(e.source as string | SimNode)
@@ -1459,6 +1493,7 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
               (s.id === hover || tg.id === hover) &&
               hot!.has(s.id) &&
               hot!.has(tg.id)
+            // Edges here are pre-culled (visibleLinks) — path/focus always pass.
             const dimHover = Boolean(hot && !isHot && pathN == null && focN == null)
             const dimPath = pathN != null && !onPath
             const dimFocus = pathN == null && focN != null && !onFoc
@@ -1531,8 +1566,24 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
               continue
             const sx = n.x * t.k + t.x
             const sy = n.y * t.k + t.y
-            // Frustum in screen space
-            if (sx < -40 || sy < -40 || sx > w + 40 || sy > h + 40) continue
+            const isHover = n.id === hover
+            const isSel = sel != null && sel.has(n.id)
+            const onPath = pathN != null && pathN.has(n.id)
+            const onFoc = focN != null && focN.has(n.id)
+            const isMatch = matchIds != null && matchIds.has(n.id)
+            // Frustum in screen space (shared margin rule with Canvas2D).
+            // Highlight nodes are always kept (same exemption as Canvas2D) so a
+            // path/focus edge never ends at a culled void.
+            if (
+              !onPath &&
+              !onFoc &&
+              !isSel &&
+              !isHover &&
+              n.id !== focusId &&
+              !isMatch &&
+              !pointOnScreen(sx, sy, w, h, margin)
+            )
+              continue
 
             const isTag = Boolean(n.isTag || n.type === 'tag')
             const isGhost = Boolean(n.isGhost || n.type === 'ghost')
@@ -1569,11 +1620,6 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
               entryMaxOrder >= 0 ? entryMaxOrder + 1 : undefined
             )
             const rWorld = rWorldBase * nodeEntryScale(entryP)
-            const isHover = n.id === hover
-            const isSel = sel != null && sel.has(n.id)
-            const onPath = pathN != null && pathN.has(n.id)
-            const onFoc = focN != null && focN.has(n.id)
-            const isMatch = matchIds != null && matchIds.has(n.id)
             // G7: nodes directly connected to the hovered node get a subtle
             // highlight ring — Obsidian lights up the cluster, not just the node
             const isNeighbor =

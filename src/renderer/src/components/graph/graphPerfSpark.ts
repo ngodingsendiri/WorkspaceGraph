@@ -7,7 +7,14 @@
  * function takes a minimal 2D-ctx-like interface so a fake can drive it.
  * Colors are theme-aware via CSS vars passed in by the caller — the module
  * never touches `document`.
+ *
+ * Scale is p95-based (nearest-rank, same convention as RollingPerfStats): a
+ * single outlier spike (say 500ms) no longer flattens every normal bar — the
+ * scale follows the typical commit cost. Bars above p95 are CAPPED at the
+ * chart top (full-height spikes), so they stay clearly visible as spikes.
  */
+
+import { percentile } from './graphPerfStats'
 
 /** How many of the most recent commit durations the chart shows. */
 export const SPARK_BARS = 60
@@ -22,8 +29,11 @@ export interface SparkBar {
   w: number
   h: number
   commitMs: number
-  /** commitMs > target (over the p95 budget) — tinted to flag spikes. */
+  /** commitMs > targetMs (over the 16ms budget). */
   over: boolean
+  /** commitMs >= scaleMs (beyond the p95 scale) — a genuine spike, drawn
+   *  as a full-height capped bar with the spike tint. */
+  clipped: boolean
 }
 
 export interface SparkLayout {
@@ -39,8 +49,11 @@ export interface SparkLayout {
 
 /**
  * Pure bar layout for `samples` commit durations (oldest → newest, at most
- * `maxBars` used — last ones win). Scale max = max(sample, target, 1) so the
- * chart always has a visible target line and empty/short histories render.
+ * `maxBars` used — last ones win). Scale = max(1, target, p95 of the tail) so
+ * the chart always has a visible target line, empty/short histories render,
+ * and a lone outlier does not stretch every other bar into the floor. Bars
+ * above p95 (the spikes) are clamped to full chart height with `y = 0`, so
+ * they remain visible as tall capped spikes instead of being clipped mid-air.
  */
 export function sparkLayout(
   samples: number[],
@@ -50,17 +63,26 @@ export function sparkLayout(
   maxBars = SPARK_BARS
 ): SparkLayout {
   const tail = samples.slice(-maxBars)
-  const scaleMs = Math.max(1, targetMs, ...tail)
+  const scaleMs = Math.max(
+    1,
+    targetMs,
+    percentile(
+      [...tail].sort((a, b) => a - b),
+      0.95
+    )
+  )
   const barW = width / Math.max(1, tail.length)
   const bars: SparkBar[] = tail.map((commitMs, i) => {
-    const h = Math.max(SPARK_MIN_BAR_H, (commitMs / scaleMs) * height)
+    const hRaw = (commitMs / scaleMs) * height
+    const h = Math.min(height, Math.max(SPARK_MIN_BAR_H, hRaw))
     return {
       x: i * barW + SPARK_GAP / 2,
       y: height - h,
       w: Math.max(1, barW - SPARK_GAP),
-      h: Math.min(height, h),
+      h,
       commitMs,
-      over: commitMs > targetMs
+      over: commitMs > targetMs,
+      clipped: commitMs >= scaleMs
     }
   })
   return {
@@ -95,7 +117,10 @@ export interface SparkTheme {
 export function drawSparkBars(ctx: SparkCtxLike, layout: SparkLayout, theme: SparkTheme): void {
   ctx.clearRect(0, 0, layout.width, layout.height)
   for (const bar of layout.bars) {
-    ctx.fillStyle = bar.over ? theme.over : theme.bar
+    // Spike tint keys on `clipped` (beyond the p95 scale), not `over` — with a
+    // p95-based scale, `over` can fire on most bars (target→p95 band) and would
+    // drown the chart in error color; only true spikes get the flag.
+    ctx.fillStyle = bar.clipped ? theme.over : theme.bar
     ctx.fillRect(bar.x, bar.y, bar.w, bar.h)
   }
   if (layout.bars.length > 0 && layout.targetY > 0 && layout.targetY < layout.height) {

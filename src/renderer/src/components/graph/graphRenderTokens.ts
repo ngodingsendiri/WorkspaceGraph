@@ -7,7 +7,7 @@
  * Rule: if a visual value can be computed in BOTH renderers, it MUST live here
  * (or import from here) — never re-derive a per-renderer literal.
  */
-import { nodeRadius, lerp, smooth01, easeOutCubic } from './graphShared'
+import { nodeRadius, lerp, smooth01, easeOutCubic, type LodLevel } from './graphShared'
 
 /**
  * Minimum on-screen node radius (px) — both renderers keep nodes visible
@@ -210,13 +210,69 @@ export function nodeEntryOpacity(p: number): number {
 }
 
 /**
+ * LOD viewport culling — shared by BOTH renderers so a gesture handoff never
+ * pops a node/edge at the frustum edge. The SVG renderer reconciles every
+ * element it is handed, so culling off-screen geometry here is what actually
+ * drops the DOM count (and thus the commit cost) on big vaults; Canvas2D must
+ * skip the same geometry with the same margins or the handoff differs.
+ *
+ * Margins: low LOD (huge vaults) uses a tighter frustum (24px) so more is
+ * culled; full/medium uses 48px so hovered clusters near the edge don't pop.
+ */
+
+/** Frustum margin (screen px) at low LOD — tighter, culls more. */
+export const CULL_MARGIN_LO = 24
+/** Frustum margin (screen px) at full/medium LOD — looser, no edge popping. */
+export const CULL_MARGIN_HI = 48
+
+/** Shared frustum margin for a LOD level. */
+export function cullMargin(lod: LodLevel): number {
+  return lod === 'low' ? CULL_MARGIN_LO : CULL_MARGIN_HI
+}
+
+/** Screen-space point inside the viewport frustum (margin inclusive). */
+export function pointOnScreen(
+  sx: number,
+  sy: number,
+  w: number,
+  h: number,
+  margin: number
+): boolean {
+  return sx >= -margin && sx <= w + margin && sy >= -margin && sy <= h + margin
+}
+
+/**
+ * Screen-space edge visibility: does the segment's bounding box touch the
+ * frustum? An edge with BOTH endpoints off-screen still renders when its
+ * segment crosses the viewport (endpoint-only checks would drop it); edges
+ * fully beyond one side (bbox disjoint) are culled. Margin inclusive.
+ */
+export function edgeOnScreen(
+  sx1: number,
+  sy1: number,
+  sx2: number,
+  sy2: number,
+  w: number,
+  h: number,
+  margin: number
+): boolean {
+  const minX = Math.min(sx1, sx2)
+  const maxX = Math.max(sx1, sx2)
+  const minY = Math.min(sy1, sy2)
+  const maxY = Math.max(sy1, sy2)
+  return !(maxX < -margin || minX > w + margin || maxY < -margin || minY > h + margin)
+}
+
+/**
  * G-perf: sim-motion SVG reconciliation throttle window (ms). While the force
  * sim moves, the frame object is rebuilt every paint (~0.2ms) but the React
  * commit of thousands of SVG elements happens at most once per window.
  */
 /** Base/initial throttle window (ms). The adaptive controller in
- *  graphPerfStats may widen/narrow it at runtime within hard bounds. */
-export const SVG_PUSH_THROTTLE_MS = 100
+ *  graphPerfStats may widen/narrow it at runtime within hard bounds.
+ *  50ms (~20 sim commits/s max) keeps sim-settle responsive on fast machines;
+ *  if commits are expensive the adaptive controller widens it toward 500ms. */
+export const SVG_PUSH_THROTTLE_MS = 50
 
 /**
  * G-perf: latest-wins throttle decision for SVG frame commits.

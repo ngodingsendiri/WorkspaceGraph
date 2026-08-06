@@ -31,7 +31,10 @@ import {
   edgeColorFor,
   nodeEntryProgress,
   nodeEntryScale,
-  nodeEntryOpacity
+  nodeEntryOpacity,
+  cullMargin,
+  pointOnScreen,
+  edgeOnScreen
 } from './graphRenderTokens'
 
 /** Parameters needed by the drawing functions */
@@ -87,22 +90,6 @@ export function computeHotSet(
   return { ids }
 }
 
-/** Check if a world-space point is in the viewport */
-function inView(
-  x: number,
-  y: number,
-  tx: number,
-  ty: number,
-  k: number,
-  w: number,
-  h: number,
-  margin: number
-): boolean {
-  const sx = x * k + tx
-  const sy = y * k + ty
-  return sx >= -margin && sx <= w + margin && sy >= -margin && sy <= h + margin
-}
-
 /**
  * Draw the full graph scene to a Canvas 2D context.
  * This is the single source of truth for Canvas 2D rendering.
@@ -141,7 +128,8 @@ export function drawCanvas2DScene(dc: DrawContext, hot: HotSet): void {
   const lineMul = flags.lineThickness || 1
   const sizeMul = flags.nodeSize || 1
   const drawArrows = flags.arrows && k >= 0.4 && lod === 'full'
-  const margin = lod === 'low' ? 24 : 48
+  // LOD culling: shared frustum margin (same rule as the SVG renderer)
+  const margin = cullMargin(lod)
   const kSafe = Math.max(k, 0.05)
 
   // Canvas setup
@@ -184,10 +172,12 @@ export function drawCanvas2DScene(dc: DrawContext, hot: HotSet): void {
     if (s.x == null || s.y == null || tg.x == null || tg.y == null) continue
     const ek = edgeKey(s.id, tg.id)
     const forceEdge = (pathE != null && pathE.has(ek)) || (focE != null && focE.has(ek))
+    // LOD culling: shared bbox rule with the SVG renderer (edgeOnScreen). A
+    // segment crossing the viewport stays even with both endpoints outside;
+    // path/focus edges always draw.
     if (
       !forceEdge &&
-      !inView(s.x, s.y, tx, ty, k, w, h, margin) &&
-      !inView(tg.x, tg.y, tx, ty, k, w, h, margin)
+      !edgeOnScreen(s.x * k + tx, s.y * k + ty, tg.x * k + tx, tg.y * k + ty, w, h, margin)
     )
       continue
 
@@ -313,7 +303,7 @@ export function drawCanvas2DScene(dc: DrawContext, hot: HotSet): void {
       !isSelected &&
       n.id !== hover &&
       n.id !== focusId &&
-      !inView(n.x, n.y, tx, ty, k, w, h, margin)
+      !pointOnScreen(n.x * k + tx, n.y * k + ty, w, h, margin)
     )
       continue
 
@@ -512,7 +502,7 @@ export function drawCanvas2DScene(dc: DrawContext, hot: HotSet): void {
         !onFoc &&
         n.id !== hover &&
         !isSel &&
-        !inView(n.x, n.y, tx, ty, k, w, h, margin)
+        !pointOnScreen(n.x * k + tx, n.y * k + ty, w, h, margin)
       )
         continue
 
@@ -552,7 +542,9 @@ export function drawCanvas2DScene(dc: DrawContext, hot: HotSet): void {
       const rWorld = nodeRadiusFor(n.degree ?? 0, sizeMul, dimHubsOn && isHub, kSafe)
       const sx = n.x * k + tx + rWorld * k + 6
       const sy = n.y * k + ty
-      if (sx < -40 || sx > w + 40 || sy < -20 || sy > h + 20) continue
+      // Label-position cull with the SAME shared frustum margin as the node
+      // pass (no stray literal — parity with the SVG renderer's label cull)
+      if (!pointOnScreen(sx, sy, w, h, margin)) continue
 
       const titleStr = String(n.title || n.relativePath || n.id || '')
       const text = titleStr.length > 28 ? titleStr.slice(0, 27) + '…' : titleStr

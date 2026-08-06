@@ -394,9 +394,25 @@ describe('Renderer wiring', () => {
         'edgeColorFor',
         // G-perf: sim-motion SVG reconciliation throttle
         'shouldThrottleSvgPush',
-        'SVG_PUSH_THROTTLE_MS'
+        'SVG_PUSH_THROTTLE_MS',
+        // LOD culling: shared frustum rule for both renderers
+        'cullMargin',
+        'pointOnScreen',
+        'edgeOnScreen'
       )
     ).toBe(true)
+  })
+  it('LOD viewport culling wired in BOTH renderers (shared rule, no handoff pop)', () => {
+    const gc = read('src/renderer/src/components/graph/GraphCanvas.tsx')
+    const c2d = read('src/renderer/src/components/graph/graphCanvas2D.ts')
+    // SVG frame build culls off-frustum nodes AND edges via the shared helpers
+    expect(has(gc, 'const margin = cullMargin(lod)')).toBe(true)
+    expect(has(gc, 'pointOnScreen(sx, sy, w, h, margin)')).toBe(true)
+    expect(has(gc, 'edgeOnScreen(esx1, esy1, esx2, esy2, w, h, margin)')).toBe(true)
+    // Canvas2D gesture renderer uses the SAME helpers + margin (parity)
+    expect(has(c2d, 'const margin = cullMargin(lod)')).toBe(true)
+    expect(has(c2d, 'edgeOnScreen(')).toBe(true)
+    expect(has(c2d, 'pointOnScreen(n.x * k + tx, n.y * k + ty, w, h, margin)')).toBe(true)
   })
   it('sim-motion SVG throttle wired in GraphCanvas (G-perf)', () => {
     const gc = read('src/renderer/src/components/graph/GraphCanvas.tsx')

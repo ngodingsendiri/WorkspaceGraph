@@ -41,7 +41,7 @@ const FPS_WINDOW_MS = 1000
 /**
  * Adaptive throttle window policy.
  *
- * SVG_PUSH_THROTTLE_MS starts at 100ms; the controller widens it when real
+ * SVG_PUSH_THROTTLE_MS starts at 50ms; the controller widens it when real
  * commits are expensive (p95 above target) and narrows it when they are cheap
  * (p95 below target), so the throttle self-tunes to the actual machine + vault.
  * Hard bounds keep it sane: never below one frame budget (throttling below
@@ -96,8 +96,8 @@ export class AdaptiveThrottle {
   }
 }
 
-/** Sorted-index p95 (nearest-rank). */
-function percentile(sorted: number[], p: number): number {
+/** Sorted-index percentile (nearest-rank, shared with the spark chart). */
+export function percentile(sorted: number[], p: number): number {
   if (sorted.length === 0) return 0
   const idx = Math.min(sorted.length - 1, Math.max(0, Math.ceil(p * sorted.length) - 1))
   return sorted[idx]

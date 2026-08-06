@@ -45,12 +45,33 @@ describe('sparkLayout', () => {
     expect(l.bars[l.bars.length - 1].commitMs).toBe(120)
   })
 
-  it('scales the tallest bar to the top of the chart', () => {
+  it('scales p95 to the chart (with ≤19 samples p95 collapses to the max)', () => {
+    // n=2 → nearest-rank p95 is the max, so the tallest bar still tops out
     const l = sparkLayout([10, 50], W, H, TARGET)
     expect(l.scaleMs).toBe(50)
     const tallest = l.bars.find((b) => b.commitMs === 50)!
     expect(tallest.y + tallest.h).toBeCloseTo(H, 5)
     expect(tallest.y).toBeCloseTo(0, 5)
+  })
+
+  it('outlier spike does not flatten normal bars — p95-based scale, spike capped full-height', () => {
+    // 19 typical commits at 10ms + one 500ms spike (20 samples → p95 = 10)
+    const samples = [...Array(19).fill(10), 500]
+    const l = sparkLayout(samples, W, H, TARGET)
+    // Scale follows the typical cost (max(1, target 16, p95 10) = 16), not the spike
+    expect(l.scaleMs).toBe(TARGET)
+    const spike = l.bars.find((b) => b.commitMs === 500)!
+    // Spike is capped at the top: full height from y=0, still visible + flagged
+    expect(spike.y).toBe(0)
+    expect(spike.h).toBe(H)
+    expect(spike.clipped).toBe(true)
+    expect(spike.over).toBe(true)
+    // A normal bar keeps real height contrast against the spike (~10/16 of the chart)
+    const normal = l.bars.find((b) => b.commitMs === 10)!
+    expect(normal.h).toBeGreaterThan(H * 0.5)
+    expect(normal.h).toBeLessThan(H)
+    expect(normal.clipped).toBe(false)
+    expect(normal.over).toBe(false)
   })
 
   it('flags bars over the target p95 as `over` (at-target is not over)', () => {
@@ -98,5 +119,24 @@ describe('drawSparkBars color sequencing', () => {
   it('min-height floor keeps tiny commits visible', () => {
     const l = sparkLayout([0.1], W, H, TARGET)
     expect(l.bars[0].h).toBeGreaterThanOrEqual(SPARK_MIN_BAR_H)
+  })
+
+  it('over-but-not-clipped bars keep the normal tint (spike color is reserved for true spikes)', () => {
+    // 17ms is over the 16ms budget but below the p95 scale (30) → not clipped
+    const seq: string[] = []
+    const ctx = {
+      fillStyle: '',
+      clearRect: vi.fn(),
+      fillRect: vi.fn(() => {
+        seq.push(ctx.fillStyle)
+      })
+    }
+    const l = sparkLayout([17, 30], W, H, TARGET)
+    const over17 = l.bars.find((b) => b.commitMs === 17)!
+    expect(over17.over).toBe(true)
+    expect(over17.clipped).toBe(false)
+    drawSparkBars(ctx, l, { bar: '#111', over: '#f00', targetLine: '#f80' })
+    // 17 (normal #111), 30 spike (clipped → #f00), target line (#f80)
+    expect(seq).toEqual(['#111', '#f00', '#f80'])
   })
 })
