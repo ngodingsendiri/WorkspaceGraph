@@ -1268,6 +1268,26 @@ html:not([data-theme]) {
 .graph-stage.node-hover:active {
   cursor: grabbing;
 }
+/* P3-1: Obsidian-like theme cross-fade — graph colors are painted
+   (canvas/SVG), not CSS variables, so a theme flip dips the stage briefly to
+   mask the repaint. Class added/removed by the theme MutationObserver. */
+.graph-theme-fade {
+  animation: graph-theme-fade 0.3s var(--ease-default);
+}
+@keyframes graph-theme-fade {
+  /* Start ALREADY dim: the canvas/SVG repaints on the first rAF (~16ms), so a
+     ramp from 1 would swap colors at ~93% opacity and the dip would never mask
+     it. Holding low from frame one hides the repaint (reviewer P3-1 #1). */
+  0% {
+    opacity: 0.4;
+  }
+  40% {
+    opacity: 0.4;
+  }
+  100% {
+    opacity: 1;
+  }
+}
 
 /* Export-only canvas — hidden from compositor (large canvas = black on some Windows GPUs) */
 .graph-canvas,
@@ -4168,6 +4188,9 @@ body.wg-resizing * {
 }
 @media (prefers-reduced-motion: reduce) {
   .dash-skeleton-row {
+    animation: none;
+  }
+  .graph-theme-fade {
     animation: none;
   }
 }

@@ -76,7 +76,8 @@ import {
   DOT_GRID_SPACING,
   DOT_GRID_RADIUS,
   dotGrainColor,
-  FOCUS_RING_DASH
+  FOCUS_RING_DASH,
+  labelBelowNode
 } from './graphRenderTokens'
 import {
   RollingPerfStats,
@@ -162,6 +163,7 @@ const SvgLabelItem = memo(function SvgLabelItem({ lab }: { lab: SvgLabel }) {
       fontSize={11}
       fontFamily='Inter, "Segoe UI", system-ui, sans-serif'
       fontWeight={lab.bold ? 600 : 400}
+      textAnchor="middle"
       dominantBaseline="middle"
     >
       {lab.text}
@@ -577,6 +579,8 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
   const selectedIdsRef = useRef<Set<string>>(new Set())
   /** P2-7: index of the camera-focused node within the ordered selection ([/]) */
   const selectionNavIndexRef = useRef(0)
+  /** P3-1: last observed theme — only dip the stage on an actual flip (not mount) */
+  const themeRef = useRef<string | null>(null)
   /** Phase 2–4 paint flags — read each frame */
   const viewFlagsRef = useRef({
     searchMatchIds: null as Set<string> | null,
@@ -1148,6 +1152,29 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
   useEffect(() => {
     const apply = (): void => {
       paletteRef.current = readPalette()
+      const mode = document.documentElement.getAttribute('data-theme')
+      const stage = wrapRef.current
+      if (
+        themeRef.current != null &&
+        themeRef.current !== mode &&
+        stage &&
+        !window.matchMedia('(prefers-reduced-motion: reduce)').matches &&
+        !stage.classList.contains('graph-theme-fade')
+      ) {
+        // P3-1: painted canvas/SVG colors can't CSS-transition, so dip the
+        // stage opacity briefly — the repaint reads as an Obsidian cross-fade.
+        // Reduced-motion skips the class entirely (animation:none would leave
+        // it stuck — animationend never fires).
+        stage.classList.add('graph-theme-fade')
+        const onEnd = (e: AnimationEvent): void => {
+          if (e.animationName === 'graph-theme-fade') {
+            stage.classList.remove('graph-theme-fade')
+            stage.removeEventListener('animationend', onEnd)
+          }
+        }
+        stage.addEventListener('animationend', onEnd)
+      }
+      themeRef.current = mode
       requestPaint()
     }
     apply()
@@ -1846,10 +1873,17 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
 
             const titleStr = String(n.title || n.relativePath || n.id || '')
             const text = titleStr.length > 28 ? titleStr.slice(0, 27) + '…' : titleStr
+            // P3-2: Obsidian anchor — centered below the node (shared helper,
+            // SVG ↔ Canvas2D parity). rWorld is the screen-space radius so the
+            // label hugs the actual drawn circle, entry-scale included.
+            const labPos = labelBelowNode(sx, sy, rWorld)
+            // Cull on the ACTUAL label anchor (below the node) — a label that
+            // would land fully off-viewport is skipped (parity with Canvas2D).
+            if (!pointOnScreen(labPos.x, labPos.y, w, h, margin)) continue
             labelsOut.push({
               key: n.id,
-              x: sx + rWorld * kSafe + 5,
-              y: sy + 1,
+              x: labPos.x,
+              y: labPos.y,
               text,
               fill: forceLab ? pal.edgeHot : pal.label,
               bold: Boolean(forceLab),

@@ -566,6 +566,32 @@ describe('Renderer wiring', () => {
     expect(has(types, 'focusSelId: string | null')).toBe(true)
     expect(has(sim, 'focusSelId: string | null')).toBe(true)
   })
+  it('labels sit centered BELOW the node in both renderers (P3-2)', () => {
+    const gc = read('src/renderer/src/components/graph/GraphCanvas.tsx')
+    const c2d = read('src/renderer/src/components/graph/graphCanvas2D.ts')
+    const rt = read('src/renderer/src/components/graph/graphRenderTokens.ts')
+    // One shared anchor helper — never a per-renderer literal
+    expect(has(rt, 'export function labelBelowNode', 'LABEL_BELOW_GAP')).toBe(true)
+    expect(has(gc, 'labelBelowNode(sx, sy, rWorld)')).toBe(true)
+    expect(has(c2d, 'labelBelowNode(sx, sy, rWorld)')).toBe(true)
+    // Text is centered on the node's x (SVG anchor + canvas align)
+    expect(has(gc, 'textAnchor="middle"')).toBe(true)
+    expect(has(c2d, "ctx.textAlign = 'center'")).toBe(true)
+    // The old beside-node literals are gone (no handoff drift)
+    expect(has(gc, 'x: sx + rWorld * kSafe + 5')).toBe(false)
+    expect(has(c2d, 'rWorld * k + 6')).toBe(false)
+  })
+  it('graph theme flip dips the stage instead of snapping (P3-1)', () => {
+    const gc = read('src/renderer/src/components/graph/GraphCanvas.tsx')
+    const css = read('src/renderer/src/styles/globals.css')
+    // Only an ACTUAL theme flip dips (never the mount-time apply)
+    expect(has(gc, 'themeRef.current != null', 'themeRef.current !== mode')).toBe(true)
+    expect(has(gc, "classList.add('graph-theme-fade')")).toBe(true)
+    expect(has(gc, "animationName === 'graph-theme-fade'")).toBe(true)
+    // CSS owns the dip keyframes; reduced-motion users skip it
+    expect(has(css, '@keyframes graph-theme-fade', 'graph-theme-fade 0.3s')).toBe(true)
+    expect(has(css, '.graph-theme-fade', 'animation: none')).toBe(true)
+  })
   it('dot-grain underlay is shared between both renderers (P2-5)', () => {
     const gc = read('src/renderer/src/components/graph/GraphCanvas.tsx')
     const c2d = read('src/renderer/src/components/graph/graphCanvas2D.ts')

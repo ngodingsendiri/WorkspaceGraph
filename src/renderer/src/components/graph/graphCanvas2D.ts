@@ -39,7 +39,8 @@ import {
   DOT_GRID_SPACING,
   DOT_GRID_RADIUS,
   dotGrainColor,
-  FOCUS_RING_DASH
+  FOCUS_RING_DASH,
+  labelBelowNode
 } from './graphRenderTokens'
 
 /**
@@ -554,7 +555,8 @@ export function drawCanvas2DScene(dc: DrawContext, hot: HotSet): void {
     const fontPx = lod === 'low' ? 10 : 11
     ctx.font = `${fontPx}px Inter,"Segoe UI Variable","Segoe UI",system-ui,sans-serif`
     ctx.textBaseline = 'middle'
-    ctx.textAlign = 'left'
+    // P3-2: Obsidian label anchor — centered below the node
+    ctx.textAlign = 'center'
     const maxLabels = labelDrawBudget(lod)
     let labelsDrawn = 0
 
@@ -603,34 +605,40 @@ export function drawCanvas2DScene(dc: DrawContext, hot: HotSet): void {
       )
         spotMul = 0.18
       else if (hotIds && !hotIds.has(n.id) && pathN == null && focN == null)
-        spotMul = lerp(1, 0.15, hs)
-
-      const isHub = n.degree >= thr
-      const rWorld = nodeRadiusFor(n.degree ?? 0, sizeMul, dimHubsOn && isHub, kSafe)
-      const sx = n.x * k + tx + rWorld * k + 6
-      const sy = n.y * k + ty
-      // Label-position cull with the SAME shared frustum margin as the node
-      // pass (no stray literal — parity with the SVG renderer's label cull)
-      if (!pointOnScreen(sx, sy, w, h, margin)) continue
-
-      const titleStr = String(n.title || n.relativePath || n.id || '')
-      const text = titleStr.length > 28 ? titleStr.slice(0, 27) + '…' : titleStr
-      // No non-hover multiplier: labels reach full zA opacity like the SVG
-      // renderer (G6) — the old *0.88 kept canvas labels permanently soft.
-      // G19: label fades in with its node (parity with SVG labOp)
+        spotMul = lerp(1, 0.15, hs) // P3-2: same hub rule + entry-scale as the node pass, so the label
+      // hugs the drawn circle even mid-enter-animation (SVG uses its
+      // entry-scaled rWorld too). Ghost/tag excluded from hub-dim exactly
+      // like the node pass — otherwise the anchor radius could diverge.
+      const isGhost = Boolean(n.isGhost || n.type === 'ghost')
+      const isTag = Boolean(n.isTag || n.type === 'tag')
+      const isHub = !isGhost && !isTag && n.degree >= thr
       const entryP = nodeEntryProgress(
         entryNow,
         n.born,
         n.enterOrder,
         entryMaxOrder >= 0 ? entryMaxOrder + 1 : undefined
       )
+      const rWorld =
+        nodeRadiusFor(n.degree ?? 0, sizeMul, dimHubsOn && isHub, kSafe) * nodeEntryScale(entryP)
+      const sx = n.x * k + tx
+      const sy = n.y * k + ty
+      // Cull on the ACTUAL label anchor (below the node) so a label landing
+      // off-viewport is skipped — same shared margin as the node pass.
+      const labPos = labelBelowNode(sx, sy, rWorld)
+      if (!pointOnScreen(labPos.x, labPos.y, w, h, margin)) continue
+
+      const titleStr = String(n.title || n.relativePath || n.id || '')
+      const text = titleStr.length > 28 ? titleStr.slice(0, 27) + '…' : titleStr
+      // No non-hover multiplier: labels reach full zA opacity like the SVG
+      // renderer (G6) — the old *0.88 kept canvas labels permanently soft.
+      // G19: label fades in with its node (parity with SVG labOp)
       const labelAlpha = zA * spotMul * nodeEntryOpacity(entryP)
       // G9: no label background box — Obsidian graph labels are plain text
       // floating over the canvas, and the SVG renderer never drew one. Removing
       // it here gives the canvas→SVG handoff perfect parity in light theme.
       ctx.fillStyle = pal.label
       ctx.globalAlpha = labelAlpha
-      ctx.fillText(text, sx, sy)
+      ctx.fillText(text, labPos.x, labPos.y)
     }
     ctx.globalAlpha = 1
     ctx.restore()

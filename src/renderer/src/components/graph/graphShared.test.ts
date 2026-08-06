@@ -39,7 +39,9 @@ import {
   shouldThrottleSvgPush,
   DOT_GRID_SPACING,
   DOT_GRID_RADIUS,
-  dotGrainColor
+  dotGrainColor,
+  LABEL_BELOW_GAP,
+  labelBelowNode
 } from './graphRenderTokens'
 import type { GraphForceSettings } from '../../store/graphStore'
 import type { SimNode, SimLink } from './graphTypes'
@@ -469,6 +471,24 @@ describe('Obsidian rubber-band drag physics', () => {
     it('fades to zero far out and stays off-screen safe', () => {
       expect(labelZoomAlpha(0.1, 0.75, 0)).toBe(0)
       expect(labelZoomAlpha(3, 0.75, 0)).toBe(1)
+    })
+  })
+
+  describe('labelBelowNode (P3-2)', () => {
+    it('anchors the label centered below the node edge, not beside it', () => {
+      // Node center (100, 80) with a 6px screen radius → label sits under it
+      const pos = labelBelowNode(100, 80, 6)
+      expect(pos.x).toBe(100)
+      expect(pos.y).toBe(80 + 6 + LABEL_BELOW_GAP)
+    })
+
+    it('zero radius still leaves a readable gap (never overlaps the node)', () => {
+      expect(labelBelowNode(50, 50, 0).y).toBe(50 + LABEL_BELOW_GAP)
+    })
+
+    it('is purely vertical — zoom never moves the label sideways (Obsidian look)', () => {
+      expect(labelBelowNode(-37, 12, 4.5).x).toBe(-37)
+      expect(labelBelowNode(-37, 12, 4.5).y).toBe(12 + 4.5 + LABEL_BELOW_GAP)
     })
   })
 

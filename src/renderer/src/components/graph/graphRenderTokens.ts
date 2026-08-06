@@ -360,3 +360,18 @@ export function dotGrainColor(isLight: boolean): string {
  * SVG joins it (`'4 3'`), Canvas2D divides by k (its dash is in user space).
  */
 export const FOCUS_RING_DASH = [4, 3] as const
+
+// ── P3-2: Obsidian label anchor (centered BELOW the node) ──
+
+/** Gap between the node edge and its label (screen px). */
+export const LABEL_BELOW_GAP = 5
+
+/**
+ * Obsidian-style label anchor: centered below the node instead of beside it.
+ * Takes the node's screen-space center and its screen-space radius (px) and
+ * returns the label's screen-space x/y. Shared by BOTH renderers so the
+ * SVG ↔ Canvas2D handoff never shows a label-position jump.
+ */
+export function labelBelowNode(sx: number, sy: number, rPx: number): { x: number; y: number } {
+  return { x: sx, y: sy + rPx + LABEL_BELOW_GAP }
+}
