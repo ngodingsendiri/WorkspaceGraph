@@ -13,6 +13,13 @@ export interface CitationVerification {
   score: number
 }
 
+/** An image attached to a chat message (vision, P-A2). */
+export interface ImageAttachment {
+  mimeType: string
+  dataBase64: string
+  name?: string
+}
+
 export interface WriteProposalItem {
   id: string
   tool: string
@@ -32,6 +39,7 @@ export interface ChatMessage {
   timestamp: string
   citations?: CitationItem[]
   proposals?: WriteProposalItem[]
+  images?: ImageAttachment[]
   toolStatus?: string
   /** Total tokens used by this completion (provider-reported, streaming). */
   tokensUsed?: number
@@ -73,9 +81,11 @@ export interface ChatStore {
   setAgentRole: (role: AgentRole) => void
   setUseContext: (use: boolean) => void
   setEnableTools: (use: boolean) => void
-  sendMessage: (text: string, activeFilePath?: string) => Promise<void>
+  sendMessage: (text: string, activeFilePath?: string, images?: ImageAttachment[]) => Promise<void>
   cancelStream: () => Promise<void>
   clearHistory: () => void
+  /** Hydrate the proposal dock from persisted pending proposals (restart-safe). */
+  refreshProposals: () => Promise<void>
   applyProposal: (id: string) => Promise<{ ok: boolean; error?: string; path?: string }>
   rejectProposal: (id: string) => Promise<void>
   saveCurrentChat: () => Promise<void>
@@ -206,8 +216,8 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     return id
   },
 
-  sendMessage: async (text: string, activeFilePath?: string) => {
-    if (!text.trim()) return
+  sendMessage: async (text: string, activeFilePath?: string, images?: ImageAttachment[]) => {
+    if (!text.trim() && !images?.length) return
 
     await get().ensureConversationId()
 
@@ -215,7 +225,8 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       id: Math.random().toString(36).slice(2),
       role: 'user',
       content: text,
-      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+      timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      ...(images?.length ? { images } : {})
     }
 
     const assistantMsgId = Math.random().toString(36).slice(2)
@@ -243,7 +254,10 @@ export const useChatStore = create<ChatStore>((set, get) => ({
 
     const requestPayload = {
       model: selectedModelId,
-      messages: historyForApi
+      messages: historyForApi,
+      // Vision (P-A2): only the CURRENT prompt carries images — re-sending
+      // history images every turn would burn tokens for no context gain.
+      ...(images?.length ? { images } : {})
     }
 
     try {
@@ -348,6 +362,24 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       activeStreamId: null
     }),
 
+  refreshProposals: async () => {
+    try {
+      const list = (await window.api.listWriteProposals()) as WriteProposalItem[]
+      const pending = (Array.isArray(list) ? list : []).filter(
+        (p) => p.status === 'pending' || !p.status
+      )
+      // Merge, never replace: a live stream proposal created between the IPC
+      // request and this response must not be clobbered by the disk snapshot.
+      set((state) => ({
+        pendingProposals: mergeProposals(state.pendingProposals, pending).filter(
+          (p) => p.status === 'pending' || !p.status
+        )
+      }))
+    } catch {
+      /* keep current dock on failure */
+    }
+  },
+
   applyProposal: async (id: string) => {
     try {
       const res = await window.api.applyWriteProposal(id)
@@ -451,7 +483,8 @@ Mulai: list_dir "" lalu read_note "AI Memory/00 Index.md".`
           content: m.content,
           timestamp: m.timestamp,
           citations: m.citations,
-          verifications: m.verifications
+          verifications: m.verifications,
+          images: m.images
         }))
       })
       set({ conversationId: id })
@@ -504,6 +537,7 @@ Mulai: list_dir "" lalu read_note "AI Memory/00 Index.md".`
     const msgs = get().messages
     const idx = msgs.map((m) => m.id).lastIndexOf(lastUser.id)
     if (idx >= 0) set({ messages: msgs.slice(0, idx + 1) })
-    await get().sendMessage(lastUser.content, activeFilePath)
+    // P-A2: re-send with the original images — a retry must not drop attachments
+    await get().sendMessage(lastUser.content, activeFilePath, lastUser.images)
   }
 }))

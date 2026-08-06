@@ -14,6 +14,8 @@ export interface StoredMessage {
   citations?: { title: string; path: string }[]
   /** Grounding check persisted alongside citations so reloads keep the ⚠ hints. */
   verifications?: { path: string; title: string; supported: boolean; score: number }[]
+  /** Attached images (vision) — kept for thumbnails in loaded history. */
+  images?: { mimeType: string; dataBase64: string; name?: string }[]
 }
 
 export interface StoredConversation {

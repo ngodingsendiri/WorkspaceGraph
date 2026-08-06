@@ -15,9 +15,11 @@ import {
   AIRequest,
   AIResponse,
   AIStreamChunk,
+  AIToolCall,
   ModelInfo,
   ProviderCapabilities
 } from './BaseProvider'
+import { accumulateToolCallDeltas, finalizeToolCalls, MutableToolCall } from './openaiCompat'
 
 export type GrokBackend = 'chat' | 'responses'
 
@@ -171,16 +173,55 @@ export class GrokProvider extends BaseProvider {
       messages.push({ role: 'system', content: request.systemPrompt })
     }
     for (const m of request.messages) {
-      if (!m.content?.trim()) continue
+      // Native tool loop: assistant tool_calls messages have empty content but
+      // MUST NOT be dropped — they carry the function calls.
+      if (!m.content?.trim() && !m.tool_calls?.length) continue
       if (m.role === 'system') {
         messages.push({ role: 'system', content: m.content })
+      } else if (m.role === 'tool') {
+        messages.push({ role: 'tool', tool_call_id: m.tool_call_id || '', content: m.content })
+      } else if (m.role === 'assistant' && m.tool_calls?.length) {
+        messages.push({
+          role: 'assistant',
+          content: m.content || null,
+          tool_calls: m.tool_calls.map((tc) => ({
+            type: 'function',
+            id: tc.id,
+            function: {
+              name: tc.name,
+              arguments: tc.arguments
+            }
+          }))
+        })
       } else if (m.role === 'assistant') {
         messages.push({ role: 'assistant', content: m.content })
+      } else if (m.role === 'user' && m.images?.length) {
+        // Vision (P-A2): xAI accepts the OpenAI image_url content-part shape.
+        // Text part omitted for image-only prompts (empty text rejected by some)
+        const parts: OpenAI.ChatCompletionContentPart[] = m.images.map((img) => ({
+          type: 'image_url',
+          image_url: { url: `data:${img.mimeType};base64,${img.dataBase64}` }
+        }))
+        if (m.content.trim()) parts.push({ type: 'text', text: m.content })
+        messages.push({ role: 'user', content: parts })
       } else {
         messages.push({ role: 'user', content: m.content })
       }
     }
     return messages
+  }
+
+  /** tools/tool_choice pass-through for the chat backend (native P-A1). */
+  private toolOptions(
+    request: AIRequest
+  ):
+    | { tools: OpenAI.ChatCompletionTool[]; tool_choice: OpenAI.ChatCompletionToolChoiceOption }
+    | undefined {
+    if (!request.tools?.length) return undefined
+    return {
+      tools: request.tools as unknown as OpenAI.ChatCompletionTool[],
+      tool_choice: (request.tool_choice ?? 'auto') as OpenAI.ChatCompletionToolChoiceOption
+    }
   }
 
   private toResponsesInput(request: AIRequest): string {
@@ -222,13 +263,16 @@ export class GrokProvider extends BaseProvider {
         messages,
         temperature: request.temperature,
         // max_tokens: OpenAI-compat; xAI accepts max_tokens / max_completion_tokens
-        ...(request.maxTokens ? { max_tokens: request.maxTokens } : {})
+        ...(request.maxTokens ? { max_tokens: request.maxTokens } : {}),
+        ...this.toolOptions(request)
       })
+      const toolCalls = grokToolCallsFromMessage(response.choices[0]?.message)
       return {
         content: response.choices[0]?.message?.content || '',
         model,
         provider: this.id,
-        tokensUsed: response.usage?.total_tokens
+        tokensUsed: response.usage?.total_tokens,
+        ...(toolCalls.length ? { toolCalls } : {})
       }
     } catch (err) {
       // One retry after forced CLI re-auth
@@ -242,13 +286,16 @@ export class GrokProvider extends BaseProvider {
             model,
             messages,
             temperature: request.temperature,
-            ...(request.maxTokens ? { max_tokens: request.maxTokens } : {})
+            ...(request.maxTokens ? { max_tokens: request.maxTokens } : {}),
+            ...this.toolOptions(request)
           })
+          const toolCalls2 = grokToolCallsFromMessage(response.choices[0]?.message)
           return {
             content: response.choices[0]?.message?.content || '',
             model,
             provider: this.id,
-            tokensUsed: response.usage?.total_tokens
+            tokensUsed: response.usage?.total_tokens,
+            ...(toolCalls2.length ? { toolCalls: toolCalls2 } : {})
           }
         } catch (err2) {
           throw new Error(`Grok: ${formatGrokError(err2)}`)
@@ -276,18 +323,32 @@ export class GrokProvider extends BaseProvider {
           stream: true,
           // Request usage so the final chunk reports total tokens (OpenAI-compat).
           stream_options: { include_usage: true } as never,
-          ...(request.maxTokens ? { max_tokens: request.maxTokens } : {})
+          ...(request.maxTokens ? { max_tokens: request.maxTokens } : {}),
+          ...this.toolOptions(request)
         },
         { signal }
       )
       let tokensUsed: number | undefined
+      // P-A1: accumulate streaming tool_calls deltas (args split across chunks)
+      const acc: MutableToolCall[] = []
       for await (const chunk of stream) {
         if (signal?.aborted) return
-        const text = chunk.choices[0]?.delta?.content || ''
+        const delta = chunk.choices[0]?.delta
+        const text = delta?.content || ''
         if (text) onChunk({ content: text, done: false, model })
+        if (delta?.tool_calls) {
+          accumulateToolCallDeltas(acc, delta.tool_calls)
+        }
         if (chunk.usage?.total_tokens) tokensUsed = chunk.usage.total_tokens
       }
-      onChunk({ content: '', done: true, model, tokensUsed })
+      const toolCalls = finalizeToolCalls(acc)
+      onChunk({
+        content: '',
+        done: true,
+        model,
+        tokensUsed,
+        ...(toolCalls.length ? { toolCalls } : {})
+      })
     }
 
     try {
@@ -347,6 +408,21 @@ export class GrokProvider extends BaseProvider {
       }
     }
   }
+}
+
+/** Extract native tool calls from a non-stream chat message (sendMessage path). */
+function grokToolCallsFromMessage(
+  msg:
+    { tool_calls?: { id?: string; function?: { name?: string; arguments?: string } }[] } | undefined
+): AIToolCall[] {
+  if (!msg?.tool_calls?.length) return []
+  return msg.tool_calls
+    .map((tc) => ({
+      id: tc.id || '',
+      name: tc.function?.name || '',
+      arguments: tc.function?.arguments || ''
+    }))
+    .filter((c) => c.name)
 }
 
 function formatGrokError(err: unknown): string {

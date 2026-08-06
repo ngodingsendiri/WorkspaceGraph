@@ -15,7 +15,9 @@ export class ClaudeProvider extends BaseProvider {
     chat: true,
     streaming: true,
     vision: true,
-    toolCalling: true,
+    // P-A1: native function calling belum di-wire (bukan OpenAI-compat) — tool
+    // loop memakai fallback fence wg-action di AIMiddleware.
+    toolCalling: false,
     embeddings: false
   }
 
@@ -51,16 +53,38 @@ export class ClaudeProvider extends BaseProvider {
     ]
   }
 
+  /** Map WG messages to Anthropic messages — images become image blocks (P-A2). */
+  private toClaudeMessages(request: AIRequest): Anthropic.MessageParam[] {
+    return request.messages
+      .filter((m) => m.role !== 'system')
+      .map((m) => {
+        if (m.role === 'user' && m.images?.length) {
+          return {
+            role: 'user' as const,
+            content: [
+              ...m.images.map((img) => ({
+                type: 'image' as const,
+                source: {
+                  type: 'base64' as const,
+                  // mimeType is a plain string; the SDK wants the literal union —
+                  // the renderer already guards to png/jpeg/webp/gif on attach.
+                  media_type: img.mimeType as Anthropic.Base64ImageSource['media_type'],
+                  data: img.dataBase64
+                }
+              })),
+              { type: 'text' as const, text: m.content }
+            ]
+          }
+        }
+        return { role: m.role as 'user' | 'assistant', content: m.content }
+      })
+  }
+
   async sendMessage(request: AIRequest): Promise<AIResponse> {
     const client = this.getClient()
     const model = request.model || this.defaultModel
 
-    const messages = request.messages
-      .filter((m) => m.role !== 'system')
-      .map((m) => ({
-        role: m.role as 'user' | 'assistant',
-        content: m.content
-      }))
+    const messages = this.toClaudeMessages(request)
 
     const response = await client.messages.create({
       model,
@@ -87,12 +111,7 @@ export class ClaudeProvider extends BaseProvider {
     const client = this.getClient()
     const model = request.model || this.defaultModel
 
-    const messages = request.messages
-      .filter((m) => m.role !== 'system')
-      .map((m) => ({
-        role: m.role as 'user' | 'assistant',
-        content: m.content
-      }))
+    const messages = this.toClaudeMessages(request)
 
     try {
       if (messages.length === 0) {

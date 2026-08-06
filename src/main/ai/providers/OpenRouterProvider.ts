@@ -4,9 +4,29 @@ import {
   AIRequest,
   AIResponse,
   AIStreamChunk,
+  AIToolCall,
   ModelInfo,
   ProviderCapabilities
 } from './BaseProvider'
+import {
+  buildOpenAIMessages,
+  accumulateToolCallDeltas,
+  finalizeToolCalls,
+  MutableToolCall
+} from './openaiCompat'
+
+/** tools/tool_choice pass-through (cast: ProviderTool mirrors the SDK shape). */
+function toolOptions(
+  request: AIRequest
+):
+  | { tools: OpenAI.ChatCompletionTool[]; tool_choice: OpenAI.ChatCompletionToolChoiceOption }
+  | undefined {
+  if (!request.tools?.length) return undefined
+  return {
+    tools: request.tools as unknown as OpenAI.ChatCompletionTool[],
+    tool_choice: (request.tool_choice ?? 'auto') as OpenAI.ChatCompletionToolChoiceOption
+  }
+}
 
 export class OpenRouterProvider extends BaseProvider {
   readonly id = 'openrouter'
@@ -72,26 +92,33 @@ export class OpenRouterProvider extends BaseProvider {
     const client = this.getClient()
     const model = request.model || this.defaultModel
 
-    const messages: OpenAI.ChatCompletionMessageParam[] = []
-    if (request.systemPrompt) {
-      messages.push({ role: 'system', content: request.systemPrompt })
-    }
-    for (const m of request.messages) {
-      messages.push({ role: m.role, content: m.content })
-    }
+    const messages = buildOpenAIMessages(request)
 
     const response = await client.chat.completions.create({
       model,
       messages,
       temperature: request.temperature,
-      ...(request.maxTokens ? { max_tokens: request.maxTokens } : {})
+      ...(request.maxTokens ? { max_tokens: request.maxTokens } : {}),
+      ...toolOptions(request)
     })
 
     const choice = response.choices[0]
+    // Cast: SDK v5 unions tool_calls with custom variants; we only consume the
+    // standard function-calling shape.
+    const rawCalls = choice.message.tool_calls as
+      { id?: string; function?: { name?: string; arguments?: string } }[] | undefined
+    const toolCalls: AIToolCall[] | undefined = rawCalls
+      ?.map((tc) => ({
+        id: tc.id || '',
+        name: tc.function?.name || '',
+        arguments: tc.function?.arguments || ''
+      }))
+      .filter((c) => c.name)
     return {
       content: choice.message.content || '',
       model,
-      provider: this.id
+      provider: this.id,
+      ...(toolCalls?.length ? { toolCalls } : {})
     }
   }
 
@@ -102,14 +129,7 @@ export class OpenRouterProvider extends BaseProvider {
   ): Promise<void> {
     const client = this.getClient()
     const model = request.model || this.defaultModel
-
-    const messages: OpenAI.ChatCompletionMessageParam[] = []
-    if (request.systemPrompt) {
-      messages.push({ role: 'system', content: request.systemPrompt })
-    }
-    for (const m of request.messages) {
-      messages.push({ role: m.role, content: m.content })
-    }
+    const messages = buildOpenAIMessages(request)
 
     try {
       const stream = await client.chat.completions.create(
@@ -119,20 +139,34 @@ export class OpenRouterProvider extends BaseProvider {
           temperature: request.temperature,
           stream: true,
           stream_options: { include_usage: true },
-          ...(request.maxTokens ? { max_tokens: request.maxTokens } : {})
+          ...(request.maxTokens ? { max_tokens: request.maxTokens } : {}),
+          ...toolOptions(request)
         },
         { signal }
       )
 
       let tokensUsed: number | undefined
+      // P-A1: accumulate streaming tool_calls deltas (args split across chunks)
+      const acc: MutableToolCall[] = []
       for await (const chunk of stream) {
-        const text = chunk.choices[0]?.delta?.content || ''
+        const delta = chunk.choices[0]?.delta
+        const text = delta?.content || ''
         if (text) {
           onChunk({ content: text, done: false, model })
         }
+        if (delta?.tool_calls) {
+          accumulateToolCallDeltas(acc, delta.tool_calls)
+        }
         if (chunk.usage?.total_tokens) tokensUsed = chunk.usage.total_tokens
       }
-      onChunk({ content: '', done: true, model, tokensUsed })
+      const toolCalls = finalizeToolCalls(acc)
+      onChunk({
+        content: '',
+        done: true,
+        model,
+        tokensUsed,
+        ...(toolCalls.length ? { toolCalls } : {})
+      })
     } catch (err) {
       if (signal?.aborted) return
       const msg = err instanceof Error ? err.message : String(err)

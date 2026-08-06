@@ -4,7 +4,8 @@ import {
   AIResponse,
   AIStreamChunk,
   ProviderStatus,
-  AIMessage
+  AIMessage,
+  AIToolCall
 } from './providers/BaseProvider'
 import { GeminiProvider } from './providers/GeminiProvider'
 import { OpenAIProvider } from './providers/OpenAIProvider'
@@ -21,11 +22,15 @@ import {
   stripToolActions,
   executeTool,
   formatToolResultsForModel,
+  formatToolResultForModel,
   isReadTool,
   isWriteTool,
   getProposal,
+  buildToolSchemas,
+  nativeCallsToActions,
   type WriteProposal,
-  type ToolResult
+  type ToolResult,
+  type ToolAction
 } from './AgentTools'
 import { KERNEL_SYSTEM_PROMPT } from './WorkspaceMemory'
 import { verifyCitations, type CitationVerification } from './CitationVerifier'
@@ -51,7 +56,7 @@ export class AIMiddleware {
   /** Real HTTP cancellation — abort() stops the provider stream, not just UI. */
   private abortControllers = new Map<string, AbortController>()
 
-  constructor() {
+  constructor(overrides?: { providers?: Record<string, BaseProvider> }) {
     this.contextEngine = new ContextEngine(workspaceEngine, searchEngine)
 
     const grok = new GrokProvider()
@@ -68,6 +73,13 @@ export class AIMiddleware {
     this.providers.set(claude.id, claude)
     this.providers.set(ollama.id, ollama)
     this.providers.set(openrouter.id, openrouter)
+
+    // Test seam: inject fake providers (P-A1 native loop / fence fallback)
+    if (overrides?.providers) {
+      for (const [id, p] of Object.entries(overrides.providers)) {
+        this.providers.set(id, p)
+      }
+    }
   }
 
   configureProvider(
@@ -239,7 +251,7 @@ export class AIMiddleware {
     activeFilePath: string | undefined,
     useContext: boolean,
     agentRole: AgentRole,
-    enableTools: boolean
+    toolMode: 'native' | 'fence' | 'off'
   ): Promise<{
     systemPrompt: string
     citations: { title: string; path: string }[]
@@ -279,7 +291,10 @@ export class AIMiddleware {
       }
     }
 
-    if (enableTools) {
+    // Fence protocol instructions only for the fence fallback — the native
+    // path declares tools through the API, so teaching wg-action fences there
+    // would encourage double-calling (fences AND tool_calls).
+    if (toolMode === 'fence') {
       systemPrompt += '\n\n' + TOOLS_SYSTEM_PROMPT
     }
 
@@ -416,10 +431,29 @@ export class AIMiddleware {
       return
     }
 
+    // P-A2 vision gate: images only work on providers that advertise vision.
+    if (request.images?.length && !provider.capabilities.vision) {
+      onChunk({
+        content: '',
+        done: true,
+        error: `Provider "${provider.name}" tidak mendukung vision — hapus lampiran gambar atau pindah ke provider dengan vision (Grok/Gemini/OpenAI/Claude/OpenRouter).`
+      })
+      return
+    }
+
     // Ensure model is set — avoid empty / accidental pro on free tier
     if (!request.model || request.model === 'undefined') {
       request.model = provider.getDefaultModel()
     }
+    // P-A1: providers with native function calling get the tools array;
+    // everyone else (Claude/Gemini/Ollama) falls back to the wg-action fence.
+    const nativeTools = enableTools && provider.capabilities.toolCalling
+    const toolMode: 'native' | 'fence' | 'off' = nativeTools
+      ? 'native'
+      : enableTools
+        ? 'fence'
+        : 'off'
+
     // Soft guard: gemini-2.5-pro often has free-tier limit 0
     if (
       provider.id === 'gemini' &&
@@ -434,13 +468,23 @@ export class AIMiddleware {
       activeFilePath,
       useContext,
       agentRole,
-      enableTools
+      toolMode
     )
 
     let messages: AIMessage[] = [...request.messages]
     if (messages.length === 0) {
       onChunk({ content: '', done: true, error: 'No messages in request' })
       return
+    }
+
+    // P-A2: request-level images attach to the LAST user message (the current
+    // prompt) and ride along in `messages` through every tool round — each
+    // provider translates them into its native image content block format.
+    if (request.images?.length) {
+      const lastIdx = messages.length - 1
+      if (lastIdx >= 0 && messages[lastIdx].role === 'user') {
+        messages[lastIdx] = { ...messages[lastIdx], images: request.images }
+      }
     }
 
     const allProposals: WriteProposal[] = []
@@ -492,11 +536,17 @@ export class AIMiddleware {
 
       let fullText = ''
       let streamError: string | undefined
+      // P-A1: native tool calls accumulated from the provider's stream deltas
+      let toolCalls: AIToolCall[] = []
       const req: AIRequest = {
         ...request,
         messages,
         systemPrompt,
         stream: true
+      }
+      if (nativeTools) {
+        req.tools = buildToolSchemas()
+        req.tool_choice = 'auto'
       }
 
       // Watchdog: a provider stream that stalls must not hang the chat forever.
@@ -538,6 +588,7 @@ export class AIMiddleware {
           if (chunk.error) streamError = chunk.error
           fullText += chunk.content || ''
           lastFullText += chunk.content || ''
+          if (chunk.toolCalls?.length) toolCalls = chunk.toolCalls
           // Don't mark done until tool loop finishes (unless error)
           if (chunk.error) {
             onChunk({
@@ -605,8 +656,12 @@ export class AIMiddleware {
         return
       }
 
-      const actions = parseToolActions(fullText)
-      if (actions.length === 0) {
+      // Native path: model calls arrive as structured tool_calls; fence path
+      // parses the wg-action protocol. Both yield the same executable actions.
+      const pending: { callId?: string; action: ToolAction }[] = nativeTools
+        ? nativeCallsToActions(toolCalls)
+        : parseToolActions(fullText).map((a) => ({ action: a }))
+      if (pending.length === 0) {
         onChunk({
           content: '',
           done: true,
@@ -617,11 +672,13 @@ export class AIMiddleware {
         return
       }
 
-      const known = actions.filter((a) => isReadTool(a.tool) || isWriteTool(a.tool))
-      const unknown = actions.filter((a) => !isReadTool(a.tool) && !isWriteTool(a.tool))
+      const known = pending.filter((p) => isReadTool(p.action.tool) || isWriteTool(p.action.tool))
+      const unknown = pending.filter(
+        (p) => !isReadTool(p.action.tool) && !isWriteTool(p.action.tool)
+      )
       if (unknown.length) {
         onChunk({
-          content: `\n\n*(unknown tools skipped: ${unknown.map((u) => u.tool).join(', ')})*\n`,
+          content: `\n\n*(unknown tools skipped: ${unknown.map((u) => u.action.tool).join(', ')})*\n`,
           done: false,
           toolStatus: `Skipped ${unknown.length} unknown tool(s)`,
           round
@@ -638,29 +695,32 @@ export class AIMiddleware {
         return
       }
 
-      const readActions = known.filter((a) => isReadTool(a.tool))
-      const writeActions = known.filter((a) => isWriteTool(a.tool))
+      const readPending = known.filter((p) => isReadTool(p.action.tool))
+      const writePending = known.filter((p) => isWriteTool(p.action.tool))
       const results: ToolResult[] = []
+      // Native loop: results must zip back to the model's tool_call_id
+      const resultByCall = new Map<string, ToolResult>()
 
       // Reads first (gather facts), then write proposals
-      for (const action of readActions) {
+      for (const p of readPending) {
         onChunk({
           content: '',
           done: false,
-          toolStatus: `▸ ${action.tool}`,
+          toolStatus: `▸ ${p.action.tool}`,
           round
         })
-        const r = await executeTool(action)
+        const r = await executeTool(p.action)
         results.push(r)
+        if (p.callId) resultByCall.set(p.callId, r)
         if (!r.ok) {
           onChunk({
-            content: `\n\n*(tool ${action.tool} failed: ${r.error})*\n`,
+            content: `\n\n*(tool ${p.action.tool} failed: ${r.error})*\n`,
             done: false,
-            toolStatus: `✗ ${action.tool}`,
+            toolStatus: `✗ ${p.action.tool}`,
             round
           })
         }
-        if (r.ok && action.tool === 'read_note' && r.result && typeof r.result === 'object') {
+        if (r.ok && p.action.tool === 'read_note' && r.result && typeof r.result === 'object') {
           const res = r.result as { title?: string; absolutePath?: string }
           if (res.absolutePath && res.title) {
             if (!lastCitations.some((c) => c.path === res.absolutePath)) {
@@ -668,7 +728,7 @@ export class AIMiddleware {
             }
           }
         }
-        if (r.ok && action.tool === 'search' && Array.isArray(r.result)) {
+        if (r.ok && p.action.tool === 'search' && Array.isArray(r.result)) {
           for (const hit of r.result as { title: string; absolutePath: string }[]) {
             if (hit.absolutePath && !lastCitations.some((c) => c.path === hit.absolutePath)) {
               lastCitations = [...lastCitations, { title: hit.title, path: hit.absolutePath }]
@@ -677,15 +737,16 @@ export class AIMiddleware {
         }
       }
 
-      for (const action of writeActions) {
+      for (const p of writePending) {
         onChunk({
           content: '',
           done: false,
-          toolStatus: `▸ propose ${action.tool}`,
+          toolStatus: `▸ propose ${p.action.tool}`,
           round
         })
-        const r = await executeTool(action)
+        const r = await executeTool(p.action)
         results.push(r)
+        if (p.callId) resultByCall.set(p.callId, r)
         if (r.proposalId) {
           const prop = getProposal(r.proposalId)
           if (prop) {
@@ -702,14 +763,14 @@ export class AIMiddleware {
           onChunk({
             content: `\n\n*(write tool failed: ${r.error})*\n`,
             done: false,
-            toolStatus: `✗ ${action.tool}`,
+            toolStatus: `✗ ${p.action.tool}`,
             round
           })
         }
       }
 
       // Only writes → stop so user can Apply (still OK if reads failed)
-      if (readActions.length === 0) {
+      if (readPending.length === 0) {
         onChunk({
           content: '',
           done: true,
@@ -720,13 +781,39 @@ export class AIMiddleware {
         return
       }
 
-      // Continue loop with tool results
-      const cleanAssistant = stripToolActions(fullText) || fullText
-      messages = [
-        ...messages,
-        { role: 'assistant', content: cleanAssistant },
-        { role: 'user', content: formatToolResultsForModel(results) }
-      ]
+      if (nativeTools) {
+        // Continue the native loop: assistant tool_calls + `tool` role results,
+        // zipped by the model's call ids (OpenAI-compatible message shape).
+        // Zip assistant tool_calls with the calls that actually ran — OpenAI
+        // rejects a round where a tool_call_id has no matching tool message,
+        // so calls that were filtered (unknown/duplicate) must not appear here.
+        const executedCalls = toolCalls.filter((c) => resultByCall.has(c.id))
+        messages = [
+          ...messages,
+          {
+            role: 'assistant',
+            content: stripToolActions(fullText) || '',
+            tool_calls: executedCalls.map((c) => ({
+              id: c.id,
+              name: c.name,
+              arguments: c.arguments
+            }))
+          },
+          ...executedCalls.map((c) => ({
+            role: 'tool' as const,
+            tool_call_id: c.id,
+            content: formatToolResultForModel(resultByCall.get(c.id)!)
+          }))
+        ]
+      } else {
+        // Continue loop with tool results
+        const cleanAssistant = stripToolActions(fullText) || fullText
+        messages = [
+          ...messages,
+          { role: 'assistant', content: cleanAssistant },
+          { role: 'user', content: formatToolResultsForModel(results) }
+        ]
+      }
 
       onChunk({
         content: '\n\n---\n*Tool results applied — continuing…*\n\n',

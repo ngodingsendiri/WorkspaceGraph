@@ -48,16 +48,28 @@ export class OllamaProvider extends BaseProvider {
     }
   }
 
-  async sendMessage(request: AIRequest): Promise<AIResponse> {
-    const model = request.model || this.defaultModel
-
+  /** Map WG messages to Ollama chat messages — vision images ride per-message. */
+  private toOllamaMessages(request: AIRequest): {
+    role: string
+    content: string
+    images?: string[]
+  }[] {
     const messages = request.messages.map((m) => ({
       role: m.role,
-      content: m.content
+      content: m.content,
+      // Ollama expects raw base64 (no data: prefix) in message.images
+      ...(m.images?.length ? { images: m.images.map((img) => img.dataBase64) } : {})
     }))
     if (request.systemPrompt) {
       messages.unshift({ role: 'system', content: request.systemPrompt })
     }
+    return messages
+  }
+
+  async sendMessage(request: AIRequest): Promise<AIResponse> {
+    const model = request.model || this.defaultModel
+
+    const messages = this.toOllamaMessages(request)
 
     const res = await fetch(`${this.baseUrl}/api/chat`, {
       method: 'POST',
@@ -88,13 +100,7 @@ export class OllamaProvider extends BaseProvider {
   ): Promise<void> {
     const model = request.model || this.defaultModel
 
-    const messages = request.messages.map((m) => ({
-      role: m.role,
-      content: m.content
-    }))
-    if (request.systemPrompt) {
-      messages.unshift({ role: 'system', content: request.systemPrompt })
-    }
+    const messages = this.toOllamaMessages(request)
 
     const res = await fetch(`${this.baseUrl}/api/chat`, {
       method: 'POST',

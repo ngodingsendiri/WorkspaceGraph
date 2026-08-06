@@ -904,6 +904,69 @@ describe('AI system contracts', () => {
     const base = read('src/main/ai/providers/BaseProvider.ts')
     expect(has(base, 'isConfigured()', 'configure(config', 'getApiKeyMasked')).toBe(true)
   })
+  it('P-A1 native function calling: tools array + stream tool_calls parsed, fence fallback', () => {
+    const mid = read('src/main/ai/AIMiddleware.ts')
+    const tools = read('src/main/ai/AgentTools.ts')
+    const base = read('src/main/ai/providers/BaseProvider.ts')
+    const compat = read('src/main/ai/providers/openaiCompat.ts')
+    // Middleware routes by provider capability and sends the native contract
+    expect(has(mid, 'capabilities.toolCalling', 'buildToolSchemas()', "tool_choice = 'auto'")).toBe(
+      true
+    )
+    // OpenAI-compat providers consume request.tools and parse stream deltas
+    for (const p of ['OpenAI', 'Grok', 'OpenRouter']) {
+      const src = read(`src/main/ai/providers/${p}Provider.ts`)
+      expect(has(src, 'request.tools', 'delta?.tool_calls', 'finalizeToolCalls')).toBe(true)
+    }
+    // Schema builder + native→action conversion live in AgentTools
+    expect(
+      has(tools, 'export function buildToolSchemas', 'export function nativeCallsToActions')
+    ).toBe(true)
+    // Shared delta accumulation is unit-tested (never per-provider literal)
+    expect(has(compat, 'export function accumulateToolCallDeltas')).toBe(true)
+    // Message contract carries tool role + tool_calls for the loop
+    expect(has(base, "role: 'user' | 'assistant' | 'system' | 'tool'", 'tool_calls?:')).toBe(true) // Fence fallback is explicit for providers without native tools
+    expect(has(mid, "toolMode === 'fence'", "'native' | 'fence' | 'off'")).toBe(true)
+    expect(has(read('src/main/ai/providers/ClaudeProvider.ts'), 'toolCalling: false')).toBe(true)
+    expect(has(read('src/main/ai/providers/GeminiProvider.ts'), 'toolCalling: false')).toBe(true)
+  })
+  it('P-B2 proposals persist under .workspacegraph/proposals/ + dock hydrates on mount', () => {
+    const tools = read('src/main/ai/AgentTools.ts')
+    const store = read('src/renderer/src/store/chatStore.ts')
+    const panel = read('src/renderer/src/components/chat/ChatPanel.tsx')
+    // One JSON per proposal, root-scoped cache, terminal state removes the file
+    expect(
+      has(
+        tools,
+        "'.workspacegraph', 'proposals'",
+        'persistProposal',
+        'removeProposalFile',
+        'ensureProposalsLoaded'
+      )
+    ).toBe(true)
+    // Renderer pulls persisted proposals via the preload bridge on mount
+    expect(has(store, 'refreshProposals', 'listWriteProposals')).toBe(true)
+    expect(has(panel, 'refreshProposals', 'void refreshProposals()')).toBe(true)
+  })
+  it('P-A2 vision: image content blocks per provider + renderer attach UI', () => {
+    const base = read('src/main/ai/providers/BaseProvider.ts')
+    const compat = read('src/main/ai/providers/openaiCompat.ts')
+    const mid = read('src/main/ai/AIMiddleware.ts')
+    const store = read('src/renderer/src/store/chatStore.ts')
+    const panel = read('src/renderer/src/components/chat/ChatPanel.tsx')
+    // Contract: ImageAttachment type + images field on messages/requests
+    expect(has(base, 'ImageAttachment', 'mimeType', 'dataBase64', 'images?:')).toBe(true)
+    // OpenAI-compat builder turns images into image_url content parts
+    expect(has(compat, "type: 'image_url'", 'data:${img.mimeType};base64')).toBe(true)
+    // Middleware gates on the vision capability + attaches to the last user msg
+    expect(has(mid, 'capabilities.vision', 'tidak mendukung vision', 'request.images')).toBe(true)
+    // Renderer: paste/drop handlers, composer strip, message thumbnails
+    expect(has(panel, 'handlePaste', 'handleDrop', 'chat-attach-strip', 'chat-msg-img')).toBe(true)
+    expect(has(panel, 'onPaste={handlePaste}', 'onDrop={handleDrop}')).toBe(true)
+    // Store: sendMessage accepts images and persists them with the chat
+    expect(has(store, 'sendMessage: (text: string, activeFilePath?: string, images?:')).toBe(true)
+    expect(has(store, 'images: m.images')).toBe(true)
+  })
   it('AgentTools fences + tools + AI Memory mention', () => {
     const tools = read('src/main/ai/AgentTools.ts')
     expect(tools).toContain('```(?:wg-action|json|javascript)?')

@@ -11,6 +11,7 @@ import { searchEngine } from '../engine/SearchEngine'
 import { markdownEngine } from '../engine/MarkdownEngine'
 import { templateEngine } from '../engine/TemplateEngine'
 import { isPathInVault } from '../security/PathSandbox'
+import type { AIToolCall, ProviderTool } from './providers/BaseProvider'
 
 export type ToolName =
   | 'search'
@@ -57,7 +58,72 @@ const WRITE_TOOLS = new Set<ToolName>([
 ])
 const READ_TOOLS = new Set<ToolName>(['search', 'read_note', 'list_dir', 'list_templates'])
 
+// ── Proposal persistence (P-B2) ────────────────────────────────────────────
+// Pending write proposals survive app restarts: one JSON file per proposal
+// under <vault>/.workspacegraph/proposals/ (same pattern as chats). The
+// in-memory cache is scoped to the CURRENT vault — switching vaults clears and
+// rescans, so proposals from another vault never leak into the dock.
 const proposals = new Map<string, WriteProposal>()
+let cachedRoot: string | null = null
+
+function proposalDir(root: string): string {
+  const dir = path.join(root, '.workspacegraph', 'proposals')
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
+  return dir
+}
+
+function proposalFile(root: string, id: string): string {
+  return path.join(proposalDir(root), `${id}.json`)
+}
+
+/** Reload pending proposals for the current vault — runs once per vault change. */
+function ensureProposalsLoaded(): void {
+  const root = workspaceEngine.getState().rootPath
+  if (root === cachedRoot) return
+  proposals.clear()
+  cachedRoot = root
+  if (!root) return
+  try {
+    for (const f of fs.readdirSync(proposalDir(root))) {
+      if (!f.endsWith('.json')) continue
+      try {
+        const p = JSON.parse(
+          fs.readFileSync(path.join(proposalDir(root), f), 'utf-8')
+        ) as WriteProposal
+        if (p && typeof p.id === 'string' && p.status === 'pending') {
+          proposals.set(p.id, p)
+        }
+      } catch {
+        /* skip corrupt proposal file */
+      }
+    }
+  } catch {
+    /* proposals dir may not exist yet */
+  }
+}
+
+function persistProposal(p: WriteProposal): void {
+  const root = workspaceEngine.getState().rootPath
+  if (!root) return
+  try {
+    fs.writeFileSync(proposalFile(root, p.id), JSON.stringify(p, null, 2), 'utf-8')
+  } catch (err) {
+    console.error('[proposals] persist failed:', err)
+  }
+}
+
+/** Remove a proposal file — a resolved (applied/rejected) proposal must not
+ * resurrect on the next launch. Joins the path directly so deleting never
+ * litters an empty proposals dir with a mkdir. */
+function removeProposalFile(id: string): void {
+  const root = workspaceEngine.getState().rootPath
+  if (!root) return
+  try {
+    fs.rmSync(path.join(root, '.workspacegraph', 'proposals', `${id}.json`), { force: true })
+  } catch {
+    /* ignore */
+  }
+}
 
 export function isWriteTool(name: string): boolean {
   return WRITE_TOOLS.has(name as ToolName)
@@ -68,17 +134,21 @@ export function isReadTool(name: string): boolean {
 }
 
 export function getProposal(id: string): WriteProposal | undefined {
+  ensureProposalsLoaded()
   return proposals.get(id)
 }
 
 export function listPendingProposals(): WriteProposal[] {
+  ensureProposalsLoaded()
   return Array.from(proposals.values()).filter((p) => p.status === 'pending')
 }
 
 export function rejectProposal(id: string): boolean {
+  ensureProposalsLoaded()
   const p = proposals.get(id)
   if (!p || p.status !== 'pending') return false
   p.status = 'rejected'
+  removeProposalFile(id)
   return true
 }
 
@@ -295,7 +365,9 @@ function createProposal(
     createdAt: new Date().toISOString(),
     preservesFrontmatter: validation.preservesFrontmatter
   }
+  ensureProposalsLoaded()
   proposals.set(id, prop)
+  persistProposal(prop)
   return prop
 }
 
@@ -419,6 +491,8 @@ export async function executeTool(action: ToolAction): Promise<ToolResult> {
         const prop = createProposal('append_note', abs, merged, 'append')
         // Store only the append slice in preview; full content is merged for apply
         prop.preview = content.slice(0, 400).replace(/\n/g, ' ')
+        // Preview is overridden AFTER createProposal persisted — rewrite the file
+        persistProposal(prop)
         return {
           tool,
           ok: true,
@@ -532,6 +606,7 @@ export async function executeTool(action: ToolAction): Promise<ToolResult> {
  * Caller should re-sync graph/search after this.
  */
 export function applyProposal(id: string): { ok: boolean; path?: string; error?: string } {
+  ensureProposalsLoaded()
   const p = proposals.get(id)
   if (!p) return { ok: false, error: 'Proposal not found' }
   if (p.status !== 'pending') return { ok: false, error: `Proposal already ${p.status}` }
@@ -554,10 +629,131 @@ export function applyProposal(id: string): { ok: boolean; path?: string; error?:
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
     workspaceEngine.writeFile(abs, p.content)
     p.status = 'applied'
+    // Applied is terminal — remove the persisted pending proposal so a restart
+    // cannot resurrect it into the dock. Order matters: the note is written
+    // FIRST so a crash here loses at worst an apply (create re-apply fails
+    // safe, overwrite is idempotent) rather than the proposal content itself.
+    removeProposalFile(id)
     return { ok: true, path: abs }
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) }
   }
+}
+
+/**
+ * OpenAI-compatible tool schemas for the NATIVE function-calling path (P-A1).
+ * Sent as `tools` on the request; the model calls them via structured tool_calls
+ * instead of emitting wg-action fences. Keep descriptions aligned with
+ * TOOLS_SYSTEM_PROMPT so both protocols teach the same tool semantics.
+ */
+export function buildToolSchemas(): ProviderTool[] {
+  const fn = (
+    name: string,
+    description: string,
+    parameters: Record<string, unknown>,
+    required: string[] = []
+  ): ProviderTool => ({
+    type: 'function',
+    function: {
+      name,
+      description,
+      parameters: { type: 'object', properties: parameters, required }
+    }
+  })
+  return [
+    fn(
+      'search',
+      'Full-text search notes in the workspace vault. Returns matching notes with titles, paths, snippets and scores.',
+      {
+        query: { type: 'string', description: 'Search query' },
+        limit: { type: 'number', description: 'Max results (default 8)' }
+      },
+      ['query']
+    ),
+    fn(
+      'read_note',
+      'Read a note from the vault. Path can be absolute, vault-relative, or a note title.',
+      {
+        path: { type: 'string', description: 'Absolute or vault-relative path, or note title' }
+      },
+      ['path']
+    ),
+    fn(
+      'list_dir',
+      'List files and folders under a vault-relative directory (default vault root).',
+      { path: { type: 'string', description: 'Vault-relative folder; default "" (root)' } }
+    ),
+    fn(
+      'write_note',
+      'Overwrite an entire note (frontmatter preserved when present). Creates a write proposal the user must apply.',
+      {
+        path: { type: 'string', description: 'Absolute or vault-relative path' },
+        content: { type: 'string', description: 'Full markdown content' }
+      },
+      ['path', 'content']
+    ),
+    fn(
+      'append_note',
+      'Append a markdown section to an existing note. Creates a write proposal the user must apply.',
+      {
+        path: { type: 'string', description: 'Absolute or vault-relative path' },
+        content: { type: 'string', description: 'Markdown section to append' }
+      },
+      ['path', 'content']
+    ),
+    fn(
+      'create_note',
+      'Create a new .md note (e.g. AI Memory/Topik.md). Creates a write proposal the user must apply.',
+      {
+        path: { type: 'string', description: 'Vault-relative path ending in .md' },
+        content: { type: 'string', description: 'Markdown content' }
+      },
+      ['path']
+    ),
+    fn('list_templates', 'List available note templates.', {}),
+    fn(
+      'create_from_template',
+      'Create a note from a template. Creates a write proposal the user must apply.',
+      {
+        templateId: { type: 'string', description: 'Template id (see list_templates)' },
+        title: { type: 'string', description: 'Note title' },
+        folder: { type: 'string', description: 'Vault-relative destination folder (optional)' }
+      },
+      ['templateId', 'title']
+    )
+  ]
+}
+
+/**
+ * Convert native tool calls (OpenAI tool_calls shape) into executable actions,
+ * keeping the call id so results can be zipped back into `tool` role messages.
+ * Non-object / unparsable arguments degrade to {} (same as fence path).
+ */
+export function nativeCallsToActions(
+  calls: AIToolCall[]
+): { callId: string; action: ToolAction }[] {
+  const out: { callId: string; action: ToolAction }[] = []
+  for (const c of calls || []) {
+    const name = String(c.name || '').trim()
+    if (!name) continue
+    let args: Record<string, unknown> = {}
+    try {
+      const parsed = JSON.parse(c.arguments || '{}') as unknown
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        args = parsed as Record<string, unknown>
+      }
+    } catch {
+      args = {}
+    }
+    out.push({ callId: c.id || `call_${out.length}`, action: { tool: name as ToolName, args } })
+  }
+  return out
+}
+
+/** Format ONE tool result — used as the content of a native `tool` role message. */
+export function formatToolResultForModel(r: ToolResult): string {
+  if (!r.ok) return `ERROR: ${r.error || 'tool failed'}`
+  return JSON.stringify(r.result, null, 2).slice(0, 8000)
 }
 
 export function formatToolResultsForModel(results: ToolResult[]): string {

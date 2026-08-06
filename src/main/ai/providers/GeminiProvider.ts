@@ -8,6 +8,9 @@ import {
   ProviderCapabilities
 } from './BaseProvider'
 
+/** Local structural Part — inlineData carries the attached image (vision P-A2). */
+type GeminiPart = { text?: string; inlineData?: { mimeType: string; data: string } }
+
 export class GeminiProvider extends BaseProvider {
   readonly id = 'gemini'
   readonly name = 'Google Gemini'
@@ -15,7 +18,9 @@ export class GeminiProvider extends BaseProvider {
     chat: true,
     streaming: true,
     vision: true,
-    toolCalling: true,
+    // P-A1: native function calling belum di-wire (bukan OpenAI-compat) — tool
+    // loop memakai fallback fence wg-action di AIMiddleware.
+    toolCalling: false,
     embeddings: true
   }
 
@@ -91,15 +96,23 @@ export class GeminiProvider extends BaseProvider {
   }
 
   /** Gemini requires alternating user/model; system → systemInstruction */
-  private buildContents(request: AIRequest): { role: string; parts: { text: string }[] }[] {
-    const contents: { role: string; parts: { text: string }[] }[] = []
+  private buildContents(request: AIRequest): { role: string; parts: GeminiPart[] }[] {
+    const contents: { role: string; parts: GeminiPart[] }[] = []
     for (const m of request.messages) {
-      if (!m.content?.trim()) continue
+      if (!m.content?.trim() && !m.images?.length) continue
       if (m.role === 'system') continue
       const role = m.role === 'assistant' ? 'model' : 'user'
       const last = contents[contents.length - 1]
       if (last && last.role === role) {
-        last.parts[0].text += '\n\n' + m.content
+        last.parts[0].text = (last.parts[0].text || '') + '\n\n' + m.content
+      } else if (m.role === 'user' && m.images?.length) {
+        // Vision (P-A2): inline base64 data parts, text first so the merge
+        // logic above can keep appending into parts[0].
+        const parts: GeminiPart[] = [{ text: m.content }]
+        for (const img of m.images) {
+          parts.push({ inlineData: { mimeType: img.mimeType, data: img.dataBase64 } })
+        }
+        contents.push({ role: 'user', parts })
       } else {
         contents.push({ role, parts: [{ text: m.content }] })
       }

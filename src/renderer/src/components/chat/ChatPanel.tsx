@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react'
-import { useChatStore, WriteProposalItem } from '../../store/chatStore'
+import { useChatStore, WriteProposalItem, ImageAttachment } from '../../store/chatStore'
 import { useEditorStore } from '../../store/editorStore'
 import { useWorkspaceStore } from '../../store/workspaceStore'
 import { Icon } from '../ui/Icons'
@@ -118,6 +118,7 @@ export const ChatPanel: React.FC = () => {
     sendMessage,
     cancelStream,
     clearHistory,
+    refreshProposals,
     applyProposal,
     rejectProposal,
     saveCurrentChat,
@@ -152,6 +153,8 @@ export const ChatPanel: React.FC = () => {
   const [showHistory, setShowHistory] = useState(false)
   const [historyQuery, setHistoryQuery] = useState('')
   const [copyFlash, setCopyFlash] = useState<string | null>(null)
+  // P-A2: images queued in the composer (paste / drag) before sending
+  const [attachments, setAttachments] = useState<ImageAttachment[]>([])
 
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const messagesBoxRef = useRef<HTMLDivElement>(null)
@@ -160,7 +163,10 @@ export const ChatPanel: React.FC = () => {
 
   useEffect(() => {
     fetchProviders()
-  }, [fetchProviders])
+    // P-B2: hydrate the proposal dock with pending proposals persisted on disk
+    // (a stream's live chunks only cover THIS session, not a previous one).
+    void refreshProposals()
+  }, [fetchProviders, refreshProposals])
 
   const refreshHistory = useCallback(async () => {
     try {
@@ -208,11 +214,70 @@ export const ChatPanel: React.FC = () => {
     ? selectedModelId
     : modelOptions[0]?.id || ''
 
+  const imgDataUrl = (a: ImageAttachment): string => `data:${a.mimeType};base64,${a.dataBase64}`
+
+  const IMAGE_MAX_BYTES = 4 * 1024 * 1024
+  const IMAGE_MIME_OK = ['image/png', 'image/jpeg', 'image/webp', 'image/gif']
+
+  const flashError = (msg: string): void => {
+    setApplyOk(false)
+    setApplyMsg(msg)
+    setTimeout(() => setApplyMsg(''), 4000)
+  }
+
+  /** Read an image File into an attachment (size + type + count guarded). */
+  const addImageFile = (file: File): void => {
+    if (!IMAGE_MIME_OK.includes(file.type)) {
+      flashError(`${file.name || 'Gambar'}: format tidak didukung (png/jpeg/webp/gif)`)
+      return
+    }
+    if (file.size > IMAGE_MAX_BYTES) {
+      flashError(`${file.name || 'Gambar'}: terlalu besar (>4MB)`)
+      return
+    }
+    if (attachments.length >= 4) {
+      flashError('Maksimal 4 gambar per pesan')
+      return
+    }
+    const reader = new FileReader()
+    reader.onload = () => {
+      const dataUrl = String(reader.result || '')
+      const match = dataUrl.match(/^data:([^;,]+)(?:;[^,]*)?,/)
+      if (!match) return
+      setAttachments((prev) => [
+        ...prev,
+        { mimeType: match[1], dataBase64: dataUrl.slice(dataUrl.indexOf(',') + 1), name: file.name }
+      ])
+    }
+    reader.readAsDataURL(file)
+  }
+
+  const handlePaste = (e: React.ClipboardEvent): void => {
+    const items = e.clipboardData?.items
+    if (!items) return
+    const imgs = Array.from(items).filter((i) => i.type.startsWith('image/'))
+    if (imgs.length === 0) return
+    e.preventDefault()
+    for (const item of imgs) {
+      const file = item.getAsFile()
+      if (file) addImageFile(file)
+    }
+  }
+
+  const handleDrop = (e: React.DragEvent): void => {
+    e.preventDefault()
+    const files = Array.from(e.dataTransfer?.files || [])
+    for (const f of files) {
+      if (f.type.startsWith('image/')) addImageFile(f)
+    }
+  }
+
   const handleSend = (): void => {
-    if (!inputText.trim() || isGenerating) return
+    if ((!inputText.trim() && attachments.length === 0) || isGenerating) return
     stickToBottom.current = true
-    sendMessage(inputText, activeTab?.path)
+    sendMessage(inputText, activeTab?.path, attachments.length ? attachments : undefined)
     setInputText('')
+    setAttachments([])
     requestAnimationFrame(() => inputRef.current?.focus())
   }
 
@@ -693,6 +758,20 @@ export const ChatPanel: React.FC = () => {
                     ''
                   )}
 
+                  {msg.images && msg.images.length > 0 && (
+                    <div className="chat-msg-images">
+                      {msg.images.map((img, i) => (
+                        <img
+                          key={`${msg.id}-img-${i}`}
+                          className="chat-msg-img"
+                          src={imgDataUrl(img)}
+                          alt={img.name || `lampiran ${i + 1}`}
+                          loading="lazy"
+                        />
+                      ))}
+                    </div>
+                  )}
+
                   {msg.citations && msg.citations.length > 0 && (
                     <div className="chat-citations">
                       <span className="chat-citations-label">refs</span>
@@ -765,13 +844,33 @@ export const ChatPanel: React.FC = () => {
       </div>
       {/* Composer */}
       <div className="chat-input-area">
+        {attachments.length > 0 && (
+          <div className="chat-attach-strip">
+            {attachments.map((a, i) => (
+              <div key={`${a.name || 'img'}-${i}`} className="chat-attach-item">
+                <img className="chat-attach-thumb" src={imgDataUrl(a)} alt={a.name || 'gambar'} />
+                <button
+                  type="button"
+                  className="chat-attach-remove"
+                  aria-label="Hapus lampiran"
+                  title="Hapus lampiran"
+                  onClick={() => setAttachments((prev) => prev.filter((_, idx) => idx !== i))}
+                >
+                  <Icon name="close" size={10} />
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
         <textarea
           ref={inputRef}
           className="chat-input"
-          placeholder="perintah / tanya kernel… (Enter kirim · Shift+Enter baris baru)"
+          placeholder="perintah / tanya kernel… (Enter kirim · Shift+Enter baris baru · paste/drag gambar)"
           value={inputText}
           onChange={(e) => setInputText(e.target.value)}
           onKeyDown={handleKeyDown}
+          onPaste={handlePaste}
+          onDrop={handleDrop}
           disabled={isGenerating}
           aria-label="Chat message"
           rows={2}
@@ -816,7 +915,7 @@ export const ChatPanel: React.FC = () => {
               type="button"
               className="btn btn-primary btn-sm"
               onClick={handleSend}
-              disabled={!inputText.trim()}
+              disabled={!inputText.trim() && attachments.length === 0}
             >
               Run
             </button>

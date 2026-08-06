@@ -16,6 +16,7 @@ function mockWindowApi(): Record<string, MockFn> {
     cancelAIStream: vi.fn().mockResolvedValue(true),
     applyWriteProposal: vi.fn().mockResolvedValue({ ok: true }),
     rejectWriteProposal: vi.fn().mockResolvedValue({ ok: true }),
+    listWriteProposals: vi.fn().mockResolvedValue([]),
     ensureAiMemory: vi.fn().mockResolvedValue({ ok: true, created: [] }),
     listAiMemory: vi.fn().mockResolvedValue({ files: [], core: [] })
   }
@@ -94,6 +95,104 @@ describe('chatStore delete/save race', () => {
   })
 })
 
+describe('chatStore refreshProposals (P-B2 restart hydration)', () => {
+  it('hydrates pendingProposals from persisted disk proposals', async () => {
+    const api = mockWindowApi()
+    api.listWriteProposals.mockResolvedValue([
+      {
+        id: 'p1',
+        tool: 'create_note',
+        absolutePath: 'C:/v/Knowledge/A.md',
+        relativePath: 'Knowledge/A.md',
+        content: '# A',
+        mode: 'create',
+        preview: '# A',
+        status: 'pending',
+        createdAt: '2026-08-06T00:00:00.000Z'
+      },
+      // Applied proposals from disk must NOT re-enter the dock
+      {
+        id: 'p2',
+        tool: 'write_note',
+        absolutePath: 'C:/v/Knowledge/B.md',
+        relativePath: 'Knowledge/B.md',
+        content: '# B',
+        mode: 'overwrite',
+        preview: '# B',
+        status: 'applied',
+        createdAt: '2026-08-06T00:00:00.000Z'
+      }
+    ])
+    await useChatStore.getState().refreshProposals()
+    const pending = useChatStore.getState().pendingProposals
+    expect(pending).toHaveLength(1)
+    expect(pending[0].id).toBe('p1')
+  })
+
+  it('keeps the dock unchanged when the IPC call fails', async () => {
+    const api = mockWindowApi()
+    api.listWriteProposals.mockRejectedValue(new Error('no vault'))
+    useChatStore.setState({
+      pendingProposals: [
+        {
+          id: 'live',
+          tool: 'create_note',
+          absolutePath: '',
+          relativePath: 'Knowledge/Live.md',
+          content: '',
+          mode: 'create',
+          preview: 'live',
+          status: 'pending',
+          createdAt: ''
+        }
+      ]
+    })
+    await useChatStore.getState().refreshProposals()
+    expect(useChatStore.getState().pendingProposals.map((p) => p.id)).toEqual(['live'])
+  })
+})
+
+describe('chatStore vision (P-A2)', () => {
+  it('sendMessage with images: user message carries them + payload includes images', async () => {
+    const api = mockWindowApi()
+    api.streamAIMessage.mockImplementation(
+      (_payload: unknown, cb: (c: Record<string, unknown>) => void) => {
+        cb({ content: '', done: true })
+        return 'stream-1'
+      }
+    )
+    const img = { mimeType: 'image/png', dataBase64: 'aGVsbG8=', name: 'x.png' }
+
+    await useChatStore.getState().sendMessage('Apa isi gambar ini?', undefined, [img])
+
+    const s = useChatStore.getState()
+    // The user message in the UI carries the image for the thumbnail
+    const userMsg = s.messages.find((m) => m.role === 'user')
+    expect(userMsg?.images).toEqual([img])
+    // The IPC payload sends images only for the current prompt (no history re-send)
+    expect(api.streamAIMessage).toHaveBeenCalledTimes(1)
+    const payload = api.streamAIMessage.mock.calls[0][0]
+    expect(payload.images).toEqual([img])
+    expect(payload.messages).toEqual([{ role: 'user', content: 'Apa isi gambar ini?' }])
+  })
+
+  it('sendMessage without images: payload has no images field', async () => {
+    const api = mockWindowApi()
+    api.streamAIMessage.mockImplementation(
+      (_payload: unknown, cb: (c: Record<string, unknown>) => void) => {
+        cb({ content: '', done: true })
+        return 'stream-1'
+      }
+    )
+
+    await useChatStore.getState().sendMessage('halo')
+
+    const payload = api.streamAIMessage.mock.calls[0][0]
+    expect(payload.images).toBeUndefined()
+    expect(useChatStore.getState().messages.find((m) => m.role === 'user')?.images).toBeUndefined()
+  })
+})
+
 describe('chatStore clearHistory', () => {
   it('resets generating state and active stream id', () => {
     mockWindowApi()
@@ -127,7 +226,8 @@ describe('chatStore retryLastMessage', () => {
     await useChatStore.getState().retryLastMessage()
     const contents = useChatStore.getState().messages.map((m) => m.content)
     expect(contents).toEqual(['pertama', 'jawaban 1', 'kedua'])
-    expect(sendSpy).toHaveBeenCalledWith('kedua', undefined)
+    // P-A2: retry re-sends the original images (third arg) even when none attached
+    expect(sendSpy).toHaveBeenCalledWith('kedua', undefined, undefined)
     sendSpy.mockRestore()
   })
 })

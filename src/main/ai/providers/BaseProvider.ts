@@ -1,7 +1,42 @@
-export interface AIMessage {
-  role: 'user' | 'assistant' | 'system'
-  content: string
+/** One native function call requested by the model (OpenAI tool_calls shape). */
+export interface AIToolCall {
+  id: string
+  name: string
+  /** JSON-stringified arguments — parsed by the tool executor. */
+  arguments: string
 }
+
+/** An image attached to a chat message (vision, P-A2). */
+export interface ImageAttachment {
+  /** e.g. 'image/png' */
+  mimeType: string
+  /** Raw base64 payload — no data: prefix */
+  dataBase64: string
+  name?: string
+}
+
+export interface AIMessage {
+  role: 'user' | 'assistant' | 'system' | 'tool'
+  content: string
+  /** Native function calls on an assistant message (OpenAI tool_calls). */
+  tool_calls?: AIToolCall[]
+  /** Native tool result — required when role === 'tool' (OpenAI tool role). */
+  tool_call_id?: string
+  /** Images attached to a USER message — rendered as image content blocks. */
+  images?: ImageAttachment[]
+}
+
+/** OpenAI-compatible function-tool schema (sent as `tools` on the request). */
+export interface ProviderTool {
+  type: 'function'
+  function: {
+    name: string
+    description: string
+    parameters: Record<string, unknown>
+  }
+}
+
+export type ProviderToolChoice = 'auto' | 'none' | { type: 'function'; function: { name: string } }
 
 export interface AIRequest {
   messages: AIMessage[]
@@ -10,6 +45,11 @@ export interface AIRequest {
   temperature?: number
   stream?: boolean
   systemPrompt?: string
+  /** OpenAI-compatible function tools (native function calling). */
+  tools?: ProviderTool[]
+  tool_choice?: ProviderToolChoice
+  /** Images attached to the CURRENT prompt (attached to the last user message). */
+  images?: ImageAttachment[]
 }
 
 export interface AIResponse {
@@ -18,6 +58,8 @@ export interface AIResponse {
   provider: string
   tokensUsed?: number
   finishReason?: string
+  /** Native tool calls returned by the model (non-stream path). */
+  toolCalls?: AIToolCall[]
 }
 
 export interface AIStreamChunk {
@@ -27,6 +69,8 @@ export interface AIStreamChunk {
   error?: string
   /** Total tokens used by this completion (streamed usage, when provider reports it). */
   tokensUsed?: number
+  /** Completed native tool calls (accumulated from stream deltas, final chunk). */
+  toolCalls?: AIToolCall[]
 }
 
 export interface ProviderCapabilities {

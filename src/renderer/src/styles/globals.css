@@ -2716,6 +2716,23 @@ html:not([data-theme]) {
   max-width: 100%;
 }
 
+/* P-A2: attached-image thumbnails rendered inside the message bubble */
+.chat-msg-images {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 6px 0 2px;
+}
+.chat-msg-img {
+  width: 72px;
+  height: 72px;
+  object-fit: cover;
+  border-radius: 8px;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-input);
+  display: block;
+}
+
 .chat-msg-actions {
   display: flex;
   gap: 4px;
@@ -2738,6 +2755,52 @@ html:not([data-theme]) {
   gap: 8px;
   flex-shrink: 0;
   background: var(--bg-surface);
+}
+
+/* P-A2: queued image attachments above the textarea (paste / drag) */
+.chat-attach-strip {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 6px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-subtle);
+  border-radius: 10px;
+}
+.chat-attach-item {
+  position: relative;
+}
+.chat-attach-thumb {
+  width: 46px;
+  height: 46px;
+  object-fit: cover;
+  border-radius: 8px;
+  border: 1px solid var(--border-subtle);
+  display: block;
+  background: var(--bg-input);
+}
+.chat-attach-remove {
+  position: absolute;
+  top: -6px;
+  right: -6px;
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  border-radius: 50%;
+  border: 1px solid var(--border-default);
+  background: var(--bg-panel);
+  color: var(--text-secondary);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.9;
+  transition: background var(--duration-fast), color var(--duration-fast), opacity var(--duration-fast);
+}
+.chat-attach-remove:hover {
+  background: var(--color-error);
+  color: #fff;
+  opacity: 1;
 }
 
 .chat-input {
