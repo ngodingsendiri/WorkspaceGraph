@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="id">
+  <head>
+    <meta charset="utf-8" />
+    <title>LOD Culling — pengukuran browser</title>
+    <style>
+      :root {
+        color-scheme: dark;
+      }
+      body {
+        margin: 0;
+        padding: 24px;
+        font: 13px/1.5 'Inter', 'Segoe UI', system-ui, sans-serif;
+        background: #14161b;
+        color: #e8eaf0;
+      }
+      h1 {
+        font-size: 16px;
+        margin: 0 0 4px;
+      }
+      .sub {
+        color: #9aa0ae;
+        margin: 0 0 16px;
+        font-size: 12px;
+      }
+      .hdr {
+        margin: 0 0 12px;
+        color: #cdd2de;
+      }
+      .cam {
+        background: #1b1e26;
+        border: 1px solid #2a2e3a;
+        border-radius: 10px;
+        padding: 12px 16px;
+        margin-bottom: 14px;
+      }
+      .cam h3 {
+        margin: 0 0 8px;
+        font-size: 13px;
+        color: #7cc4ff;
+      }
+      table {
+        border-collapse: collapse;
+        width: 100%;
+        max-width: 640px;
+      }
+      td {
+        padding: 3px 10px 3px 0;
+        border-bottom: 1px dashed #262b36;
+        color: #b7bcc9;
+      }
+      td b {
+        color: #f0f2f7;
+        font-variant-numeric: tabular-nums;
+      }
+      .muted {
+        color: #7b8291;
+        font-size: 11px;
+        margin-left: 6px;
+      }
+      .foot {
+        margin-top: 10px;
+        color: #6c7382;
+        font-size: 11px;
+        max-width: 640px;
+      }
+      #perf-canvas {
+        display: none;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>LOD Culling — pengukuran browser nyata</h1>
+    <p class="sub">Vault sintetis 1000 node · modul produksi asli · build: Electron-vite</p>
+    <canvas id="perf-canvas" width="1600" height="1000"></canvas>
+    <div id="results">mengukur…</div>
+    <script src="./harness.js"></script>
+  </body>
+</html>
