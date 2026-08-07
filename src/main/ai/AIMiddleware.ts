@@ -26,13 +26,16 @@ import {
   formatToolResultForModel,
   isReadTool,
   isWriteTool,
+  isDelegateTool,
+  isToolAllowed,
   getProposal,
   buildToolSchemas,
   nativeCallsToActions,
   roleCanWriteMCP,
   type WriteProposal,
   type ToolResult,
-  type ToolAction
+  type ToolAction,
+  type ToolAdvertOptions
 } from './AgentTools'
 import { mcpManager } from '../mcp/McpClientManager'
 import { renderPrompt } from './PromptRegistry'
@@ -87,6 +90,17 @@ export interface PipelineStage {
 }
 
 /**
+ * R1-3: result of a delegated sub-agent run — the tool result the parent
+ * model sees, plus anything the sub-agent created that must bubble up to the
+ * parent stream (proposals land in the user's dock; citations feed grounding).
+ */
+interface SubAgentOutcome {
+  result: ToolResult
+  proposals: WriteProposal[]
+  citations: { title: string; path: string }[]
+}
+
+/**
  * Preset: Research → Writer. The researcher stage gathers + verifies facts
  * (read-only tools), hands its summary to the writer stage, which composes
  * the final document (may propose writes).
@@ -116,7 +130,8 @@ export const EXECUTE_TOOL_TIMEOUT_MS = 30_000
  */
 export async function executeToolWithTimeout(
   action: ToolAction,
-  role: AgentRole = 'general'
+  role: AgentRole = 'general',
+  opts: ToolAdvertOptions = {}
 ): Promise<ToolResult> {
   // P3 audit logging: one structured 'tool' event per invocation (tool, role,
   // duration, ok/error) so the JSONL trail matches what the UI tool-run pills show.
@@ -140,7 +155,7 @@ export async function executeToolWithTimeout(
       })
       resolve(r)
     }, EXECUTE_TOOL_TIMEOUT_MS)
-    executeTool(action, role).then(
+    executeTool(action, role, opts).then(
       (r) => {
         if (settled) return
         settled = true
@@ -485,7 +500,8 @@ export class AIMiddleware {
     activeFilePath: string | undefined,
     useContext: boolean,
     agentRole: AgentRole,
-    toolMode: 'native' | 'fence' | 'off'
+    toolMode: 'native' | 'fence' | 'off',
+    toolOptions: ToolAdvertOptions = {}
   ): Promise<{
     systemPrompt: string
     /** Round-0 system prompt WITHOUT the workspace context block — tool-loop
@@ -540,7 +556,11 @@ export class AIMiddleware {
     if (toolMode === 'fence') {
       systemPrompt +=
         '\n\n' +
-        buildToolsSystemPrompt(agentRole, mcpManager.getFenceDocs(roleCanWriteMCP(agentRole)))
+        buildToolsSystemPrompt(
+          agentRole,
+          mcpManager.getFenceDocs(toolOptions.planMode ? false : roleCanWriteMCP(agentRole)),
+          toolOptions
+        )
     }
 
     // P1-4: lean variant for tool-loop rounds 1+ — kernel + overrides + fence
@@ -555,7 +575,25 @@ export class AIMiddleware {
     if (toolMode === 'fence') {
       leanSystemPrompt +=
         '\n\n' +
-        buildToolsSystemPrompt(agentRole, mcpManager.getFenceDocs(roleCanWriteMCP(agentRole)))
+        buildToolsSystemPrompt(
+          agentRole,
+          mcpManager.getFenceDocs(toolOptions.planMode ? false : roleCanWriteMCP(agentRole)),
+          toolOptions
+        )
+    }
+
+    // R1-3 plan mode: a hard behavioral contract riding BOTH the round-0 and
+    // the lean prompt (rounds 1+ must keep planning, not start writing).
+    if (toolOptions.planMode) {
+      const planInstruction = [
+        '',
+        '[PLAN MODE — R1-3]',
+        'Anda dalam PLAN MODE: JANGAN panggil tool tulis (write_note/append_note/create_note/create_from_template) atau MCP write.',
+        'Kerjakan: (1) ANALISIS singkat situasi, (2) daftar LANGKAH implementasi bernomor, (3) panggil create_plan {title, goal, steps} sebagai langkah TERAKHIR agar rencana menjadi proposal yang bisa ditinjau user.',
+        'Tulis seluruh analisis SEBELUM create_plan — stream berhenti setelah proposal plan dibuat.'
+      ].join('\n')
+      systemPrompt += '\n\n' + planInstruction
+      leanSystemPrompt += '\n\n' + planInstruction
     }
 
     return { systemPrompt, leanSystemPrompt, citations, contextTokens }
@@ -656,7 +694,8 @@ export class AIMiddleware {
     useContext = true,
     agentRole: AgentRole = 'general',
     enableTools = false,
-    requestId?: string
+    requestId?: string,
+    planMode = false
   ): Promise<void> {
     if (requestId) this.clearCancel(requestId)
     const controller = requestId ? new AbortController() : undefined
@@ -695,7 +734,8 @@ export class AIMiddleware {
         enableTools,
         requestId,
         signal,
-        controller
+        controller,
+        { planMode }
       )
     } finally {
       logAIEvent({
@@ -959,7 +999,8 @@ export class AIMiddleware {
     enableTools: boolean,
     requestId: string | undefined,
     signal: AbortSignal | undefined,
-    controller: AbortController | undefined
+    controller: AbortController | undefined,
+    opts: ToolAdvertOptions = {}
   ): Promise<string | undefined> {
     let activeId: string | undefined
     try {
@@ -982,7 +1023,8 @@ export class AIMiddleware {
         enableTools,
         requestId,
         signal,
-        controller
+        controller,
+        opts
       )
       return activeId
     }
@@ -1046,7 +1088,8 @@ export class AIMiddleware {
           enableTools,
           requestId,
           signal,
-          controller
+          controller,
+          opts
         )
         servedBy = providerId
 
@@ -1085,6 +1128,104 @@ export class AIMiddleware {
     }
   }
 
+  /**
+   * R1-3: run a delegated sub-agent. The nested stream runs with the sub-
+   * agent's OWN role (per-role tool gates apply to advertisement AND
+   * execution), with delegate_subagent hidden so delegation cannot recurse.
+   * Its final output becomes the tool result the parent model reads;
+   * proposals + citations it created bubble up to the parent stream so the
+   * user's dock and grounding checks stay complete.
+   */
+  private async runSubAgent(
+    action: ToolAction,
+    requestId: string | undefined,
+    signal: AbortSignal | undefined,
+    controller: AbortController | undefined
+  ): Promise<SubAgentOutcome> {
+    const role = String(action.args?.role || '').trim() as AgentRole
+    const task = String(action.args?.task || '').trim()
+    const valid: AgentRole[] = ['general', 'writer', 'researcher', 'curator', 'planner']
+    if (!valid.includes(role)) {
+      return {
+        result: {
+          tool: action.tool,
+          ok: false,
+          error: `delegate_subagent: role tidak dikenal "${role || '(kosong)'}"`
+        },
+        proposals: [],
+        citations: []
+      }
+    }
+    if (!task) {
+      return {
+        result: { tool: action.tool, ok: false, error: 'delegate_subagent: task kosong' },
+        proposals: [],
+        citations: []
+      }
+    }
+    const subRequest: AIRequest = {
+      // Sub-agent picks the provider's default model — never inherit the
+      // parent's possibly foreign model id.
+      model: undefined,
+      maxTokens: 4000,
+      messages: [{ role: 'user', content: task }],
+      systemPrompt: `[Sub-agent — ${role}]\nAnda adalah sub-agent dengan peran "${role}" yang didelegasikan oleh agent utama. Selesaikan tugas di atas menggunakan tool yang tersedia. Balas HANYA dengan hasil kerja Anda — tanpa basa-basi, tanpa mengulang isi tugas.`
+    }
+    let output = ''
+    let error: string | undefined
+    const proposals: WriteProposal[] = []
+    const citations: { title: string; path: string }[] = []
+    const subOnChunk: (c: StreamEvent) => void = (c) => {
+      if (c.content) output += c.content
+      if (c.error) error = c.error
+      if (c.proposals) {
+        for (const p of c.proposals) {
+          if (!proposals.some((x) => x.id === p.id)) proposals.push(p)
+        }
+      }
+      if (c.citations) {
+        for (const ct of c.citations) {
+          if (!citations.some((x) => x.path === ct.path)) citations.push(ct)
+        }
+      }
+    }
+    await this.runStreamInner(
+      subRequest,
+      subOnChunk,
+      undefined,
+      false, // sub-agent context is the task itself — skip the context engine
+      role,
+      true, // tools on for the sub-agent; its role gates what it may call
+      requestId,
+      signal,
+      controller,
+      { excludeDelegate: true }
+    )
+    // Reviewer: a user cancel mid-sub-agent ends the nested stream with a
+    // *(cancelled)* marker and NO error — surface it as a failed delegate
+    // rather than an "ok" whose result text embeds the marker.
+    if (requestId && this.isCancelled(requestId)) {
+      return {
+        result: { tool: action.tool, ok: false, error: 'delegate dibatalkan' },
+        proposals,
+        citations
+      }
+    }
+    const cleaned = stripToolActions(output).trim()
+    if (!cleaned && error) {
+      return { result: { tool: action.tool, ok: false, error }, proposals, citations }
+    }
+    return {
+      result: {
+        tool: action.tool,
+        ok: true,
+        result: cleaned || '(sub-agent tidak menghasilkan output)'
+      },
+      proposals,
+      citations
+    }
+  }
+
   private async runStreamInner(
     request: AIRequest,
     onChunk: (chunk: StreamEvent) => void,
@@ -1094,7 +1235,8 @@ export class AIMiddleware {
     enableTools: boolean,
     requestId: string | undefined,
     signal: AbortSignal | undefined,
-    controller: AbortController | undefined
+    controller: AbortController | undefined,
+    opts: ToolAdvertOptions = {}
   ): Promise<void> {
     let provider: BaseProvider
     try {
@@ -1150,7 +1292,14 @@ export class AIMiddleware {
     }
 
     const { systemPrompt, leanSystemPrompt, citations, contextTokens } =
-      await this.buildSystemPromptAsync(request, activeFilePath, useContext, agentRole, toolMode)
+      await this.buildSystemPromptAsync(
+        request,
+        activeFilePath,
+        useContext,
+        agentRole,
+        toolMode,
+        opts
+      )
 
     let messages: AIMessage[] = [...request.messages]
     if (messages.length === 0) {
@@ -1270,11 +1419,12 @@ export class AIMiddleware {
         stream: true
       }
       if (nativeTools) {
-        // P1: only advertise the tools this role may call (researcher sees reads only)
-        // R0-1: MCP tools appended — already role/write-gated by the manager.
+        // P1 / R1-3: advertise the tools this role may call under the current
+        // mode (researcher sees reads only; plan mode reads + create_plan).
+        // R0-1: MCP tools appended — role/write-gated (plan mode drops writes).
         req.tools = [
-          ...buildToolSchemas(agentRole),
-          ...mcpManager.getToolSchemas(roleCanWriteMCP(agentRole))
+          ...buildToolSchemas(agentRole, undefined, opts),
+          ...mcpManager.getToolSchemas(opts.planMode ? false : roleCanWriteMCP(agentRole))
         ]
         req.tool_choice = 'auto'
       }
@@ -1422,12 +1572,14 @@ export class AIMiddleware {
         (p) =>
           isReadTool(p.action.tool) ||
           isWriteTool(p.action.tool) ||
+          isDelegateTool(p.action.tool) ||
           mcpManager.isMcpTool(p.action.tool)
       )
       const unknown = pending.filter(
         (p) =>
           !isReadTool(p.action.tool) &&
           !isWriteTool(p.action.tool) &&
+          !isDelegateTool(p.action.tool) &&
           !mcpManager.isMcpTool(p.action.tool)
       )
       if (unknown.length) {
@@ -1457,11 +1609,16 @@ export class AIMiddleware {
         return
       }
 
-      const readPending = known.filter((p) => isReadTool(p.action.tool))
+      // R1-3: delegate_subagent runs a NESTED sub-agent stream — intercepted
+      // here (the static executor can't stream). Executed after reads, before
+      // writes; the loop continues so the model can use the sub-agent output.
+      const delegates = known.filter((p) => isDelegateTool(p.action.tool))
+      const rest = known.filter((p) => !isDelegateTool(p.action.tool))
+      const readPending = rest.filter((p) => isReadTool(p.action.tool))
       // R0-1: MCP tools that aren't read-classified (write OR disconnected —
       // classification needs the live tool set) run on the sequential path so
       // executeTool surfaces the proper connect/write-gate error.
-      const writePending = known.filter(
+      const writePending = rest.filter(
         (p) => isWriteTool(p.action.tool) || mcpManager.isMcpTool(p.action.tool)
       )
       const results: ToolResult[] = []
@@ -1507,7 +1664,7 @@ export class AIMiddleware {
           runs.map(async ({ p, runId }) => ({
             p,
             runId,
-            r: await executeToolWithTimeout(p.action, agentRole)
+            r: await executeToolWithTimeout(p.action, agentRole, opts)
           }))
         )
         // completion events in the SAME request order (deterministic UI trail)
@@ -1543,6 +1700,80 @@ export class AIMiddleware {
         await runReadBatch(readPending.slice(i, i + READ_BATCH_SIZE))
       }
 
+      // R1-3: dynamic pipeline — each delegated sub-agent runs a nested stream
+      // with its own role (tool advertisement + execution gate follow it). Its
+      // output returns to the model as a normal tool result; any proposals or
+      // citations it created bubble up to the parent stream (the user's dock
+      // and grounding checks stay complete).
+      //
+      // Defense-in-depth: the delegate is gated by the CURRENT mode TOO — plan
+      // mode blocks delegation (a writer child could otherwise stage write
+      // proposals mid-plan). The model never SEES the tool in plan mode, but a
+      // hallucinated fence must not run either.
+      for (const p of delegates) {
+        const runId = nextToolRunId()
+        const subRole = String(p.action.args?.role || '').trim()
+        onChunk({
+          content: '',
+          done: false,
+          toolStatus: `▸ sub-agent ${subRole || '?'}`,
+          toolRun: { runId, tool: 'delegate_subagent', status: 'running', round },
+          round
+        })
+        let r: ToolResult
+        if (!isToolAllowed(agentRole, 'delegate_subagent', opts)) {
+          r = {
+            tool: 'delegate_subagent',
+            ok: false,
+            error: `delegate_subagent diblokir untuk role "${agentRole}"${opts.planMode ? ' (plan mode — delegasi off)' : ''}`
+          }
+        } else {
+          const outcome = await this.runSubAgent(p.action, requestId, signal, controller)
+          r = outcome.result
+          for (const pr of outcome.proposals) {
+            if (!allProposals.some((x) => x.id === pr.id)) allProposals.push(pr)
+          }
+          if (outcome.proposals.length > 0) {
+            onChunk({ content: '', done: false, proposals: outcome.proposals })
+          }
+          for (const c of outcome.citations) {
+            if (!lastCitations.some((x) => x.path === c.path)) {
+              lastCitations = [...lastCitations, c]
+            }
+          }
+        }
+        results.push(r)
+        if (p.callId) resultByCall.set(p.callId, r)
+        if (!r.ok) {
+          onChunk({
+            content: `\n\n*(sub-agent gagal: ${r.error})*\n`,
+            done: false,
+            toolStatus: `✗ sub-agent ${subRole || '?'}`,
+            toolRun: {
+              runId,
+              tool: 'delegate_subagent',
+              status: 'error',
+              detail: r.error,
+              round
+            },
+            round
+          })
+        } else {
+          onChunk({
+            content: '',
+            done: false,
+            toolRun: {
+              runId,
+              tool: 'delegate_subagent',
+              status: 'ok',
+              detail: toolResultDetail(r),
+              round
+            },
+            round
+          })
+        }
+      }
+
       for (const p of writePending) {
         const runId = nextToolRunId()
         onChunk({
@@ -1552,7 +1783,7 @@ export class AIMiddleware {
           toolRun: { runId, tool: p.action.tool, status: 'running', round },
           round
         })
-        const r = await executeToolWithTimeout(p.action, agentRole)
+        const r = await executeToolWithTimeout(p.action, agentRole, opts)
         results.push(r)
         if (p.callId) resultByCall.set(p.callId, r)
         if (r.proposalId) {
@@ -1607,8 +1838,10 @@ export class AIMiddleware {
         }
       }
 
-      // Only writes → stop so user can Apply (still OK if reads failed)
-      if (readPending.length === 0) {
+      // Only writes (no reads, no delegates) → stop so user can Apply. A
+      // delegate round must CONTINUE — the model still has to synthesize the
+      // sub-agent's output into its final answer.
+      if (readPending.length === 0 && delegates.length === 0) {
         onChunk({
           content: '',
           done: true,

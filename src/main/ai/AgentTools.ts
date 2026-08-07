@@ -25,6 +25,13 @@ export type ToolName =
   | 'create_note'
   | 'create_from_template'
   | 'list_templates'
+  /** R1-3: run a focused sub-task as a sub-agent with its own role (dynamic
+   * pipeline). Intercepted by AIMiddleware (needs a nested stream) — the
+   * static executor only ever denies it defensively. */
+  | 'delegate_subagent'
+  /** R1-3: plan mode — stage an implementation plan as a create proposal
+   * (no implementation write is ever executed). */
+  | 'create_plan'
 
 export interface ToolAction {
   /** Static ToolName OR a dynamic MCP tool (`mcp__<server>__<tool>`). */
@@ -58,7 +65,10 @@ const WRITE_TOOLS = new Set<ToolName>([
   'write_note',
   'append_note',
   'create_note',
-  'create_from_template'
+  'create_from_template',
+  // create_plan stages a proposal too — but it lives ONLY in PLAN_TOOLS, so
+  // no role permission set ever grants it outside plan mode.
+  'create_plan'
 ])
 const READ_TOOLS = new Set<ToolName>(['search', 'read_note', 'list_dir', 'list_templates'])
 
@@ -76,11 +86,16 @@ const ALL_TOOLS: ToolName[] = [
   'append_note',
   'create_note',
   'list_templates',
-  'create_from_template'
+  'create_from_template',
+  'delegate_subagent'
 ]
 
-/** Canonical tool order shared by the fence prompt + schema builders. */
-export const TOOL_ORDER: ToolName[] = [...ALL_TOOLS]
+/**
+ * Canonical tool order shared by the fence prompt + schema builders.
+ * create_plan rides LAST: it lives ONLY in PLAN_TOOLS (never in a role's
+ * permission set), but TOOL_ORDER must know it so plan-mode fences list it.
+ */
+export const TOOL_ORDER: ToolName[] = [...ALL_TOOLS, 'create_plan']
 
 /**
  * Tools each role may call.
@@ -92,16 +107,19 @@ export const TOOL_ORDER: ToolName[] = [...ALL_TOOLS]
  * - general: everything (default)
  */
 export const ROLE_TOOL_PERMISSIONS: Record<AgentRole, ReadonlySet<ToolName>> = {
+  // R1-3: every role may DELEGATE — the delegated sub-agent's OWN role gates
+  // what it can do, and all vault writes are user-approved proposals anyway.
   general: new Set(ALL_TOOLS),
   writer: new Set(ALL_TOOLS),
-  researcher: new Set(['search', 'read_note', 'list_dir', 'list_templates']),
+  researcher: new Set(['search', 'read_note', 'list_dir', 'list_templates', 'delegate_subagent']),
   curator: new Set([
     'search',
     'read_note',
     'list_dir',
     'list_templates',
     'create_note',
-    'append_note'
+    'append_note',
+    'delegate_subagent'
   ]),
   planner: new Set([
     'search',
@@ -109,14 +127,62 @@ export const ROLE_TOOL_PERMISSIONS: Record<AgentRole, ReadonlySet<ToolName>> = {
     'list_dir',
     'list_templates',
     'create_note',
-    'create_from_template'
+    'create_from_template',
+    'delegate_subagent'
   ])
 }
 
-/** Is `tool` callable by `role`? Unknown roles degrade to general (allow). */
-export function isToolAllowed(role: AgentRole, tool: ToolName | string): boolean {
-  const allowed = ROLE_TOOL_PERMISSIONS[role] || ROLE_TOOL_PERMISSIONS.general
-  return allowed.has(tool as ToolName)
+/**
+ * R1-3: tool advertisement/execution options shared by the schema builder,
+ * the fence prompt builder, and the execution gate — so what the model SEES
+ * and what the executor ALLOWS can never drift apart.
+ */
+export interface ToolAdvertOptions {
+  /** Plan mode: only reads + create_plan. Implementation writes (vault AND
+   * MCP) and delegation are blocked — analysis → steps → plan proposal only. */
+  planMode?: boolean
+  /** Sub-agent context: hide delegate_subagent so delegation cannot recurse. */
+  excludeDelegate?: boolean
+}
+
+/**
+ * R1-3: the plan-mode toolset. Read-only plus ONE plan-staging tool — the
+ * model can analyze, enumerate steps, and propose the plan, but it can never
+ * touch implementation writes while planning.
+ */
+export const PLAN_TOOLS: ReadonlySet<ToolName> = new Set<ToolName>([
+  'search',
+  'read_note',
+  'list_dir',
+  'list_templates',
+  'create_plan'
+])
+
+/** Effective allowed toolset for `role` under `opts` (plan mode / sub-agent). */
+export function buildAllowedTools(
+  role: AgentRole,
+  opts: ToolAdvertOptions = {}
+): ReadonlySet<ToolName> {
+  const base = opts.planMode
+    ? PLAN_TOOLS
+    : ROLE_TOOL_PERMISSIONS[role] || ROLE_TOOL_PERMISSIONS.general
+  if (!opts.excludeDelegate) return base
+  const filtered = new Set<ToolName>([...base].filter((t) => t !== 'delegate_subagent'))
+  return filtered
+}
+
+/** Is `tool` callable by `role` under `opts`? Unknown roles degrade to general. */
+export function isToolAllowed(
+  role: AgentRole,
+  tool: ToolName | string,
+  opts: ToolAdvertOptions = {}
+): boolean {
+  return buildAllowedTools(role, opts).has(tool as ToolName)
+}
+
+/** R1-3: is this the dynamic sub-agent delegation tool? (middleware intercept) */
+export function isDelegateTool(name: string): boolean {
+  return name === 'delegate_subagent'
 }
 
 // ── Proposal persistence (P-B2) ────────────────────────────────────────────
@@ -335,7 +401,11 @@ const TOOL_DESCRIPTIONS: Record<ToolName, string> = {
     'create_note — args: { path: string, content: string }  // create new .md (e.g. AI Memory/Topik.md)',
   list_templates: 'list_templates — args: {}',
   create_from_template:
-    'create_from_template — args: { templateId: string, title: string, folder?: string }'
+    'create_from_template — args: { templateId: string, title: string, folder?: string }',
+  delegate_subagent:
+    'delegate_subagent — args: { role: "researcher"|"writer"|"curator"|"planner"|"general", task: string }  // run a focused sub-task as a sub-agent with its own role; returns its output',
+  create_plan:
+    'create_plan — args: { title: string, goal: string, steps: string[], notes?: string }  // plan mode only: stage an implementation plan as a reviewable proposal (no writes executed)'
 }
 
 /**
@@ -347,9 +417,10 @@ const TOOL_DESCRIPTIONS: Record<ToolName, string> = {
  */
 export function buildToolsSystemPrompt(
   role: AgentRole = 'general',
-  mcpTools: { name: string; description: string }[] = []
+  mcpTools: { name: string; description: string }[] = [],
+  opts: ToolAdvertOptions = {}
 ): string {
-  const allowed = ROLE_TOOL_PERMISSIONS[role] || ROLE_TOOL_PERMISSIONS.general
+  const allowed = buildAllowedTools(role, opts)
   const tools = TOOL_ORDER.filter((t) => allowed.has(t))
   const lines = tools.map((t, i) => `${i + 1}. ${TOOL_DESCRIPTIONS[t]}`).join('\n')
   // R0-1: MCP tools ride the same fence protocol as a separate section (their
@@ -559,7 +630,8 @@ function createProposal(
 
 export async function executeTool(
   action: ToolAction,
-  role: AgentRole = 'general'
+  role: AgentRole = 'general',
+  opts: ToolAdvertOptions = {}
 ): Promise<ToolResult> {
   const tool = action.tool
   const args = action.args || {}
@@ -568,17 +640,27 @@ export async function executeTool(
   // their own gate: role-write capability + the server's allowWriteTools
   // toggle. Read-classified MCP tools run for every role. Handled BEFORE the
   // static capability guard, which would otherwise deny every mcp__ name.
+  // R1-3: plan mode blocks MCP writes too — a plan must not touch external
+  // state.
   if (mcpManager.isMcpTool(tool)) {
+    if (opts.planMode && mcpManager.isWriteTool(tool)) {
+      return {
+        tool,
+        ok: false,
+        error: `MCP write tool "${tool}" diblokir — plan mode (write tools off)`
+      }
+    }
     return executeMcpTool(action, role)
   }
 
   // P1 capability guard: even if a denied tool slips past the prompt / schema
   // advertisement (fence hallucination, replayed messages), it must not run.
-  if (!isToolAllowed(role, tool)) {
+  // R1-3: the same plan-mode filter that trims the schemas also gates here.
+  if (!isToolAllowed(role, tool, opts)) {
     return {
       tool,
       ok: false,
-      error: `Tool "${tool}" tidak diizinkan untuk role "${role}"`
+      error: `Tool "${tool}" tidak diizinkan untuk role "${role}"${opts.planMode ? ' (plan mode — write tools off)' : ''}`
     }
   }
 
@@ -757,6 +839,84 @@ export async function executeTool(
         }
       }
 
+      case 'delegate_subagent': {
+        // R1-3: defensive only — AIMiddleware intercepts delegation and runs
+        // the nested sub-agent stream. If a delegate ever reaches the static
+        // executor (e.g. a direct unit call), fail loudly instead of guessing.
+        return {
+          tool,
+          ok: false,
+          error: 'delegate_subagent dijalankan oleh middleware (AIMiddleware.runSubAgent)'
+        }
+      }
+
+      case 'create_plan': {
+        // R1-3: plan mode — stage an implementation plan as a create proposal
+        // under Planning/. Mirrors the create_note lifecycle (dock + diff +
+        // Apply), but the plan document is generated from STRUCTURED steps the
+        // model passes, not free-form content.
+        const title = String(args.title || '')
+          .trim()
+          .replace(/[<>:"/\\|?*]+/g, ' ')
+          .trim()
+          .slice(0, 80)
+        const goal = String(args.goal || '').trim()
+        const stepsRaw = Array.isArray(args.steps) ? args.steps : []
+        const steps = stepsRaw.map((s) => String(s).trim()).filter(Boolean)
+        const notes = String(args.notes || '').trim()
+        if (!goal) return { tool, ok: false, error: 'create_plan: goal wajib diisi' }
+        if (steps.length === 0) {
+          return { tool, ok: false, error: 'create_plan: steps harus berupa array non-kosong' }
+        }
+        const root = workspaceEngine.getState().rootPath
+        if (!root) return { tool, ok: false, error: 'No workspace open' }
+        const safeTitle = title || 'Plan'
+        // Unique path under Planning/ — never clobber an existing plan note
+        let abs: string | null = null
+        let fileName = `${safeTitle}.md`
+        let n = 2
+        while (!abs || fs.existsSync(abs)) {
+          abs = path.resolve(root, 'Planning', fileName)
+          if (!fs.existsSync(abs)) break
+          fileName = `${safeTitle}-${n}.md`
+          n++
+        }
+        if (!abs || !isPathInVault(abs, root)) {
+          return { tool, ok: false, error: 'Invalid Planning path' }
+        }
+        const content = [
+          '---',
+          `title: ${safeTitle}`,
+          'type: plan',
+          `created: ${nowIsoDate()}`,
+          `updated: ${nowIsoDate()}`,
+          'tags: [plan]',
+          'status: proposal',
+          '---',
+          '',
+          '## Tujuan',
+          '',
+          goal,
+          '',
+          '## Langkah',
+          '',
+          ...steps.map((s, i) => `${i + 1}. ${s}`),
+          ...(notes ? ['', '## Catatan', '', notes] : [])
+        ].join('\n')
+        const prop = createProposal('create_note', abs, content, 'create')
+        return {
+          tool,
+          ok: true,
+          proposalId: prop.id,
+          result: {
+            pending: true,
+            proposalId: prop.id,
+            path: prop.relativePath,
+            message: 'Plan proposal dibuat — tinjau sebelum Apply'
+          }
+        }
+      }
+
       case 'create_from_template': {
         const templateId = String(args.templateId || args.template || '')
         const title = String(args.title || 'Untitled')
@@ -902,7 +1062,8 @@ export function applyProposal(
  */
 export function buildToolSchemas(
   role: AgentRole = 'general',
-  mcpTools: ProviderTool[] = []
+  mcpTools: ProviderTool[] = [],
+  opts: ToolAdvertOptions = {}
 ): ProviderTool[] {
   const fn = (
     name: string,
@@ -977,10 +1138,39 @@ export function buildToolSchemas(
         folder: { type: 'string', description: 'Vault-relative destination folder (optional)' }
       },
       ['templateId', 'title']
+    ),
+    fn(
+      'delegate_subagent',
+      "Run a focused sub-task as a sub-agent with its own role. The sub-agent gets that role's toolset (a researcher child can only read; a writer child may propose writes) and returns its final output. Use for a self-contained piece of work the parent does not need to step through.",
+      {
+        role: {
+          type: 'string',
+          enum: ['general', 'writer', 'researcher', 'curator', 'planner'],
+          description: 'Role of the delegated sub-agent'
+        },
+        task: { type: 'string', description: 'Self-contained task for the sub-agent' }
+      },
+      ['role', 'task']
+    ),
+    fn(
+      'create_plan',
+      'Plan mode only: stage an implementation plan as a reviewable proposal (Planning/ note). Call with the FULL analysis already written in your reply, then this tool as the final step.',
+      {
+        title: { type: 'string', description: 'Plan title (filename seed)' },
+        goal: { type: 'string', description: 'What the plan achieves' },
+        steps: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Numbered implementation steps'
+        },
+        notes: { type: 'string', description: 'Optional notes / risks' }
+      },
+      ['title', 'goal', 'steps']
     )
   ]
-  // P1: only advertise tools the role may call (researcher sees reads only).
-  const allowed = ROLE_TOOL_PERMISSIONS[role] || ROLE_TOOL_PERMISSIONS.general
+  // P1 / R1-3: only advertise tools the role may call under the current mode
+  // (researcher sees reads only; plan mode sees reads + create_plan).
+  const allowed = buildAllowedTools(role, opts)
   // R0-1: MCP tools are appended AFTER the static set, already filtered by the
   // manager for role capability + server allowWriteTools.
   return [...all.filter((s) => allowed.has(s.function.name as ToolName)), ...mcpTools]

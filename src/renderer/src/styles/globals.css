@@ -3309,6 +3309,14 @@ html:not([data-theme]) {
   accent-color: var(--color-primary);
 }
 
+/* R1-3: plan-mode toggle — distinct violet accent so "Plan" reads as a mode,
+   not another data toggle. Mirrors the primary-on styling but in plan color. */
+.chat-toggle--plan.on {
+  color: var(--color-violet, var(--color-primary));
+  border-color: color-mix(in srgb, var(--color-violet, var(--color-primary)) 40%, transparent);
+  background: color-mix(in srgb, var(--color-violet, var(--color-primary)) 14%, transparent);
+}
+
 /* Legacy alias used by graph filters */
 .chat-header {
   display: flex;

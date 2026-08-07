@@ -173,7 +173,8 @@ const api = {
     activeFilePath?: string,
     useContext?: boolean,
     agentRole?: string,
-    enableTools?: boolean
+    enableTools?: boolean,
+    planMode?: boolean
   ) => {
     const requestId = Math.random().toString(36).slice(2)
     const channel = `ai:stream:${requestId}`
@@ -193,7 +194,8 @@ const api = {
         activeFilePath,
         useContext,
         agentRole,
-        enableTools
+        enableTools,
+        planMode
       })
       .catch((err: Error) => {
         onChunk({

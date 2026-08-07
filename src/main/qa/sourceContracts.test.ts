@@ -1333,7 +1333,7 @@ describe('AI system contracts', () => {
     const mid = read('src/main/ai/AIMiddleware.ts')
     // Per-invocation tool timeout guards the loop (watchdog only runs BETWEEN rounds)
     expect(has(mid, 'EXECUTE_TOOL_TIMEOUT_MS', 'executeToolWithTimeout')).toBe(true)
-    expect(has(mid, 'executeToolWithTimeout(p.action, agentRole)')).toBe(true)
+    expect(has(mid, 'executeToolWithTimeout(p.action, agentRole, opts)')).toBe(true)
     // Claude/Gemini/Ollama don't report usage → char-based estimate on terminal chunk
     expect(has(mid, 'reportedTokens', 'estimatedTokens')).toBe(true)
     expect(has(mid, 'tokensUsed: reportedTokens ? undefined : estimatedTokens')).toBe(true)
@@ -1372,7 +1372,12 @@ describe('AI system contracts', () => {
     const compat = read('src/main/ai/providers/openaiCompat.ts')
     // Middleware routes by provider capability and sends the native contract
     expect(
-      has(mid, 'capabilities.toolCalling', 'buildToolSchemas(agentRole)', "tool_choice = 'auto'")
+      has(
+        mid,
+        'capabilities.toolCalling',
+        'buildToolSchemas(agentRole, undefined, opts)',
+        "tool_choice = 'auto'"
+      )
     ).toBe(true)
     // OpenAI-compat providers consume request.tools and parse stream deltas
     for (const p of ['OpenAI', 'Grok', 'OpenRouter']) {
@@ -1451,8 +1456,8 @@ describe('AI system contracts', () => {
     expect(has(tools, 'export function buildToolSchemas(')).toBe(true)
     // Middleware routes role → executeTool guard + per-role advertisement
     const mid = read('src/main/ai/AIMiddleware.ts')
-    expect(has(mid, 'executeToolWithTimeout(p.action, agentRole)')).toBe(true)
-    expect(has(mid, 'buildToolSchemas(agentRole)', 'buildToolsSystemPrompt(agentRole)')).toBe(true)
+    expect(has(mid, 'executeToolWithTimeout(p.action, agentRole, opts)')).toBe(true)
+    expect(has(mid, 'buildToolSchemas(agentRole, undefined, opts)')).toBe(true)
     // Sequential pipeline: stages with roles, suppression of intermediate done
     expect(
       has(
@@ -1600,6 +1605,51 @@ describe('AI system contracts', () => {
     // Event log: failover kind + target field exist
     const log = read('src/main/ai/AIEventLog.ts')
     expect(has(log, "| 'failover'", 'target?: string')).toBe(true)
+    // Settings UI: drag-reorder chain persisted to settings.aiFailoverOrder —
+    // helpers exclude active provider + Ollama, save/reset write the setting
+    const ui = read('src/renderer/src/components/settings/failoverOrder.ts')
+    expect(has(ui, 'export function buildFailoverCandidates', 'export function moveInOrder')).toBe(
+      true
+    )
+    expect(has(ui, 'id !== activeId', 'FAILOVER_EXCLUDED')).toBe(true)
+    const view = read('src/renderer/src/components/settings/SettingsView.tsx')
+    expect(has(view, 'aiFailoverOrder', 'saveFailoverOrder', 'failover-row--active')).toBe(true)
+  })
+  it('R1-3 plan mode + sub-agent delegation: tools, gate, middleware, IPC, UI wired', () => {
+    const tools = read('src/main/ai/AgentTools.ts')
+    // Tool names + plan-mode toolset + shared gate between advertise & execute
+    expect(has(tools, "| 'delegate_subagent'", "| 'create_plan'", 'isDelegateTool')).toBe(true)
+    expect(
+      has(
+        tools,
+        'export const PLAN_TOOLS',
+        'export function buildAllowedTools',
+        'opts: ToolAdvertOptions',
+        'excludeDelegate'
+      )
+    ).toBe(true)
+    expect(has(tools, "case 'create_plan':", 'Planning', 'steps harus berupa array')).toBe(true)
+    expect(has(tools, "case 'delegate_subagent':", 'dijalankan oleh middleware')).toBe(true)
+    // Middleware: runSubAgent nested stream (role-scoped, no recursion), delegate
+    // interception in the tool loop, plan-mode contract in the system prompt
+    const mid = read('src/main/ai/AIMiddleware.ts')
+    expect(has(mid, 'private async runSubAgent', 'excludeDelegate: true', 'PLAN MODE — R1-3')).toBe(
+      true
+    )
+    expect(has(mid, 'isDelegateTool(p.action.tool)', 'delegates.length === 0')).toBe(true)
+    expect(has(mid, 'buildToolSchemas(agentRole, undefined, opts)')).toBe(true)
+    // IPC + preload pass planMode through to the stream
+    expect(read('src/main/ipc/handlers/ai.ts').includes('Boolean(planMode)')).toBe(true)
+    const pre = read('src/preload/index.ts')
+    expect(has(pre, 'planMode?: boolean')).toBe(true)
+    // Renderer: plan toggle in the composer + chatStore wiring + /plan arms it
+    expect(read('src/renderer/src/store/chatStore.ts').includes('planMode')).toBe(true)
+    expect(read('src/renderer/src/components/chat/ChatPanel.tsx').includes('setPlanMode')).toBe(
+      true
+    )
+    expect(
+      read('src/renderer/src/components/chat/ChatPanel.tsx').includes("cmd.name === '/plan'")
+    ).toBe(true)
   })
   it('R0-1 MCP client: manager + middleware + IPC + preload + Settings wired end-to-end', () => {
     const mgr = read('src/main/mcp/McpClientManager.ts')
@@ -1627,8 +1677,8 @@ describe('AI system contracts', () => {
       has(
         mid,
         "from '../mcp/McpClientManager'",
-        'mcpManager.getToolSchemas(roleCanWriteMCP(agentRole))',
-        'mcpManager.getFenceDocs(roleCanWriteMCP(agentRole))'
+        'mcpManager.getToolSchemas(opts.planMode ? false : roleCanWriteMCP(agentRole))',
+        'mcpManager.getFenceDocs(toolOptions.planMode ? false : roleCanWriteMCP(agentRole))'
       )
     ).toBe(true)
     // IPC: four channels registered + wired into the registrar

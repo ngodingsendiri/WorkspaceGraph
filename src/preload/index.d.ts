@@ -284,7 +284,8 @@ export interface API {
     activeFilePath?: string,
     useContext?: boolean,
     agentRole?: string,
-    enableTools?: boolean
+    enableTools?: boolean,
+    planMode?: boolean
   ) => string
   streamAIPipeline: (
     request: any,

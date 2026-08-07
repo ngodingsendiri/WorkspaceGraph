@@ -234,6 +234,7 @@ export const ChatPanel: React.FC = () => {
     isGenerating,
     useContext,
     enableTools,
+    planMode,
     pendingProposals,
     lastToolStatus,
     lastKernelStatus,
@@ -243,6 +244,7 @@ export const ChatPanel: React.FC = () => {
     setAgentRole,
     setUseContext,
     setEnableTools,
+    setPlanMode,
     sendMessage,
     cancelStream,
     clearHistory,
@@ -560,6 +562,9 @@ export const ChatPanel: React.FC = () => {
 
   const selectSlash = (cmd: SlashCommand): void => {
     fillComposer(cmd)
+    // R1-3: /plan arms plan mode — write tools off, analysis → steps →
+    // create_plan proposal. The toggle stays on so the user sees it is armed.
+    if (cmd.name === '/plan') setPlanMode(true)
   }
 
   // P2-5: global CommandPalette (Ctrl+P) slash commands → composer. The panel
@@ -567,10 +572,18 @@ export const ChatPanel: React.FC = () => {
   // and consumed here — either by this listener (panel already mounted) or by
   // the mount catch-up below (panel was hidden when the palette fired).
   useEffect(() => {
+    // R1-3: /plan arms plan mode wherever it is selected (composer popover AND
+    // the global Ctrl+P palette) so both paths behave identically.
+    const armPlanIfNeeded = (cmd: SlashCommand): void => {
+      if (cmd.name === '/plan') setPlanMode(true)
+    }
     const applyGlobal = (name: string): void => {
       consumeComposerCommand()
       const cmd = findSlashCommand(name)
-      if (cmd) fillComposer(cmd)
+      if (cmd) {
+        fillComposer(cmd)
+        armPlanIfNeeded(cmd)
+      }
     }
     const onCmd = (e: Event): void => {
       applyGlobal(String((e as CustomEvent<string>).detail ?? ''))
@@ -580,10 +593,13 @@ export const ChatPanel: React.FC = () => {
     // One-shot mount catch-up from the bridge stash (same pattern as the
     // fetch-on-toggle hydration above), not an event-driven setState.
     const pending = consumeComposerCommand()
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    if (pending) fillComposer(pending)
+    if (pending) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      fillComposer(pending)
+      armPlanIfNeeded(pending)
+    }
     return () => window.removeEventListener('wg:composer-command', onCmd)
-  }, [fillComposer])
+  }, [fillComposer, setPlanMode])
 
   const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>): void => {
     const v = e.target.value
@@ -1503,6 +1519,17 @@ export const ChatPanel: React.FC = () => {
                   onChange={(e) => setEnableTools(e.target.checked)}
                 />
                 Tools
+              </label>
+              <label
+                className={`chat-toggle chat-toggle--plan ${planMode ? 'on' : ''}`}
+                title="Plan mode (R1-3): write tools diblokir — model hanya menganalisis, menyusun langkah, lalu create_plan jadi proposal yang bisa ditinjau"
+              >
+                <input
+                  type="checkbox"
+                  checked={planMode}
+                  onChange={(e) => setPlanMode(e.target.checked)}
+                />
+                Plan
               </label>
             </div>
           </div>

@@ -22,6 +22,7 @@ import {
 } from './providers/BaseProvider'
 import { workspaceEngine } from '../engine/WorkspaceEngine'
 import { mcpManager } from '../mcp/McpClientManager'
+import type { AgentRole } from './ContextEngine'
 
 /** R0-1: compact real MCP server (stdio) for the middleware integration test. */
 const MCP_SERVER_SRC = `
@@ -128,7 +129,7 @@ describe('AIMiddleware.runStreamInner (P-B1)', () => {
   async function run(
     mid: AIMiddleware,
     requestId: string,
-    opts: { enableTools?: boolean } = {}
+    opts: { enableTools?: boolean; planMode?: boolean; role?: AgentRole } = {}
   ): Promise<StreamEvent[]> {
     const chunks: StreamEvent[] = []
     await mid.streamMessage(
@@ -136,9 +137,10 @@ describe('AIMiddleware.runStreamInner (P-B1)', () => {
       (c) => chunks.push(c),
       undefined,
       false, // useContext off — keep the test off the context pipeline
-      'general',
+      opts.role ?? 'general',
       opts.enableTools ?? true,
-      requestId
+      requestId,
+      opts.planMode ?? false
     )
     return chunks
   }
@@ -167,7 +169,7 @@ describe('AIMiddleware.runStreamInner (P-B1)', () => {
     // Round 1 request carries the native tool contract — and NO fence prompt
     expect(provider.calls).toHaveLength(2)
     const first = provider.calls[0]
-    expect(first.tools).toHaveLength(8)
+    expect(first.tools).toHaveLength(9)
     expect(first.tools?.[0].function.name).toBe('search')
     expect(first.tool_choice).toBe('auto')
     expect(first.systemPrompt).not.toContain('wg-action')
@@ -202,7 +204,7 @@ describe('AIMiddleware.runStreamInner (P-B1)', () => {
     const chunks = await run(mid, 'req-native-none')
 
     expect(provider.calls).toHaveLength(1)
-    expect(provider.calls[0].tools).toHaveLength(8)
+    expect(provider.calls[0].tools).toHaveLength(9)
     const done = chunks.filter((c) => c.done).pop()
     expect(done?.done).toBe(true)
     expect(chunks.some((c) => c.content.includes('No tools needed.'))).toBe(true)
@@ -898,7 +900,8 @@ describe('AIMiddleware.runStreamInner (P-B1)', () => {
       'search',
       'read_note',
       'list_dir',
-      'list_templates'
+      'list_templates',
+      'delegate_subagent'
     ])
     // Fence prompt (if used) would also be role-filtered — no writes advertised
     expect(sent.systemPrompt).not.toContain('write_note — args')
@@ -1005,10 +1008,11 @@ describe('AIMiddleware.runStreamInner (P-B1)', () => {
       'search',
       'read_note',
       'list_dir',
-      'list_templates'
+      'list_templates',
+      'delegate_subagent'
     ])
     expect(writing.systemPrompt).toContain('Stage 2/2')
-    expect(writing.tools?.map((t) => t.function.name)).toHaveLength(8)
+    expect(writing.tools?.map((t) => t.function.name)).toHaveLength(9)
     // Stage 2's messages carry the stage-1 summary as handoff context
     const stage2Last = writing.messages[writing.messages.length - 1]
     expect(stage2Last.role).toBe('user')
@@ -1354,6 +1358,252 @@ describe('AIMiddleware.runStreamInner (P-B1)', () => {
     expect(provB.calls).toHaveLength(0)
     const done = chunks.filter((c) => c.done).pop()
     expect(done?.content).toContain('cancelled')
+  })
+
+  // ── R1-3 plan mode + sub-agent delegation ──────────────────────────────
+
+  it('R1-3 plan mode: reads + create_plan advertised, create_plan stages a Planning proposal, stream stops', async () => {
+    const provider = new ScriptedProvider(true)
+    const mid = makeMid(provider)
+    provider.script.push((_req, onChunk) => {
+      onChunk({ content: 'Analisis: perlu API baru.', done: false, model: 'fake' })
+      onChunk({
+        content: '',
+        done: true,
+        model: 'fake',
+        toolCalls: [
+          {
+            id: 'p1',
+            name: 'create_plan',
+            arguments: JSON.stringify({
+              title: 'Rombak API',
+              goal: 'Auto-discovery model',
+              steps: ['Baca provider', 'Tulis modul']
+            })
+          }
+        ]
+      })
+    })
+
+    const chunks = await run(mid, 'req-plan', { planMode: true })
+
+    // The native tools advertise reads + create_plan — never write_note / delegate
+    const sent = provider.calls[0]
+    expect(sent.tools?.map((t) => t.function.name)).toEqual([
+      'search',
+      'read_note',
+      'list_dir',
+      'list_templates',
+      'create_plan'
+    ])
+    // The plan-mode behavioral contract rides the system prompt
+    expect(sent.systemPrompt).toContain('PLAN MODE')
+    // The proposal lands in the dock; the write-only round stops the stream
+    const done = chunks.filter((c) => c.done).pop()
+    expect(done?.proposals?.length).toBe(1)
+    expect(done?.proposals?.[0].relativePath).toContain('Planning/Rombak API.md')
+    expect(provider.calls).toHaveLength(1)
+    expect(chunks.some((c) => c.content.includes('Analisis'))).toBe(true)
+  })
+
+  it('R1-3 plan mode: a fence write_note attempt is denied with a plan-mode error', async () => {
+    const provider = new ScriptedProvider(false)
+    const mid = makeMid(provider)
+    const fence =
+      '```wg-action\n{"tool":"write_note","args":{"path":"Knowledge/X.md","content":"# X"}}\n```'
+    provider.script.push((_req, onChunk) => {
+      onChunk({ content: fence, done: false, model: 'fake' })
+      onChunk({ content: '', done: true, model: 'fake' })
+    })
+
+    const chunks = await run(mid, 'req-plan-deny', { planMode: true })
+
+    const err = chunks.find((c) => c.toolRun?.status === 'error')
+    expect(err?.toolRun?.tool).toBe('write_note')
+    expect(err?.toolRun?.detail).toContain('plan mode')
+    expect(fs.existsSync(path.join(vault, 'Knowledge', 'X.md'))).toBe(false)
+  })
+
+  it('R1-3 delegate: sub-agent runs a nested stream with its role, output feeds the parent', async () => {
+    writeVaultNote('Knowledge/Note.md', '# Note\n\nFakta penting X.')
+    const provider = new ScriptedProvider(true)
+    const mid = makeMid(provider)
+    // Parent round 0: delegate a researcher sub-task
+    provider.script.push((_req, onChunk) => {
+      onChunk({ content: 'Saya delegasikan riset.', done: false, model: 'fake' })
+      onChunk({
+        content: '',
+        done: true,
+        model: 'fake',
+        toolCalls: [
+          {
+            id: 'd1',
+            name: 'delegate_subagent',
+            arguments: JSON.stringify({
+              role: 'researcher',
+              task: 'Baca Knowledge/Note.md lalu ringkas'
+            })
+          }
+        ]
+      })
+    })
+    // Nested sub-agent (researcher role): reads the note
+    provider.script.push((_req, onChunk) => {
+      onChunk({ content: '', done: false, model: 'fake' })
+      onChunk({
+        content: '',
+        done: true,
+        model: 'fake',
+        toolCalls: [{ id: 'r1', name: 'read_note', arguments: '{"path":"Knowledge/Note.md"}' }]
+      })
+    })
+    // Sub-agent round 1: answers with its result
+    provider.script.push((_req, onChunk) => {
+      onChunk({ content: 'SUBAGENT: X adalah Y.', done: false, model: 'fake' })
+      onChunk({ content: '', done: true, model: 'fake' })
+    })
+    // Parent round 1: synthesizes using the delegate result
+    provider.script.push((_req, onChunk) => {
+      onChunk({ content: 'KESIMPULAN dari sub-agent: X adalah Y.', done: false, model: 'fake' })
+      onChunk({ content: '', done: true, model: 'fake' })
+    })
+
+    const chunks = await run(mid, 'req-delegate')
+
+    // 4 provider calls: parent r0, sub-agent r0+r1, parent r1
+    expect(provider.calls).toHaveLength(4)
+    // The sub-agent ran with the researcher role + NO delegate tool (no recursion)
+    const sub = provider.calls[1]
+    expect(sub.systemPrompt).toContain('Sub-agent')
+    expect(sub.systemPrompt).toContain('researcher')
+    expect(sub.tools?.map((t) => t.function.name)).toEqual([
+      'search',
+      'read_note',
+      'list_dir',
+      'list_templates'
+    ])
+    // The delegate result (sub-agent output) came back to the parent as a tool msg
+    const parentRound2 = provider.calls[3]
+    const toolMsg = parentRound2.messages.find((m) => m.role === 'tool')
+    expect(String(toolMsg?.content)).toContain('SUBAGENT: X adalah Y')
+    // The final answer includes the sub-agent's output
+    expect(chunks.some((c) => c.content.includes('KESIMPULAN dari sub-agent: X adalah Y'))).toBe(
+      true
+    )
+    // The tool-run trail shows the delegate as a visible ok run
+    expect(
+      chunks.some((c) => c.toolRun?.tool === 'delegate_subagent' && c.toolRun.status === 'ok')
+    ).toBe(true)
+  })
+
+  it('R1-3 delegate: bad role or empty task fails the tool without a nested stream', async () => {
+    const provider = new ScriptedProvider(true)
+    const mid = makeMid(provider)
+    provider.script.push((_req, onChunk) => {
+      onChunk({ content: '', done: false, model: 'fake' })
+      onChunk({
+        content: '',
+        done: true,
+        model: 'fake',
+        toolCalls: [
+          {
+            id: 'd1',
+            name: 'delegate_subagent',
+            arguments: JSON.stringify({ role: 'mage', task: 'x' })
+          }
+        ]
+      })
+    })
+    provider.script.push((_req, onChunk) => {
+      onChunk({ content: 'Selesai.', done: false, model: 'fake' })
+      onChunk({ content: '', done: true, model: 'fake' })
+    })
+
+    const chunks = await run(mid, 'req-delegate-bad')
+
+    const err = chunks.find((c) => c.toolRun?.status === 'error')
+    expect(err?.toolRun?.tool).toBe('delegate_subagent')
+    expect(err?.toolRun?.detail).toContain('role tidak dikenal')
+    // Only the parent's two rounds ran — no nested stream for a bad role
+    expect(provider.calls).toHaveLength(2)
+  })
+
+  it("R1-3 delegate: a writer sub-agent's proposal bubbles to the parent dock", async () => {
+    const provider = new ScriptedProvider(true)
+    const mid = makeMid(provider)
+    // Parent round 0: delegate the writing to a writer child
+    provider.script.push((_req, onChunk) => {
+      onChunk({ content: '', done: false, model: 'fake' })
+      onChunk({
+        content: '',
+        done: true,
+        model: 'fake',
+        toolCalls: [
+          {
+            id: 'd1',
+            name: 'delegate_subagent',
+            arguments: JSON.stringify({
+              role: 'writer',
+              task: 'Buat catatan ringkasan di Knowledge/'
+            })
+          }
+        ]
+      })
+    })
+    // Sub-agent (writer): create_note → write-only round stops the sub stream
+    provider.script.push((_req, onChunk) => {
+      onChunk({ content: '', done: false, model: 'fake' })
+      onChunk({
+        content: '',
+        done: true,
+        model: 'fake',
+        toolCalls: [
+          {
+            id: 'w1',
+            name: 'create_note',
+            arguments: '{"path":"Knowledge/Sub.md","content":"# Sub"}'
+          }
+        ]
+      })
+    })
+    // Parent round 1: synthesizes
+    provider.script.push((_req, onChunk) => {
+      onChunk({ content: 'SELESAI.', done: false, model: 'fake' })
+      onChunk({ content: '', done: true, model: 'fake' })
+    })
+
+    const chunks = await run(mid, 'req-delegate-prop')
+
+    // The proposal created INSIDE the sub-agent reached the parent dock
+    const done = chunks.filter((c) => c.done).pop()
+    expect(done?.proposals?.length).toBe(1)
+    expect(done?.proposals?.[0].relativePath).toContain('Knowledge/Sub.md')
+    // The sub proposal was also surfaced live as a chunk during the round
+    expect(chunks.some((c) => (c.proposals?.length ?? 0) > 0 && !c.done)).toBe(true)
+    expect(provider.calls).toHaveLength(3)
+  })
+
+  it('R1-3 plan mode: a delegate attempt is denied without spawning a sub-agent', async () => {
+    const provider = new ScriptedProvider(false)
+    const mid = makeMid(provider)
+    const fence =
+      '```wg-action\n{"tool":"delegate_subagent","args":{"role":"writer","task":"x"}}\n```'
+    provider.script.push((_req, onChunk) => {
+      onChunk({ content: fence, done: false, model: 'fake' })
+      onChunk({ content: '', done: true, model: 'fake' })
+    })
+    provider.script.push((_req, onChunk) => {
+      onChunk({ content: 'Selesai.', done: false, model: 'fake' })
+      onChunk({ content: '', done: true, model: 'fake' })
+    })
+
+    const chunks = await run(mid, 'req-plan-delegate', { planMode: true })
+
+    // The delegate was blocked at the gate — no nested stream ran
+    const err = chunks.find((c) => c.toolRun?.status === 'error')
+    expect(err?.toolRun?.tool).toBe('delegate_subagent')
+    expect(err?.toolRun?.detail).toContain('plan mode')
+    expect(provider.calls).toHaveLength(2)
   })
 
   // ── R0-1 MCP integration ────────────────────────────────────────────────

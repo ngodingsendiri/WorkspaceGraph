@@ -188,7 +188,8 @@ export function registerAIHandlers(): void {
         activeFilePath,
         useContext,
         agentRole,
-        enableTools
+        enableTools,
+        planMode
       }: {
         requestId: string
         request: unknown
@@ -196,6 +197,7 @@ export function registerAIHandlers(): void {
         useContext?: boolean
         agentRole?: string
         enableTools?: boolean
+        planMode?: boolean
       }
     ) => {
       const perms = readPermissions(workspaceEngine.getSettings())
@@ -224,7 +226,8 @@ export function registerAIHandlers(): void {
           useContext,
           (agentRole as never) || 'general',
           toolsAllowed,
-          requestId
+          requestId,
+          Boolean(planMode)
         )
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)

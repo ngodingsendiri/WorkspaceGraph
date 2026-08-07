@@ -97,6 +97,8 @@ export interface ChatStore {
   isGenerating: boolean
   useContext: boolean
   enableTools: boolean
+  /** R1-3: plan mode — write tools blocked, only analysis → steps → create_plan. */
+  planMode: boolean
   pendingProposals: WriteProposalItem[]
   conversationId: string | null
   activeStreamId: string | null
@@ -111,6 +113,8 @@ export interface ChatStore {
   setAgentRole: (role: AgentRole) => void
   setUseContext: (use: boolean) => void
   setEnableTools: (use: boolean) => void
+  /** R1-3: toggle plan mode for the next stream (analysis → plan proposal). */
+  setPlanMode: (on: boolean) => void
   sendMessage: (text: string, activeFilePath?: string, images?: ImageAttachment[]) => Promise<void>
   cancelStream: () => Promise<void>
   clearHistory: () => void
@@ -217,6 +221,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   isGenerating: false,
   useContext: true,
   enableTools: true,
+  planMode: false,
   pendingProposals: [],
   conversationId: null,
   activeStreamId: null,
@@ -276,6 +281,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   setAgentRole: (role: AgentRole) => set({ agentRole: role }),
   setUseContext: (use: boolean) => set({ useContext: use }),
   setEnableTools: (use: boolean) => set({ enableTools: use }),
+  setPlanMode: (on: boolean) => set({ planMode: on }),
   setFollowUp: (messageId: string | null) => set({ followUpMessageId: messageId }),
 
   ensureConversationId: async () => {
@@ -323,7 +329,8 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       lastToolStatus: ''
     })
 
-    const { selectedModelId, activeProviderId, useContext, agentRole, enableTools } = get()
+    const { selectedModelId, activeProviderId, useContext, agentRole, enableTools, planMode } =
+      get()
     // P3-1: follow-up mode — attach the source message's proposal list to the
     // API prompt (transcript keeps the user's clean text). Consumed here, so a
     // second send without re-arming is a plain question again.
@@ -428,7 +435,8 @@ export const useChatStore = create<ChatStore>((set, get) => ({
         activeFilePath,
         useContext,
         agentRole,
-        enableTools
+        enableTools,
+        planMode
       )
       set({ activeStreamId: streamId })
     } catch (_err) {
