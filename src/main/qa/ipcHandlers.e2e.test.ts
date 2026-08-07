@@ -20,14 +20,19 @@ import { tmpdir } from 'os'
  */
 const state = vi.hoisted(() => {
   const handlers = new Map<string, (...args: unknown[]) => unknown>()
+  // WorkspaceEngine resolves userData at CONSTRUCTION (import time), so the
+  // path must be computable HERE (hoisted, before any import binding exists —
+  // no fs/path/os available). A timestamp + random suffix makes it unique per
+  // run: two e2e runs can never share settings.json/recent.json, so a second
+  // e2e file added later stays isolated. The engine mkdirs the dir itself on
+  // construction; afterAll removes it via state.userDataDir.
+  const userDataDir = `/tmp/wg-e2e-userdata-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
   return {
     handlers,
+    userDataDir,
     electronMock: {
       app: {
-        // WorkspaceEngine resolves userData at CONSTRUCTION (import time), so
-        // this must be a fixed non-null path — recent.json lands here and is
-        // cleaned up in afterAll.
-        getPath: (name: string) => (name === 'userData' ? '/tmp/wg-e2e-userdata' : '/mock/path')
+        getPath: (name: string) => (name === 'userData' ? userDataDir : '/mock/path')
       },
       ipcMain: {
         handle: (channel: string, fn: (...args: unknown[]) => unknown) => {
@@ -101,7 +106,7 @@ describe('IPC handlers end-to-end', () => {
       /* ignore */
     }
     try {
-      fs.rmSync('/tmp/wg-e2e-userdata', { recursive: true, force: true })
+      fs.rmSync(state.userDataDir, { recursive: true, force: true })
     } catch {
       /* ignore */
     }
