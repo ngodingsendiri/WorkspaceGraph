@@ -12,6 +12,7 @@ import { markdownEngine } from '../engine/MarkdownEngine'
 import { templateEngine } from '../engine/TemplateEngine'
 import { isPathInVault } from '../security/PathSandbox'
 import { renderPrompt } from './PromptRegistry'
+import { mcpManager } from '../mcp/McpClientManager'
 import type { AgentRole } from './ContextEngine'
 import type { AIToolCall, ProviderTool } from './providers/BaseProvider'
 
@@ -26,12 +27,13 @@ export type ToolName =
   | 'list_templates'
 
 export interface ToolAction {
-  tool: ToolName
+  /** Static ToolName OR a dynamic MCP tool (`mcp__<server>__<tool>`). */
+  tool: string
   args: Record<string, unknown>
 }
 
 export interface ToolResult {
-  tool: ToolName
+  tool: string
   ok: boolean
   result?: unknown
   error?: string
@@ -185,11 +187,25 @@ function removeProposalFile(id: string): void {
 }
 
 export function isWriteTool(name: string): boolean {
-  return WRITE_TOOLS.has(name as ToolName)
+  // R0-1: MCP tools are classified by their server annotations — anything not
+  // explicitly `readOnlyHint: true` is treated as a write (safe default).
+  return WRITE_TOOLS.has(name as ToolName) || mcpManager.isWriteTool(name)
 }
 
 export function isReadTool(name: string): boolean {
-  return READ_TOOLS.has(name as ToolName)
+  return READ_TOOLS.has(name as ToolName) || mcpManager.isReadTool(name)
+}
+
+/**
+ * R0-1 — can `role` call MCP WRITE tools? Mirrors the vault-write gate: only
+ * roles whose tool permission set includes at least one write tool may touch
+ * external state through MCP (researcher never does). Used BOTH by the
+ * execution gate and by the schema/fence advertisers so a researcher never
+ * even sees MCP write tools.
+ */
+export function roleCanWriteMCP(role: AgentRole): boolean {
+  const allowed = ROLE_TOOL_PERMISSIONS[role] || ROLE_TOOL_PERMISSIONS.general
+  return [...allowed].some((t) => WRITE_TOOLS.has(t as ToolName))
 }
 
 export function getProposal(id: string): WriteProposal | undefined {
@@ -329,11 +345,24 @@ const TOOL_DESCRIPTIONS: Record<ToolName, string> = {
  * tool list injected into the {{tools}} placeholder — so the whole tools
  * prompt is a versioned, per-vault editable asset.
  */
-export function buildToolsSystemPrompt(role: AgentRole = 'general'): string {
+export function buildToolsSystemPrompt(
+  role: AgentRole = 'general',
+  mcpTools: { name: string; description: string }[] = []
+): string {
   const allowed = ROLE_TOOL_PERMISSIONS[role] || ROLE_TOOL_PERMISSIONS.general
   const tools = TOOL_ORDER.filter((t) => allowed.has(t))
   const lines = tools.map((t, i) => `${i + 1}. ${TOOL_DESCRIPTIONS[t]}`).join('\n')
-  return (renderPrompt('toolsHead', { tools: lines }) + renderPrompt('toolsTail')).trim()
+  // R0-1: MCP tools ride the same fence protocol as a separate section (their
+  // names already encode the server via the mcp__ prefix).
+  const mcpSection =
+    mcpTools.length > 0
+      ? `\n\nMCP tools (external servers — call with the same fence format):\n${mcpTools
+          .map((t, i) => `${lines ? i + tools.length + 1 : i + 1}. ${t.name} — ${t.description}`)
+          .join('\n')}`
+      : ''
+  return (
+    renderPrompt('toolsHead', { tools: lines + mcpSection }) + renderPrompt('toolsTail')
+  ).trim()
 }
 
 /** Fence instructions for the full (general) toolset — kept for compatibility. */
@@ -534,6 +563,14 @@ export async function executeTool(
 ): Promise<ToolResult> {
   const tool = action.tool
   const args = action.args || {}
+
+  // R0-1: MCP tools are dynamic (not in the static ToolName set) and carry
+  // their own gate: role-write capability + the server's allowWriteTools
+  // toggle. Read-classified MCP tools run for every role. Handled BEFORE the
+  // static capability guard, which would otherwise deny every mcp__ name.
+  if (mcpManager.isMcpTool(tool)) {
+    return executeMcpTool(action, role)
+  }
 
   // P1 capability guard: even if a denied tool slips past the prompt / schema
   // advertisement (fence hallucination, replayed messages), it must not run.
@@ -760,8 +797,43 @@ export async function executeTool(
       }
 
       default:
-        return { tool: tool as ToolName, ok: false, error: `Unknown tool: ${tool}` }
+        return { tool, ok: false, error: `Unknown tool: ${tool}` }
     }
+  } catch (err) {
+    return {
+      tool,
+      ok: false,
+      error: err instanceof Error ? err.message : String(err)
+    }
+  }
+}
+
+/**
+ * R0-1 — route an MCP tool call through the manager with the full gate:
+ * 1. write-classified tools need the role's write capability;
+ * 2. write-classified tools need the server's allowWriteTools toggle;
+ * 3. only then does the network call happen (timeout-bounded in the manager).
+ */
+async function executeMcpTool(action: ToolAction, role: AgentRole): Promise<ToolResult> {
+  const tool = action.tool
+  const args = action.args || {}
+  try {
+    if (mcpManager.isWriteTool(tool) && !roleCanWriteMCP(role)) {
+      return {
+        tool,
+        ok: false,
+        error: `MCP write tool "${tool}" tidak diizinkan untuk role "${role}"`
+      }
+    }
+    if (mcpManager.isWriteTool(tool) && !mcpManager.isWriteAllowed(tool)) {
+      return {
+        tool,
+        ok: false,
+        error: `MCP write tool "${tool}" diblokir — aktifkan 'allow write tools' untuk server itu di Settings → MCP`
+      }
+    }
+    const result = await mcpManager.callTool(tool, args)
+    return { tool, ok: true, result }
   } catch (err) {
     return {
       tool,
@@ -828,7 +900,10 @@ export function applyProposal(
  * instead of emitting wg-action fences. Keep descriptions aligned with
  * TOOLS_SYSTEM_PROMPT so both protocols teach the same tool semantics.
  */
-export function buildToolSchemas(role: AgentRole = 'general'): ProviderTool[] {
+export function buildToolSchemas(
+  role: AgentRole = 'general',
+  mcpTools: ProviderTool[] = []
+): ProviderTool[] {
   const fn = (
     name: string,
     description: string,
@@ -906,7 +981,9 @@ export function buildToolSchemas(role: AgentRole = 'general'): ProviderTool[] {
   ]
   // P1: only advertise tools the role may call (researcher sees reads only).
   const allowed = ROLE_TOOL_PERMISSIONS[role] || ROLE_TOOL_PERMISSIONS.general
-  return all.filter((s) => allowed.has(s.function.name as ToolName))
+  // R0-1: MCP tools are appended AFTER the static set, already filtered by the
+  // manager for role capability + server allowWriteTools.
+  return [...all.filter((s) => allowed.has(s.function.name as ToolName)), ...mcpTools]
 }
 
 /**

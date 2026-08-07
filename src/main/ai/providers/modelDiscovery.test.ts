@@ -1,6 +1,10 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import {
   fetchOpenAICompatModels,
+  chatBaseCandidates,
+  isVersionedBase,
+  shouldAdoptChatBase,
+  discoverOpenAICompat,
   fetchGeminiModels,
   fetchAnthropicModels,
   fetchOpenRouterModels,
@@ -44,6 +48,73 @@ describe('modelDiscovery (runtime model auto-detection)', () => {
     })
     expect(models.map((m) => m.id)).toEqual(['gpt-4o', 'gpt-4o-mini', 'o3-mini'])
     expect(models[0].ownedBy).toBe('openai')
+  })
+
+  it('chatBaseCandidates covers bare domain, already-versioned, and pasted /models URL', () => {
+    expect(chatBaseCandidates('https://host')).toEqual([
+      'https://host',
+      'https://host/v1',
+      'https://host/api/v1'
+    ])
+    expect(chatBaseCandidates('https://host/v1')).toEqual(['https://host/v1'])
+    expect(chatBaseCandidates('https://host/api/v1')).toEqual(['https://host/api/v1'])
+    // Full models URL pasted → stripped to the chat base (still versioned)
+    expect(chatBaseCandidates('https://host/v1/models')).toEqual(['https://host/v1'])
+    expect(chatBaseCandidates('https://host/api/v1/models/')).toEqual(['https://host/api/v1'])
+    // Query/hash fragments dropped before probing (pasted signed URLs)
+    expect(chatBaseCandidates('https://host/v1?signature=abc')).toEqual(['https://host/v1'])
+    expect(chatBaseCandidates('https://host/models#frag')).toEqual([
+      'https://host',
+      'https://host/v1',
+      'https://host/api/v1'
+    ])
+    expect(chatBaseCandidates('')).toEqual([])
+  })
+
+  it('isVersionedBase detects /vN and /api/vN suffixes only', () => {
+    expect(isVersionedBase('https://host/v1')).toBe(true)
+    expect(isVersionedBase('https://host/api/v2')).toBe(true)
+    expect(isVersionedBase('https://host/v1/')).toBe(true) // trailing slash ok
+    expect(isVersionedBase('https://host')).toBe(false)
+    expect(isVersionedBase('https://host/vault')).toBe(false) // not a version segment
+    expect(isVersionedBase('')).toBe(false)
+  })
+
+  it('shouldAdoptChatBase: single adoption rule shared by listModels + chat guard', () => {
+    expect(shouldAdoptChatBase('https://host', { chatBase: 'https://host/v1' })).toBe(
+      'https://host/v1'
+    )
+    // Same base already → no adoption (keeps the SDK client untouched)
+    expect(shouldAdoptChatBase('https://host/v1', { chatBase: 'https://host/v1' })).toBeNull()
+    // Failed discovery → never adopt a guessed base
+    expect(shouldAdoptChatBase('https://host', null)).toBeNull()
+  })
+
+  it('discoverOpenAICompat tries candidates in order and returns the working base', async () => {
+    const calls: string[] = []
+    globalThis.fetch = (async (url: unknown) => {
+      calls.push(String(url))
+      const ok = String(url).includes('host/v1/models')
+      return {
+        ok,
+        json: async () => (ok ? { data: [{ id: 'gpt-x', owned_by: 'openai' }] } : { error: '404' })
+      }
+    }) as unknown as typeof fetch
+    const res = await discoverOpenAICompat('https://host', 'sk-x')
+    expect(res).not.toBeNull()
+    expect(res!.chatBase).toBe('https://host/v1')
+    expect(res!.models[0].id).toBe('gpt-x')
+    expect(res!.models[0].ownedBy).toBe('openai')
+    // Tried bare first (404), then /v1 (hit) — never /api/v1
+    expect(calls).toEqual(['https://host/models', 'https://host/v1/models'])
+  })
+
+  it('discoverOpenAICompat returns null when every candidate fails', async () => {
+    globalThis.fetch = (async () => ({
+      ok: false,
+      json: async () => ({})
+    })) as unknown as typeof fetch
+    expect(await discoverOpenAICompat('https://dead', 'sk-x')).toBeNull()
   })
 
   it('returns [] on non-ok or missing data (fallback path)', async () => {
@@ -174,5 +245,39 @@ describe('modelDiscovery (runtime model auto-detection)', () => {
     vi.restoreAllMocks()
     cache.clear()
     expect(cache.get()).toBeNull()
+  })
+
+  it('createModelCache.fetchedAt reports the last REAL fetch, never bumps on reads', () => {
+    const cache = createModelCache()
+    expect(cache.fetchedAt()).toBeNull() // never fetched yet
+    cache.set([{ id: 'x', name: 'X' }])
+    const t1 = cache.fetchedAt()
+    expect(t1).not.toBeNull()
+    expect(Date.now() - t1!).toBeLessThan(1000)
+    // A cache GET is a read, not a fetch — the stamp must not move
+    cache.get()
+    expect(cache.fetchedAt()).toBe(t1)
+    // After TTL the stamp is HISTORICAL: still the last real fetch time, so a
+    // Settings card can truthfully say "diperbarui <old time>" (stale = old)
+    const realNow = Date.now
+    vi.spyOn(Date, 'now').mockImplementation(() => realNow() + 6 * 60 * 1000)
+    expect(cache.get()).toBeNull()
+    expect(cache.fetchedAt()).toBe(t1)
+    vi.restoreAllMocks()
+    cache.clear()
+    expect(cache.fetchedAt()).toBeNull()
+  })
+
+  it('fallback-only loads stay cached for offline visibility but get NO stamp', () => {
+    const cache = createModelCache()
+    // A dead endpoint falls back to the static list and caches it (so the UI
+    // doesn't refetch on every keystroke) — but a fresh "diperbarui now" stamp
+    // on a list that never came from the API would be a lie.
+    cache.set([{ id: 's1', name: 'Static fallback' }], false)
+    expect(cache.get()).toHaveLength(1) // still visible offline
+    expect(cache.fetchedAt()).toBeNull() // but no freshness claim
+    // A later LIVE fetch restores the stamp
+    cache.set([{ id: 'live', name: 'Live' }], true)
+    expect(cache.fetchedAt()).not.toBeNull()
   })
 })

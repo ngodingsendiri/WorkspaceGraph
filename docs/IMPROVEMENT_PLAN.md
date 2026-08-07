@@ -148,3 +148,116 @@ Search box filter judul (case-insensitive) di drawer riwayat; daftar tidak lagi 
 4. **P1-1 + P1-2 + P1-6** (rerank: kalibrasi, tiering, budget) — satu paket
 5. **P1-3 s/d P1-5** (minor batch)
 6. **P2**, lalu **P3** sesuai prioritas produk
+
+---
+
+# Rencana Penyempurnaan — Runtime AI + Ekosistem
+
+**Dibuat:** 2026-08-07 · Berbasis audit runtime AI (vs standar Cursor / Claude Code / Windsurf / Obsidian)
+**Status baseline:** 802 test lulus · verdict **7.5/10 — strong mid-tier, approaching top**
+
+> Skor pilar saat ini: Provider 8.5 · Agent loop 6.5 · Context/RAG 8.0 · Memory 6.5 · Security 9.0 · Observability 9.0 · UI/UX AI 7.5 · Reliability 6.5 · Ekosistem 5.5 · Testing 9.0
+
+## Ringkasan prioritas
+
+| Fase | Isi | Dampak | Estimasi |
+|------|-----|--------|----------|
+| **R0 — Standar industri** | MCP client, parallel read tools, retry/backoff 429+5xx | Setara Cursor/Claude Code | ~3–4 hari |
+| **R1 — Kualitas agent** | Auto compaction, provider failover, sub-agent/plan mode | Obrolan panjang + keandalan | ~3 hari |
+| **R2 — Ekosistem** | Cost tracking, resume stream, streaming diff, auto-learning | Nilai pakai harian | ~2–3 hari |
+
+---
+
+## FASE R0 — Standar industri (penghalang klaim "top tier")
+
+### R0-1. MCP client support — P0 ✅ (selesai)
+**File:** `src/main/mcp/McpClientManager.ts` (baru) + `src/main/ipc/handlers/mcp.ts` + `AgentTools.ts` + `AIMiddleware.ts` + `SettingsView.tsx`
+**Scope:**
+- Registrasi server MCP via `.workspacegraph/mcp.json` (stdio: command/args/env + HTTP streamable) + UI Settings (tambah/form/test/hapus, toggle enabled + allowWriteTools)
+- Handshake SDK `initialize` → `tools/list` → cache tool per server (timeout connect 15s / call 60s, reconnect, cleanup child saat gagal)
+- Tool MCP diekspos sebagai **native tools** + fence docs dengan penamaan `mcp__server__tool`; read (`readOnlyHint`) jalan semua role, selain itu = write → gate role (researcher tak pernah write) + toggle `allowWriteTools` (defense-in-depth, tanpa proposal karena efek eksternal)
+- IPC `mcp:getServers/saveServers/testServer/getTools` + preload bridge + lifecycle vault (connectAll/disconnectAll)
+**Kriteria:** server MCP nyata (stdio test server) terhubung, tool dipanggil model (integrasi middleware), write tool diblokir saat toggle off / role researcher, prune koneksi saat server dihapus, semua hijau (17 test MCP + 2 integrasi) + QA contract.
+
+### R0-2. Parallel eksekusi read tools — P0
+**File:** `src/main/ai/AIMiddleware.ts` (`runStreamInner`)
+**Scope:**
+- `readPending` dieksekusi paralel (`Promise.all` dgn batch limit ~4) — pertahankan urutan toolRun event & citation collect
+- Write tetap sekuensial (proposal perlu urutan deterministik)
+**Kriteria:** 4 read serentak (sebelumnya serial ~1s × N) — test mengukur urutan event stabil.
+
+### R0-3. Retry/backoff 429+5xx per provider — P0
+**File:** `src/main/ai/providers/BaseProvider.ts` (wrapper bersama) + tiap provider
+**Scope:**
+- Wrapper `withRetry(attempts=2, backoff base 500ms, jitter)` utk `sendMessage`/`streamMessage` pada status 429/5xx (Retry-After dihormati)
+- Gagal total → error chunk jelas (bukan hang); AIEventLog mencatat retries
+**Kriteria:** test retry pada 429 (sukses di percobaan ke-2), backoff tidak menembus batas.
+
+---
+
+## FASE R1 — Kualitas agent
+
+### R1-1. Auto context compaction — P1 ✅ (selesai)
+**File:** `src/main/ai/contextCompaction.ts` (baru) + `AIMiddleware.ts`
+**Scope:**
+- Estimasi token per pesan (chars/4 + overhead tool/images); saat history >80% budget model (contextWindow dari map keluarga model − context − 4k reserve) → lipat pesan tertua jadi blok `[Compacted]` **ekstraktif** (satu baris per pesan + topik awal, tanpa panggil model)
+- Tail `KEEP_RECENT=8` selalu dipertahankan; boundary lipat tak pernah memecah pasangan assistant `tool_calls` + hasil `tool` (tanpa orphan tool message)
+- Chunk status "Context di-compact (N pesan, ±token)" dikirim ke UI
+**Kriteria:** 200+ pesan tidak mentok; tail + pasangan tool utuh; test unit (10) + integrasi middleware (2) + QA contract. — catatan: ringkasan berbasis LLM (opsional) bisa menyusul sbg upgrade kualitas, versi ini deterministik & gratis.
+
+### R1-2. Provider failover otomatis — P1 ✅ (selesai)
+**File:** `src/main/ai/providerFailover.ts` (baru) + `AIMiddleware.ts` + `AIEventLog.ts`
+**Scope:**
+- Saat provider aktif gagal terminal (429 habis retry / 401 / 5xx), coba provider terkonfigurasi berikutnya (urutan preferensi dari settings `aiFailoverOrder`, else urutan registrasi; Ollama tidak pernah jadi kandidat — daemon lokal bukan cloud outage)
+- Helper murni: `shouldFailoverError` (status 401/403/429/5xx + keyword message; 400/404/422 tidak pernah failover) + `resolveFailoverCandidates`/`failoverCandidatesFor`
+- `runStreamWithFailover` (middleware): chain [active, ...kandidat] — tiap attempt restore `request.model` (provider default), error chunk failed attempt di-swallow (diganti nota `*(⚠ failover: X gagal → mencoba Y)*`), aktif provider di-restore di `finally` (failover per-stream, bukan ubah pilihan user); stream_end mencatat provider yang benar-benar melayani
+- AIEventLog: kind `failover` baru + field `target` (from→to)
+- Wire ke `streamMessage` + tiap stage `runPipelineInner`
+**Kriteria (terpenuhi):** 15 unit (klasifikasi, urutan, ollama/unconfigured exclude, order invalid) + 5 integrasi (A 429→B sukses + nota + log + restore; A&B gagal → error B; 400 tidak failover; tanpa kandidat; cancel tak pernah failover) + QA contract. Test: 20 baru, total suite 869/869 hijau, tsc + lint + build bersih.
+
+### R1-3. Sub-agent / plan mode — P1
+**File:** `src/main/ai/AIMiddleware.ts` (perluas `streamPipeline`)
+**Scope:**
+- Pipeline dinamis (bukan cuma preset Research→Writer): model bisa minta sub-task terdelegasi
+- **Plan mode**: alur analisis → daftar langkah → proposal, tanpa eksekusi tool tulis
+**Kriteria:** test pipeline 3 stage; plan mode tidak pernah memanggil write tool.
+
+---
+
+## FASE R2 — Ekosistem
+
+### R2-1. Cost tracking — P2
+**File:** `src/main/ai/cost.ts` (baru) + `AIMiddleware.ts` + `chatTokenBudget.ts`
+**Scope:** utilitas harga per model (OpenRouter pricing runtime; lainnya tabel statis) → estimasi $ per stream (input/output token × harga) + akumulasi per sesi; tampil di budget bar & status line.
+
+### R2-2. Resume stream terputus — P2
+**File:** `src/main/ai/AIMiddleware.ts` + `ConversationStore.ts`
+**Scope:** checkpoint state stream (round, messages, proposals) ke `.workspacegraph/tmp/`; retry meneruskan dari checkpoint alih-alih mulai ulang.
+
+### R2-3. Streaming diff inline di chat — P2
+**File:** `src/renderer/src/components/chat/ChatPanel.tsx` + `MergeDialog.tsx`
+**Scope:** kartu proposal menampilkan diff live di tempat (reuse diffLines) tanpa buka dialog; tombol Expand tetap buka MergeDialog.
+
+### R2-4. Auto-learning loop — P2
+**File:** `src/main/ai/WorkspaceMemory.ts` + `AutomationEngine.ts`
+**Scope:** ingest episodik (setelah N pesan atau harian): ringkas pola/aturan baru → append ke AI Memory/ (L1), tanpa duplikasi.
+
+---
+
+## Kriteria tiap fase
+
+| Fase | Kriteria |
+|------|----------|
+| R0 | MCP tools live di agent loop · parallel reads (event order stabil) · retry 429/5xx berhasil di test · semua hijau + typecheck + build |
+| R1 | Obrolan 200+ pesan tanpa timeout · failover test hijau · plan mode tanpa write tool |
+| R2 | Harga $ per sesi terlihat · resume stream test · diff inline · AI Memory terisi otomatis |
+
+**Validasi tiap milestone:** `npx tsc --noEmit` (node+web) + `npx vitest run` (subset lalu penuh) + `npx electron-vite build`.
+
+## Urutan eksekusi yang disarankan
+
+1. **R0-2 + R0-3** (parallel reads + retry — lokal di middleware/provider, cepat menang)
+2. **R0-1 MCP client** (fitur terbesar — satu batch tersendiri)
+3. **R1-1 auto compaction** (butuh data token yg sudah ada)
+4. **R1-2 failover + R1-3 plan mode** (satu paket pipeline)
+5. **R2-1 s/d R2-4** sesuai prioritas produk

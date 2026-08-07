@@ -103,6 +103,8 @@ export interface ProviderStatus {
   error?: string
   models: ModelInfo[]
   defaultModel?: string
+  /** Unix ms when the model list was last fetched from the API (cache set time). */
+  modelsFetchedAt?: number
 }
 
 import { createModelCache } from './modelDiscovery'
@@ -144,6 +146,12 @@ export abstract class BaseProvider {
   /** Bust the runtime model-list cache (Settings → Refresh models). */
   clearModelCache(): void {
     this.modelCache.clear()
+  }
+
+  /** When the current model list was last fetched (cache set time), or null.
+   * Public so AIMiddleware can stamp ProviderStatus.modelsFetchedAt. */
+  lastModelsFetchedAt(): number | null {
+    return this.modelCache.fetchedAt()
   }
 
   /** Lightweight: key present / base URL reachable — do NOT burn tokens */

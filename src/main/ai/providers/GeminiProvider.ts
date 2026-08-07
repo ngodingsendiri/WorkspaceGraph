@@ -8,6 +8,7 @@ import {
   ProviderCapabilities
 } from './BaseProvider'
 import { fetchGeminiModels, mergeWithFallback } from './modelDiscovery'
+import { withProviderRetry } from './providerRetry'
 
 /** Local structural Part — inlineData carries the attached image (vision P-A2). */
 type GeminiPart = { text?: string; inlineData?: { mimeType: string; data: string } }
@@ -72,7 +73,7 @@ export class GeminiProvider extends BaseProvider {
       { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro (paid/quota)', contextWindow: 2097152 },
       { id: 'gemini-1.5-pro', name: 'Gemini 1.5 Pro (paid/quota)', contextWindow: 2097152 }
     ])
-    if (out.length > 0) this.modelCache.set(out)
+    if (out.length > 0) this.modelCache.set(out, runtime.length > 0)
     return out
   }
 
@@ -152,7 +153,11 @@ export class GeminiProvider extends BaseProvider {
     if (request.maxTokens) config.maxOutputTokens = request.maxTokens
 
     try {
-      const response = await client.models.generateContent({ model, contents, config })
+      // R0-3: transient 429/5xx are retried with backoff before surfacing —
+      // the existing Pro→Flash quota fallback still handles the final error
+      const response = await withProviderRetry(() =>
+        client.models.generateContent({ model, contents, config })
+      )
       return {
         content: response.text || '',
         model,
@@ -186,11 +191,17 @@ export class GeminiProvider extends BaseProvider {
       // P1-runtime: forward the middleware AbortSignal into the SDK call so a
       // Cancel / watchdog actually kills the HTTP request instead of leaking it
       // until the OS timeout (SDK: GenerateContentConfig.abortSignal).
-      const responseStream = await client.models.generateContentStream({
-        model: useModel,
-        contents,
-        config: signal ? { ...config, abortSignal: signal } : config
-      })
+      // R0-3: retry the create only (a stream that already emitted chunks can't
+      // resume); stop if the user cancelled during the backoff window
+      const responseStream = await withProviderRetry(
+        () =>
+          client.models.generateContentStream({
+            model: useModel,
+            contents,
+            config: signal ? { ...config, abortSignal: signal } : config
+          }),
+        { shouldRetry: () => !(signal?.aborted ?? false) }
+      )
       for await (const chunk of responseStream) {
         if (signal?.aborted) break
         if (chunk.text) {

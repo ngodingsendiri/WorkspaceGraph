@@ -1031,7 +1031,7 @@ describe('AI system contracts', () => {
     expect(wm.includes("renderPrompt('kernel')")).toBe(true)
     expect(wm.includes("renderPrompt('bootstrap')")).toBe(true)
     expect(
-      has(tools, "renderPrompt('toolsHead', { tools: lines })", "renderPrompt('toolsTail')")
+      has(tools, "renderPrompt('toolsHead', { tools: lines", "renderPrompt('toolsTail')")
     ).toBe(true)
   })
   it('runtime model discovery: /models fetchers + free flags wired in all providers', () => {
@@ -1083,6 +1083,29 @@ describe('AI system contracts', () => {
     const set = read('src/renderer/src/components/settings/SettingsView.tsx')
     expect(has(set, 'freeCount', 'model gratis')).toBe(true)
     expect(read('src/renderer/src/styles/globals.css').includes('chat-model-free-badge')).toBe(true)
+    // Base-path auto-detection: candidate list + discovery adopt the working
+    // chat base so completions hit the same versioned path as /models
+    expect(
+      has(disc, 'export function chatBaseCandidates', 'export async function discoverOpenAICompat')
+    ).toBe(true)
+    expect(has(disc, 'export function isVersionedBase')).toBe(true)
+    expect(has(disc, 'export function shouldAdoptChatBase')).toBe(true)
+    expect(has(disc, '`${clean}/v1`', '`${clean}/api/v1`', "replace(/\\/models\\/?$/, '')")).toBe(
+      true
+    )
+    for (const p of ['Grok', 'OpenAI']) {
+      const src = read(`src/main/ai/providers/${p}Provider.ts`)
+      // Adoption goes through the shared helper (never a per-provider literal),
+      // and the adopted base rebuilds the SDK client
+      expect(has(src, 'discoverOpenAICompat', 'shouldAdoptChatBase')).toBe(true)
+      expect(has(src, 'this.client = null')).toBe(true)
+      // Lazy chat-path guard: a bare-domain baseUrl is adopted before the
+      // first chat call, not only when listModels() happens to have run
+      expect(has(src, 'ensureChatBase', 'chatBaseProbed')).toBe(true)
+    }
+    // Settings: base URL editable for OpenAI/Grok gateways + vendor label
+    expect(has(set, "p.id === 'ollama' || p.id === 'openai' || p.id === 'grok'")).toBe(true)
+    expect(has(set, 'vendor ', 'ownedBy')).toBe(true)
     // Manual refresh: cache-bust + IPC + Settings button
     expect(has(base, 'clearModelCache(): void')).toBe(true)
     expect(
@@ -1091,6 +1114,85 @@ describe('AI system contracts', () => {
     expect(has(ipc, "'ai:refreshProviderModels'")).toBe(true)
     expect(has(pre, 'refreshProviderModels: (providerId: string)')).toBe(true)
     expect(has(set, 'handleRefreshModels', 'Refresh models', 'res.models.length')).toBe(true)
+  })
+  it('per-provider loading spinner: progress push wired end-to-end', () => {
+    const mid = read('src/main/ai/AIMiddleware.ts')
+    const ipc = read('src/main/ipc/handlers/ai.ts')
+    const pre = read('src/preload/index.ts')
+    const set = read('src/renderer/src/components/settings/SettingsView.tsx')
+    const css = read('src/renderer/src/styles/globals.css')
+    // Main: getAllProvidersStatus accepts an optional per-provider callback
+    expect(has(mid, 'onProgress?: (status: ProviderStatus) => void', 'onProgress?.(status)')).toBe(
+      true
+    )
+    // Handler pushes each resolved status on its own channel
+    expect(has(ipc, "'ai:providerStatus'", 'BrowserWindow.fromWebContents(event.sender)')).toBe(
+      true
+    )
+    // Preload exposes the subscription (returns an unsubscribe)
+    expect(has(pre, 'onAIProviderStatus', "ipcRenderer.on('ai:providerStatus'")).toBe(true)
+    // Renderer: instant card shells + per-provider loading state + spinner row
+    expect(has(set, 'PROVIDER_SHELLS', 'loadingProviders', 'Memuat model…')).toBe(true)
+    expect(has(set, 'onAIProviderStatus', 'spinner-sm')).toBe(true)
+    expect(has(css, '.provider-loading', '.spinner-sm')).toBe(true)
+    // Save auto-refreshes the saved provider's models (configure → spinner →
+    // refreshProviderModels → loadAll) so a new key/baseUrl shows immediately;
+    // a failed refresh surfaces a flash instead of hiding behind static fallback
+    expect(has(set, 'refreshProviderModels(providerId)', '!refreshed.ok')).toBe(true)
+  })
+  it('last-refreshed stamp: modelsFetchedAt flows main → Settings card', () => {
+    const disc = read('src/main/ai/providers/modelDiscovery.ts')
+    const base = read('src/main/ai/providers/BaseProvider.ts')
+    const mid = read('src/main/ai/AIMiddleware.ts')
+    const set = read('src/renderer/src/components/settings/SettingsView.tsx')
+    // Cache exposes the real fetch timestamp; statuses carry it per provider.
+    // Only LIVE fetches stamp it — a fallback-only load stays cached (offline
+    // visibility) but claims no freshness (set(models, fromRuntime))
+    expect(
+      has(disc, 'fetchedAt(): number | null', 'set(models: ModelInfo[], fromRuntime?: boolean)')
+    ).toBe(true)
+    expect(has(disc, 'fetchedAt: () => (at > 0 && lastWasRuntime ? at : null)')).toBe(true)
+    expect(has(base, 'modelsFetchedAt?: number', 'lastModelsFetchedAt')).toBe(true)
+    expect(has(mid, 'modelsFetchedAt: provider.lastModelsFetchedAt() ?? undefined')).toBe(true)
+    // Every runtime-fetch provider passes whether the live call produced models
+    for (const p of ['OpenAI', 'Grok', 'Gemini', 'Claude', 'OpenRouter']) {
+      expect(read(`src/main/ai/providers/${p}Provider.ts`)).toContain(
+        'this.modelCache.set(out, runtime.length > 0)'
+      )
+    }
+    // Card stamps "diperbarui …" when the timestamp is present (same-day = time,
+    // older = short date + time so a stale list is obvious)
+    expect(has(set, 'formatRefreshedAt', 'p.modelsFetchedAt ?', 'diperbarui')).toBe(true)
+  })
+  it('R0-3 retry/backoff + R0-2 parallel reads wired', () => {
+    const retry = read('src/main/ai/providers/providerRetry.ts')
+    const mid = read('src/main/ai/AIMiddleware.ts')
+    // Shared wrapper: retries only 429/5xx, exponential backoff, optional give-up
+    expect(
+      has(
+        retry,
+        'export async function withProviderRetry',
+        'export function isRetryableProviderError'
+      )
+    ).toBe(true)
+    expect(has(retry, 'status === 429', 'status >= 500 && status <= 599')).toBe(true)
+    expect(has(retry, 'baseDelayMs * 2 ** attempt', 'maxDelayMs')).toBe(true)
+    // OpenAI-compat providers wrap BOTH send + stream-create; Claude/Gemini wrap
+    // send (Claude's stream helper fires lazily) and Gemini also wraps stream-create
+    for (const p of ['OpenAI', 'OpenRouter', 'Grok']) {
+      const src = read(`src/main/ai/providers/${p}Provider.ts`)
+      expect(has(src, 'withProviderRetry(', 'shouldRetry: () => !(signal?.aborted')).toBe(true)
+    }
+    expect(
+      read('src/main/ai/providers/ClaudeProvider.ts').includes('withProviderRetry(() =>')
+    ).toBe(true)
+    const gem = read('src/main/ai/providers/GeminiProvider.ts')
+    expect(has(gem, 'withProviderRetry(() =>', 'generateContentStream')).toBe(true)
+    // R0-2: reads run in parallel batches, completions emitted in request order
+    expect(has(mid, 'READ_BATCH_SIZE', 'runReadBatch', 'Promise.all(')).toBe(true)
+    expect(
+      has(mid, 'running events first, in order', 'completion events in the SAME request order')
+    ).toBe(true)
   })
   it('P3 structured AI event log: JSONL under .workspacegraph/logs + rotation + read IPC', () => {
     const log = read('src/main/ai/AIEventLog.ts')
@@ -1346,7 +1448,7 @@ describe('AI system contracts', () => {
     expect(has(tools, 'tidak diizinkan untuk role')).toBe(true)
     // Role-filtered advertisement for BOTH protocols (fence prompt + native schemas)
     expect(has(tools, 'export function buildToolsSystemPrompt')).toBe(true)
-    expect(has(tools, 'export function buildToolSchemas(role')).toBe(true)
+    expect(has(tools, 'export function buildToolSchemas(')).toBe(true)
     // Middleware routes role → executeTool guard + per-role advertisement
     const mid = read('src/main/ai/AIMiddleware.ts')
     expect(has(mid, 'executeToolWithTimeout(p.action, agentRole)')).toBe(true)
@@ -1427,6 +1529,130 @@ describe('AI system contracts', () => {
         '00 Index.md'
       )
     ).toBe(true)
+  })
+  it('R1-1 auto compaction: module + middleware wired end-to-end', () => {
+    const mod = read('src/main/ai/contextCompaction.ts')
+    // Core helpers with the threshold/tail constants
+    expect(
+      has(
+        mod,
+        'export const DEFAULT_COMPACTION_BUDGET',
+        'export const COMPACT_THRESHOLD',
+        'export const KEEP_RECENT',
+        'export const RESERVED_OUTPUT_TOKENS',
+        'export function compactMessages',
+        'export function contextBudgetForModel',
+        'export function messageTokens'
+      )
+    ).toBe(true)
+    // Extractive block format + tool-pair boundary guard (no orphan tool msg)
+    expect(has(mod, '[Compacted]', 'Topik awal', "messages[split].role === 'tool'")).toBe(true)
+    expect(mod.includes("role: 'user', content: parts.join")).toBe(true) // Middleware: budget = model window − context − output headroom, compaction
+    // runs before the tool loop and surfaces a visible note. The window comes
+    // from ModelInfo.contextWindow (cached listModels) with the static family
+    // map as fallback — never a hardcoded per-request literal.
+    const mid = read('src/main/ai/AIMiddleware.ts')
+    expect(
+      has(
+        mid,
+        "from './contextCompaction'",
+        'compactMessages(messages,',
+        'resolveCompactionBudget(provider, request.model)'
+      )
+    ).toBe(true)
+    expect(
+      has(
+        mid,
+        'contextBudgetForModel(model)',
+        'RESERVED_OUTPUT_TOKENS',
+        'context di-compact',
+        'Context compacted'
+      )
+    ).toBe(true)
+    expect(has(mid, 'compact.compactedCount > 0', 'messages = compact.messages')).toBe(true)
+  })
+  it('R1-2 provider failover: helper + middleware + event log wired end-to-end', () => {
+    // Pure helper module: terminal-error classification + candidate ordering
+    const helper = read('src/main/ai/providerFailover.ts')
+    expect(
+      has(
+        helper,
+        'export function shouldFailoverError',
+        'export function resolveFailoverCandidates',
+        'export function failoverCandidatesFor'
+      )
+    ).toBe(true)
+    // 401/403/429/5xx are failover-worthy; 400/404 are not; Ollama never a target
+    expect(has(helper, 'status === 401', 'status === 429', 'status >= 500 && status < 600')).toBe(
+      true
+    )
+    expect(has(helper, "id === 'ollama'", 'id === activeId')).toBe(true)
+    // Middleware: failover wrapper restarts the stream on the next configured
+    // provider; note chunk + AIEventLog 'failover' (provider → target); the
+    // served provider id flows back into the stream_end event
+    const mid = read('src/main/ai/AIMiddleware.ts')
+    expect(has(mid, "from './providerFailover'", 'runStreamWithFailover')).toBe(true)
+    expect(has(mid, 'shouldFailoverError(terminalError)', 'setActiveProvider(providerId)')).toBe(
+      true
+    )
+    expect(has(mid, "kind: 'failover'", 'target: providerId', 'Failover ke ')).toBe(true)
+    expect(has(mid, 'providerId = await this.runStreamWithFailover(')).toBe(true)
+    // Event log: failover kind + target field exist
+    const log = read('src/main/ai/AIEventLog.ts')
+    expect(has(log, "| 'failover'", 'target?: string')).toBe(true)
+  })
+  it('R0-1 MCP client: manager + middleware + IPC + preload + Settings wired end-to-end', () => {
+    const mgr = read('src/main/mcp/McpClientManager.ts')
+    // Manager: naming, both transports, classification, write gate, registry
+    expect(has(mgr, "export const MCP_TOOL_PREFIX = 'mcp__'", 'parseMcpToolName')).toBe(true)
+    expect(has(mgr, 'StdioClientTransport', 'StreamableHTTPClientTransport')).toBe(true)
+    expect(has(mgr, '.workspacegraph', 'mcp.json', 'allowWriteTools', 'readOnlyHint')).toBe(true)
+    expect(
+      has(mgr, 'getToolSchemas', 'getFenceDocs', 'callTool', 'connectAll', 'disconnectAll')
+    ).toBe(true)
+    expect(has(mgr, 'withTimeout', 'CONNECT_TIMEOUT_MS')).toBe(true)
+    // AgentTools: dynamic routing + role-write gate, static tools untouched
+    const tools = read('src/main/ai/AgentTools.ts')
+    expect(has(tools, "from '../mcp/McpClientManager'", 'roleCanWriteMCP', 'executeMcpTool')).toBe(
+      true
+    )
+    expect(has(tools, 'mcpManager.isMcpTool(tool)', 'return executeMcpTool(action, role)')).toBe(
+      true
+    )
+    expect(has(tools, 'mcpManager.isWriteTool(tool) && !roleCanWriteMCP(role)')).toBe(true)
+    expect(has(tools, 'mcpManager.isWriteAllowed(tool)')).toBe(true)
+    // Middleware: schemas + fence docs appended for write-capable roles
+    const mid = read('src/main/ai/AIMiddleware.ts')
+    expect(
+      has(
+        mid,
+        "from '../mcp/McpClientManager'",
+        'mcpManager.getToolSchemas(roleCanWriteMCP(agentRole))',
+        'mcpManager.getFenceDocs(roleCanWriteMCP(agentRole))'
+      )
+    ).toBe(true)
+    // IPC: four channels registered + wired into the registrar
+    const mcpIpc = read('src/main/ipc/handlers/mcp.ts')
+    for (const ch of ['mcp:getServers', 'mcp:saveServers', 'mcp:testServer', 'mcp:getTools']) {
+      expect(mcpIpc).toContain(`'${ch}'`)
+    }
+    expect(read('src/main/ipc/index.ts').includes('registerMcpHandlers')).toBe(true)
+    // Vault lifecycle connects/disconnects MCP servers
+    expect(read('src/main/ipc/handlers/workspace.ts').includes('mcpManager.connectAll()')).toBe(
+      true
+    )
+    expect(read('src/main/ipc/handlers/workspace.ts').includes('mcpManager.disconnectAll()')).toBe(
+      true
+    )
+    // Preload bridge exposes the registry
+    const pre = read('src/preload/index.ts')
+    expect(has(pre, 'getMcpServers', 'saveMcpServers', 'testMcpServer', 'getMcpTools')).toBe(true)
+    // Settings: MCP section with add/test/remove + write toggle
+    const set = read('src/renderer/src/components/settings/SettingsView.tsx')
+    expect(
+      has(set, "id: 'mcp'", "label: 'MCP'", 'getMcpServers', 'testMcpServer', 'allowWriteTools')
+    ).toBe(true)
+    expect(has(set, 'Tambah server MCP', 'Izinkan tool write', 'mcp__server__tool')).toBe(true)
   })
 })
 

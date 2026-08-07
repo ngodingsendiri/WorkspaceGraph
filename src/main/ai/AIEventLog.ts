@@ -22,7 +22,7 @@ import { workspaceEngine } from '../engine/WorkspaceEngine'
 export type AIEventStatus = 'ok' | 'error' | 'cancelled' | 'timeout' | 'started'
 
 export type AIEventKind =
-  'stream_start' | 'stream_end' | 'send' | 'test' | 'tool' | 'ipc' | 'pipeline'
+  'stream_start' | 'stream_end' | 'send' | 'test' | 'tool' | 'ipc' | 'pipeline' | 'failover'
 
 export interface AIEvent {
   ts: string
@@ -33,6 +33,8 @@ export interface AIEvent {
   channel?: string
   /** Pipeline stage role (Research/Writer/…) or agent role for tool events */
   role?: string
+  /** R1-2: the provider that served as the failover replacement */
+  target?: string
   /** Number of stages in a pipeline invocation */
   stageCount?: number
   durationMs?: number
@@ -171,7 +173,9 @@ export function logAIEvent(ev: Omit<AIEvent, 'ts'>): void {
     if (!root) return
     const dir = aiEventsDir(root)
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
-    const retentionDays = Number((workspaceEngine.getSettings() as Record<string, unknown>)?.[RETENTION_SETTING_KEY]) || 0
+    const retentionDays =
+      Number((workspaceEngine.getSettings() as Record<string, unknown>)?.[RETENTION_SETTING_KEY]) ||
+      0
     const now = Date.now()
     if (retentionDays > 0 && now - (lastPruneAt.get(root) || 0) > PRUNE_MIN_INTERVAL_MS) {
       pruneAIEventsOlderThan(root, retentionDays)

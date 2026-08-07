@@ -61,6 +61,60 @@ export async function fetchOpenAICompatModels(
     .filter((m) => m.id)
 }
 
+/** True when the base already carries a version segment (/v1, /api/v2 …). */
+export function isVersionedBase(userBase: string): boolean {
+  const clean = userBase.trim().replace(/\/+$/, '')
+  return /(\/v\d+$|\/api\/v\d+$)/.test(clean)
+}
+
+/**
+ * Single adoption rule shared by listModels + the lazy chat-path guard: return
+ * the chat base to adopt (or null when the current base already works). Both
+ * providers use this so the two paths can never drift on adoption semantics.
+ */
+export function shouldAdoptChatBase(
+  currentBase: string,
+  discovered: { chatBase: string } | null
+): string | null {
+  if (discovered && discovered.chatBase !== currentBase) return discovered.chatBase
+  return null
+}
+
+/**
+ * Candidate chat-base URLs for a user-entered endpoint. Covers the common
+ * OpenAI-compat layouts so "just paste the domain" works for any gateway:
+ * - `https://host`            → itself, `https://host/v1`, `https://host/api/v1`
+ * - `https://host/v1`         → as-is (already versioned)
+ * - `https://host/v1/models`  → stripped to `https://host/v1` (full URL pasted)
+ * Query/hash fragments (e.g. pasted signed URLs) are dropped first.
+ */
+export function chatBaseCandidates(userBase: string): string[] {
+  let clean = userBase.trim().replace(/\/+$/, '')
+  if (!clean) return []
+  // Drop query/hash so a pasted signed URL can't poison the probes
+  clean = clean.split(/[?#]/)[0].replace(/\/+$/, '')
+  // User pasted the full models URL — strip to the chat base
+  clean = clean.replace(/\/models\/?$/, '')
+  if (isVersionedBase(clean)) return [clean]
+  return [clean, `${clean}/v1`, `${clean}/api/v1`]
+}
+
+/**
+ * Try every candidate chat-base until one answers `GET /models` with data.
+ * Returns the models AND the working chat base — the caller should adopt the
+ * base so chat completions hit the same versioned path, not just discovery.
+ */
+export async function discoverOpenAICompat(
+  userBase: string,
+  apiKey: string
+): Promise<{ models: ModelInfo[]; chatBase: string } | null> {
+  for (const candidate of chatBaseCandidates(userBase)) {
+    const models = await fetchOpenAICompatModels(candidate, apiKey)
+    if (models.length > 0) return { models, chatBase: candidate }
+  }
+  return null
+}
+
 /**
  * Anthropic `GET /v1/models` → `{ data: [{ id, display_name }] }`.
  * Uses the `x-api-key` header (not Bearer). Returns [] when the endpoint is
@@ -198,21 +252,32 @@ export function mergeWithFallback(runtime: ModelInfo[], fallback: ModelInfo[]): 
  */
 export function createModelCache(): {
   get(): ModelInfo[] | null
-  set(models: ModelInfo[]): void
+  /** `fromRuntime` = the list came from a LIVE /models fetch (true) vs the
+   *  static fallback (false). Only live fetches stamp the "diperbarui …"
+   *  time — a dead endpoint must not look freshly refreshed. */
+  set(models: ModelInfo[], fromRuntime?: boolean): void
   clear(): void
+  /** Unix ms when the LIVE model list was last fetched — null when never,
+   *  cleared, or the last load fell back to the static list. Historical after
+   *  TTL expiry, so a stale list shows an old stamp (never disappears). */
+  fetchedAt(): number | null
 } {
   let models: ModelInfo[] | null = null
   let at = 0
+  let lastWasRuntime = false
   const TTL_MS = 5 * 60 * 1000
   return {
     get: () => (models && Date.now() - at < TTL_MS ? models : null),
-    set: (m) => {
+    set: (m, fromRuntime = true) => {
       models = m
       at = Date.now()
+      lastWasRuntime = fromRuntime
     },
     clear: () => {
       models = null
       at = 0
-    }
+      lastWasRuntime = false
+    },
+    fetchedAt: () => (at > 0 && lastWasRuntime ? at : null)
   }
 }

@@ -16,6 +16,7 @@ import {
   MutableToolCall
 } from './openaiCompat'
 import { fetchOpenRouterModels, mergeWithFallback } from './modelDiscovery'
+import { withProviderRetry } from './providerRetry'
 
 /** tools/tool_choice pass-through (cast: ProviderTool mirrors the SDK shape). */
 function toolOptions(
@@ -94,7 +95,7 @@ export class OpenRouterProvider extends BaseProvider {
       { id: 'deepseek/deepseek-chat', name: 'DeepSeek V3' },
       { id: 'meta-llama/llama-3.3-70b-instruct', name: 'Llama 3.3 70B' }
     ])
-    if (out.length > 0) this.modelCache.set(out)
+    if (out.length > 0) this.modelCache.set(out, runtime.length > 0)
     return out
   }
 
@@ -104,13 +105,16 @@ export class OpenRouterProvider extends BaseProvider {
 
     const messages = buildOpenAIMessages(request)
 
-    const response = await client.chat.completions.create({
-      model,
-      messages,
-      temperature: request.temperature,
-      ...(request.maxTokens ? { max_tokens: request.maxTokens } : {}),
-      ...toolOptions(request)
-    })
+    // R0-3: transient 429/5xx are retried with backoff before surfacing
+    const response = await withProviderRetry(() =>
+      client.chat.completions.create({
+        model,
+        messages,
+        temperature: request.temperature,
+        ...(request.maxTokens ? { max_tokens: request.maxTokens } : {}),
+        ...toolOptions(request)
+      })
+    )
 
     const choice = response.choices[0]
     // Cast: SDK v5 unions tool_calls with custom variants; we only consume the
@@ -142,17 +146,24 @@ export class OpenRouterProvider extends BaseProvider {
     const messages = buildOpenAIMessages(request)
 
     try {
-      const stream = await client.chat.completions.create(
-        {
-          model,
-          messages,
-          temperature: request.temperature,
-          stream: true,
-          stream_options: { include_usage: true },
-          ...(request.maxTokens ? { max_tokens: request.maxTokens } : {}),
-          ...toolOptions(request)
-        },
-        { signal }
+      // R0-3: retry only the CREATE — a stream that already emitted chunks can't
+      // be resumed without duplicating content. shouldRetry stops if the user
+      // cancelled during the backoff window.
+      const stream = await withProviderRetry(
+        () =>
+          client.chat.completions.create(
+            {
+              model,
+              messages,
+              temperature: request.temperature,
+              stream: true,
+              stream_options: { include_usage: true },
+              ...(request.maxTokens ? { max_tokens: request.maxTokens } : {}),
+              ...toolOptions(request)
+            },
+            { signal }
+          ),
+        { shouldRetry: () => !(signal?.aborted ?? false) }
       )
 
       let tokensUsed: number | undefined

@@ -15,7 +15,14 @@ import {
   finalizeToolCalls,
   MutableToolCall
 } from './openaiCompat'
-import { fetchOpenAICompatModels, mergeWithFallback, markFreeByHeuristic } from './modelDiscovery'
+import {
+  discoverOpenAICompat,
+  isVersionedBase,
+  mergeWithFallback,
+  markFreeByHeuristic,
+  shouldAdoptChatBase
+} from './modelDiscovery'
+import { withProviderRetry } from './providerRetry'
 
 /** tools/tool_choice pass-through (cast: ProviderTool mirrors the SDK shape). */
 function toolOptions(
@@ -43,6 +50,26 @@ export class OpenAIProvider extends BaseProvider {
 
   private client: OpenAI | null = null
   protected defaultModel = 'gpt-4o-mini'
+  /** True once the chat base was probed this process (avoids re-probing). */
+  private chatBaseProbed = false
+
+  /**
+   * Lazily adopt the working versioned base before a chat call. If the user
+   * pasted just a domain (no /v1), the first chat after restart must not 404
+   * just because listModels() hasn't run yet — probe once and remember.
+   */
+  private async ensureChatBase(): Promise<void> {
+    if (this.chatBaseProbed) return
+    this.chatBaseProbed = true
+    const cur = (this.baseUrl || '').trim().replace(/\/+$/, '')
+    // Empty → SDK default (api.openai.com/v1) is already correct; versioned → done
+    if (!cur || isVersionedBase(cur)) return
+    const adopted = shouldAdoptChatBase(this.baseUrl, await discoverOpenAICompat(cur, this.apiKey))
+    if (adopted) {
+      this.baseUrl = adopted
+      this.client = null // rebuild SDK client against the resolved base
+    }
+  }
 
   private getClient(): OpenAI {
     if (!this.apiKey) {
@@ -56,6 +83,9 @@ export class OpenAIProvider extends BaseProvider {
 
   configure(config: { apiKey?: string; baseUrl?: string; defaultModel?: string }): void {
     super.configure(config)
+    // A new key or base can make a previously-failed discovery succeed — never
+    // keep the probe guard latched across a reconfiguration
+    if (config.apiKey !== undefined || config.baseUrl !== undefined) this.chatBaseProbed = false
     if (config.apiKey || config.baseUrl) {
       this.client = new OpenAI({
         apiKey: config.apiKey || this.apiKey,
@@ -73,11 +103,20 @@ export class OpenAIProvider extends BaseProvider {
     const cached = this.modelCache.get()
     if (cached) return cached
     // Runtime: the account's REAL models from GET /models (custom baseUrl
-    // supported — Azure/OpenAI-compat gateways list their own catalog).
-    const runtime = await fetchOpenAICompatModels(
+    // supported — Azure/OpenAI-compat gateways list their own catalog). The
+    // base path is auto-detected (/v1 vs /api/v1 vs bare) so pasting just the
+    // domain works for any OpenAI-compat gateway.
+    const discovered = await discoverOpenAICompat(
       this.baseUrl || 'https://api.openai.com/v1',
       this.apiKey
     )
+    // Adopt the working chat base so completions hit the same versioned path
+    const adopted = shouldAdoptChatBase(this.baseUrl, discovered)
+    if (adopted) {
+      this.baseUrl = adopted
+      this.client = null // rebuild SDK client against the resolved base
+    }
+    const runtime = discovered?.models ?? []
     const merged = mergeWithFallback(runtime, [
       { id: 'gpt-4o', name: 'GPT-4o', contextWindow: 128000 },
       { id: 'gpt-4o-mini', name: 'GPT-4o Mini', contextWindow: 128000 },
@@ -85,22 +124,26 @@ export class OpenAIProvider extends BaseProvider {
       { id: 'o3-mini', name: 'o3-mini', contextWindow: 200000 }
     ])
     const out = markFreeByHeuristic(merged)
-    if (out.length > 0) this.modelCache.set(out)
+    if (out.length > 0) this.modelCache.set(out, runtime.length > 0)
     return out
   }
 
   async sendMessage(request: AIRequest): Promise<AIResponse> {
+    await this.ensureChatBase()
     const client = this.getClient()
     const model = request.model || this.defaultModel
     const messages = buildOpenAIMessages(request)
 
-    const response = await client.chat.completions.create({
-      model,
-      messages,
-      temperature: request.temperature,
-      ...(request.maxTokens ? { max_tokens: request.maxTokens } : {}),
-      ...toolOptions(request)
-    })
+    // R0-3: transient 429/5xx are retried with backoff before surfacing
+    const response = await withProviderRetry(() =>
+      client.chat.completions.create({
+        model,
+        messages,
+        temperature: request.temperature,
+        ...(request.maxTokens ? { max_tokens: request.maxTokens } : {}),
+        ...toolOptions(request)
+      })
+    )
 
     const choice = response.choices[0]
     // Cast: SDK v5 unions tool_calls with custom variants; we only consume the
@@ -128,22 +171,30 @@ export class OpenAIProvider extends BaseProvider {
     onChunk: (chunk: AIStreamChunk) => void,
     signal?: AbortSignal
   ): Promise<void> {
+    await this.ensureChatBase()
     const client = this.getClient()
     const model = request.model || this.defaultModel
     const messages = buildOpenAIMessages(request)
 
     try {
-      const stream = await client.chat.completions.create(
-        {
-          model,
-          messages,
-          temperature: request.temperature,
-          stream: true,
-          stream_options: { include_usage: true },
-          ...(request.maxTokens ? { max_tokens: request.maxTokens } : {}),
-          ...toolOptions(request)
-        },
-        { signal }
+      // R0-3: retry only the CREATE — a stream that already emitted chunks can't
+      // be resumed without duplicating content. shouldRetry stops if the user
+      // cancelled during the backoff window.
+      const stream = await withProviderRetry(
+        () =>
+          client.chat.completions.create(
+            {
+              model,
+              messages,
+              temperature: request.temperature,
+              stream: true,
+              stream_options: { include_usage: true },
+              ...(request.maxTokens ? { max_tokens: request.maxTokens } : {}),
+              ...toolOptions(request)
+            },
+            { signal }
+          ),
+        { shouldRetry: () => !(signal?.aborted ?? false) }
       )
 
       let tokensUsed: number | undefined

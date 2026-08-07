@@ -8,6 +8,7 @@ import {
   ProviderCapabilities
 } from './BaseProvider'
 import { fetchAnthropicModels, mergeWithFallback } from './modelDiscovery'
+import { withProviderRetry } from './providerRetry'
 
 export class ClaudeProvider extends BaseProvider {
   readonly id = 'claude'
@@ -58,7 +59,7 @@ export class ClaudeProvider extends BaseProvider {
       { id: 'claude-3-5-haiku-20241022', name: 'Claude 3.5 Haiku', contextWindow: 200000 },
       { id: 'claude-3-opus-20240229', name: 'Claude 3 Opus', contextWindow: 200000 }
     ])
-    if (out.length > 0) this.modelCache.set(out)
+    if (out.length > 0) this.modelCache.set(out, runtime.length > 0)
     return out
   }
 
@@ -95,13 +96,16 @@ export class ClaudeProvider extends BaseProvider {
 
     const messages = this.toClaudeMessages(request)
 
-    const response = await client.messages.create({
-      model,
-      max_tokens: request.maxTokens || 4096,
-      system: request.systemPrompt,
-      messages,
-      temperature: request.temperature
-    })
+    // R0-3: transient 429/5xx are retried with backoff before surfacing
+    const response = await withProviderRetry(() =>
+      client.messages.create({
+        model,
+        max_tokens: request.maxTokens || 4096,
+        system: request.systemPrompt,
+        messages,
+        temperature: request.temperature
+      })
+    )
 
     const textBlock = response.content.find((b) => b.type === 'text')
     return {

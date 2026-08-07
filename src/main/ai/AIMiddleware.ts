@@ -29,13 +29,17 @@ import {
   getProposal,
   buildToolSchemas,
   nativeCallsToActions,
+  roleCanWriteMCP,
   type WriteProposal,
   type ToolResult,
   type ToolAction
 } from './AgentTools'
+import { mcpManager } from '../mcp/McpClientManager'
 import { renderPrompt } from './PromptRegistry'
 import { logAIEvent, logAIOutcome, type AIEventStatus } from './AIEventLog'
+import { shouldFailoverError, failoverCandidatesFor } from './providerFailover'
 import { verifyCitations, type CitationVerification } from './CitationVerifier'
+import { compactMessages, contextBudgetForModel, RESERVED_OUTPUT_TOKENS } from './contextCompaction'
 
 /**
  * Structured per-tool lifecycle event (P1-1). One runId spans the whole
@@ -351,7 +355,9 @@ export class AIMiddleware {
     this.abortControllers.delete(requestId)
   }
 
-  async getAllProvidersStatus(): Promise<ProviderStatus[]> {
+  async getAllProvidersStatus(
+    onProgress?: (status: ProviderStatus) => void
+  ): Promise<ProviderStatus[]> {
     const providers = [...this.providers.values()]
     // P-model-discovery: fetch every provider's model list IN PARALLEL — a slow
     // /models endpoint (8s timeout each) must not serialize into ~48s of panel
@@ -378,15 +384,24 @@ export class AIMiddleware {
         } else if (!configured) {
           error = 'API key belum di-set'
         }
-        return {
+        const status: ProviderStatus = {
           id: provider.id,
           name: provider.name,
           connected,
           configured,
           models,
           defaultModel: provider.getDefaultModel(),
-          error
+          error,
+          // When this list was really fetched (cache set time) — the Settings
+          // card stamps "diperbarui HH:MM" so stale lists are visible at a glance
+          modelsFetchedAt: provider.lastModelsFetchedAt() ?? undefined
         }
+        // Per-provider progress push — lets the Settings panel flip its spinner
+        // for THIS provider the moment its /models resolves (parallel batch, so
+        // fast providers land long before slow ones). Optional: unit callers
+        // (tests) omit it and just get the full array.
+        onProgress?.(status)
+        return status
       })
     )
     return settled
@@ -520,8 +535,12 @@ export class AIMiddleware {
     // path declares tools through the API, so teaching wg-action fences there
     // would encourage double-calling (fences AND tool_calls). P1: the tool
     // list is role-filtered — a researcher never sees write tools advertised.
+    // R0-1: MCP tools (role-filtered) ride the fence prompt for non-native
+    // providers (Claude/Gemini/Ollama) via the manager's fence docs.
     if (toolMode === 'fence') {
-      systemPrompt += '\n\n' + buildToolsSystemPrompt(agentRole)
+      systemPrompt +=
+        '\n\n' +
+        buildToolsSystemPrompt(agentRole, mcpManager.getFenceDocs(roleCanWriteMCP(agentRole)))
     }
 
     // P1-4: lean variant for tool-loop rounds 1+ — kernel + overrides + fence
@@ -533,7 +552,11 @@ export class AIMiddleware {
     // later-round answer needs them.
     let leanSystemPrompt = kernelPrompt
     if (request.systemPrompt) leanSystemPrompt += '\n\n' + request.systemPrompt
-    if (toolMode === 'fence') leanSystemPrompt += '\n\n' + buildToolsSystemPrompt(agentRole)
+    if (toolMode === 'fence') {
+      leanSystemPrompt +=
+        '\n\n' +
+        buildToolsSystemPrompt(agentRole, mcpManager.getFenceDocs(roleCanWriteMCP(agentRole)))
+    }
 
     return { systemPrompt, leanSystemPrompt, citations, contextTokens }
   }
@@ -658,7 +681,12 @@ export class AIMiddleware {
       status: 'started'
     })
     try {
-      await this.runStreamInner(
+      // R1-2: run the whole invocation with automatic provider failover — a
+      // terminal error (401/403/429/5xx after the provider's own retries) on
+      // the ACTIVE provider restarts the stream on the next configured one.
+      // The returned id is the provider that actually served, so stream_end
+      // records the real serving provider, not the one that was active first.
+      providerId = await this.runStreamWithFailover(
         request,
         wrapped,
         activeFilePath,
@@ -684,6 +712,32 @@ export class AIMiddleware {
       })
       if (requestId) this.abortControllers.delete(requestId)
     }
+  }
+
+  /**
+   * R1-1: the model's context budget for compaction. Prefers the provider's
+   * ACTUAL ModelInfo.contextWindow (listModels is TTL-cached, so warm calls are
+   * instant); falls back to the static family map after a 250ms best-effort
+   * race so a cold cache (first message of a session) can never stall the
+   * stream start on an 8s /models fetch.
+   */
+  private async resolveCompactionBudget(provider: BaseProvider, model?: string): Promise<number> {
+    const fromMap = contextBudgetForModel(model)
+    if (!model) return fromMap
+    try {
+      const models = await Promise.race([
+        provider.listModels(),
+        new Promise<never>((_, reject) => {
+          const t = setTimeout(() => reject(new Error('budget timeout')), 250)
+          t.unref?.()
+        })
+      ])
+      const info = models.find((m) => m.id === model)
+      if (info?.contextWindow && info.contextWindow > 0) return info.contextWindow
+    } catch {
+      /* cold cache / slow endpoint → static map */
+    }
+    return fromMap
   }
 
   /**
@@ -837,7 +891,9 @@ export class AIMiddleware {
         onChunk(chunk)
       }
 
-      await this.runStreamInner(
+      // R1-2: each stage independently gets provider failover (the note chunk
+      // rides stageOnChunk → the user sees "failover" inside the stage too).
+      await this.runStreamWithFailover(
         stageRequest,
         stageOnChunk,
         activeFilePath,
@@ -871,6 +927,160 @@ export class AIMiddleware {
             content: `[Hasil Stage ${i + 1} — ${stage.role}]\n${cleaned || '(tidak ada output)'}\n\nLanjutkan ke stage berikutnya.`
           }
         ]
+      }
+    }
+  }
+
+  /**
+   * R1-2: run the whole stream invocation with automatic provider failover.
+   *
+   * The ACTIVE provider runs first. When its stream ends in a TERMINAL error
+   * (401/403/429/5xx — the provider-internal retry budget in providerRetry.ts
+   * is already exhausted by then), the invocation restarts on the next
+   * CONFIGURED provider (settings `aiFailoverOrder`, else registration order;
+   * Ollama never participates — a dead local daemon isn't a cloud outage).
+   *
+   * The user sees a `*(failover: X → Y)*` note chunk (the failed attempt's
+   * error chunk is swallowed so the UI never flashes an error mid-recovery),
+   * and the AI event log records a `failover` event with from→target. The
+   * stream_end event (logged by streamMessage) then records the provider that
+   * ACTUALLY served. Watchdog timeouts / user cancels never fail over — only
+   * hard provider errors.
+   *
+   * Returns the id of the provider that produced the terminal outcome (or
+   * undefined when no provider was active/configured).
+   */
+  private async runStreamWithFailover(
+    request: AIRequest,
+    onChunk: (chunk: StreamEvent) => void,
+    activeFilePath: string | undefined,
+    useContext: boolean,
+    agentRole: AgentRole,
+    enableTools: boolean,
+    requestId: string | undefined,
+    signal: AbortSignal | undefined,
+    controller: AbortController | undefined
+  ): Promise<string | undefined> {
+    let activeId: string | undefined
+    try {
+      activeId = this.getActiveProvider().id
+    } catch {
+      /* provider may be unconfigured — runStreamInner surfaces the error */
+    }
+    const settings = workspaceEngine.getSettings() as { aiFailoverOrder?: unknown } | undefined
+    const candidates = activeId ? failoverCandidatesFor(this.providers, activeId, settings) : []
+
+    // Fast path: no active provider or nothing to fail over to — behave exactly
+    // like the pre-R1-2 single-provider flow.
+    if (!activeId || candidates.length === 0) {
+      await this.runStreamInner(
+        request,
+        onChunk,
+        activeFilePath,
+        useContext,
+        agentRole,
+        enableTools,
+        requestId,
+        signal,
+        controller
+      )
+      return activeId
+    }
+
+    const chain: string[] = [activeId, ...candidates.map((c) => c.id)]
+    // runStreamInner may stamp request.model with the first provider's default;
+    // restore the caller's intent before every attempt so the next provider
+    // falls back to ITS default rather than inheriting a foreign model id.
+    const originalModel = request.model
+    let servedBy: string | undefined = activeId
+    let lastError: string | undefined
+
+    try {
+      for (let i = 0; i < chain.length; i++) {
+        const providerId = chain[i]
+        request.model = originalModel
+
+        if (i > 0) {
+          this.setActiveProvider(providerId)
+          const from = chain[i - 1]
+          onChunk({
+            content: `\n\n*(⚠ failover: ${from} gagal (${lastError ?? 'unknown error'}) → mencoba ${providerId})*\n`,
+            done: false,
+            toolStatus: `Failover ke ${providerId}`
+          })
+          logAIEvent({
+            kind: 'failover',
+            provider: from,
+            target: providerId,
+            model: request.model,
+            requestId,
+            status: 'error',
+            error: lastError
+          })
+        }
+
+        // Hold the terminal chunk + mid-stream error markers: a failover-worthy
+        // error must be swallowed (the note replaces it); success / final failure
+        // is forwarded after the call. Mid-stream `done:false + error` markers
+        // ride the same rule — the renderer treats `done && error` as terminal,
+        // but a stale error field on a non-done chunk would still confuse it.
+        let terminal: StreamEvent | undefined
+        let midError: StreamEvent | undefined
+        const capture: (c: StreamEvent) => void = (c) => {
+          if (c.done) {
+            terminal = c
+            return
+          }
+          if (c.error) {
+            midError = c
+            return
+          }
+          onChunk(c)
+        }
+        await this.runStreamInner(
+          request,
+          capture,
+          activeFilePath,
+          useContext,
+          agentRole,
+          enableTools,
+          requestId,
+          signal,
+          controller
+        )
+        servedBy = providerId
+
+        const terminalError = terminal?.error
+        const canFailover =
+          Boolean(terminalError) && shouldFailoverError(terminalError) && i < chain.length - 1
+        if (canFailover) {
+          // Reviewer: guard against a cancel that lands BETWEEN attempts — the
+          // user's Cancel shouldn't pay for a fresh provider round + note.
+          if (requestId && this.isCancelled(requestId)) {
+            if (terminal) onChunk(terminal)
+            return servedBy
+          }
+          lastError = terminalError
+          // swallow the failed attempt's error markers — recovery continues
+          continue
+        }
+        // Forward the real terminal outcome (success, or the last provider's error)
+        if (midError) onChunk(midError)
+        if (terminal) onChunk(terminal)
+        return servedBy
+      }
+      return servedBy
+    } finally {
+      // Failover is per-STREAM resilience: restore the user's configured active
+      // provider so the next message starts from their selection again (a dead
+      // key is still their choice — the note + AI event log make the recovery
+      // visible). Never throws.
+      if (activeId && activeId !== this.activeProviderId) {
+        try {
+          this.setActiveProvider(activeId)
+        } catch {
+          /* ignore */
+        }
       }
     }
   }
@@ -958,6 +1168,29 @@ export class AIMiddleware {
       }
     }
 
+    // R1-1: auto context compaction. When the estimated history crosses ~80%
+    // of the model's context budget (minus injected workspace context and a
+    // reply headroom), fold the OLDEST messages into a deterministic
+    // [Compacted] block — the recent tail survives, so a 200-message chat
+    // never stalls on provider limits. No extra model call (extractive).
+    const compactBudget =
+      (await this.resolveCompactionBudget(provider, request.model)) -
+      (contextTokens ?? 0) -
+      RESERVED_OUTPUT_TOKENS
+    const compact = compactMessages(messages, Math.max(4096, compactBudget))
+    if (compact.compactedCount > 0) {
+      messages = compact.messages
+      const freed =
+        compact.freedTokens >= 1000
+          ? `${(compact.freedTokens / 1000).toFixed(1)}k`
+          : String(compact.freedTokens)
+      onChunk({
+        content: `\n\n*(context di-compact — ${compact.compactedCount} pesan lama diringkas, menghemat ±${freed} token)*\n`,
+        done: false,
+        toolStatus: `Context compacted (${compact.compactedCount} pesan)`
+      })
+    }
+
     const allProposals: WriteProposal[] = []
     let lastCitations = citations
     // contextTokens are emitted once per STREAM (not per tool round).
@@ -1038,7 +1271,11 @@ export class AIMiddleware {
       }
       if (nativeTools) {
         // P1: only advertise the tools this role may call (researcher sees reads only)
-        req.tools = buildToolSchemas(agentRole)
+        // R0-1: MCP tools appended — already role/write-gated by the manager.
+        req.tools = [
+          ...buildToolSchemas(agentRole),
+          ...mcpManager.getToolSchemas(roleCanWriteMCP(agentRole))
+        ]
         req.tool_choice = 'auto'
       }
 
@@ -1177,9 +1414,21 @@ export class AIMiddleware {
         return
       }
 
-      const known = pending.filter((p) => isReadTool(p.action.tool) || isWriteTool(p.action.tool))
+      // R0-1: any mcp__ name is a KNOWN tool — a disconnected server must
+      // surface executeTool's "tidak terhubung" error, never a misleading
+      // "unknown tool skipped" (the model may call an advertised schema whose
+      // server just dropped).
+      const known = pending.filter(
+        (p) =>
+          isReadTool(p.action.tool) ||
+          isWriteTool(p.action.tool) ||
+          mcpManager.isMcpTool(p.action.tool)
+      )
       const unknown = pending.filter(
-        (p) => !isReadTool(p.action.tool) && !isWriteTool(p.action.tool)
+        (p) =>
+          !isReadTool(p.action.tool) &&
+          !isWriteTool(p.action.tool) &&
+          !mcpManager.isMcpTool(p.action.tool)
       )
       if (unknown.length) {
         onChunk({
@@ -1209,47 +1458,24 @@ export class AIMiddleware {
       }
 
       const readPending = known.filter((p) => isReadTool(p.action.tool))
-      const writePending = known.filter((p) => isWriteTool(p.action.tool))
+      // R0-1: MCP tools that aren't read-classified (write OR disconnected —
+      // classification needs the live tool set) run on the sequential path so
+      // executeTool surfaces the proper connect/write-gate error.
+      const writePending = known.filter(
+        (p) => isWriteTool(p.action.tool) || mcpManager.isMcpTool(p.action.tool)
+      )
       const results: ToolResult[] = []
       // Native loop: results must zip back to the model's tool_call_id
       const resultByCall = new Map<string, ToolResult>()
 
-      // Reads first (gather facts), then write proposals
-      for (const p of readPending) {
-        const runId = nextToolRunId()
-        onChunk({
-          content: '',
-          done: false,
-          toolStatus: `▸ ${p.action.tool}`,
-          toolRun: { runId, tool: p.action.tool, status: 'running', round },
-          round
-        })
-        const r = await executeToolWithTimeout(p.action, agentRole)
-        results.push(r)
-        if (p.callId) resultByCall.set(p.callId, r)
-        if (!r.ok) {
-          onChunk({
-            content: `\n\n*(tool ${p.action.tool} failed: ${r.error})*\n`,
-            done: false,
-            toolStatus: `✗ ${p.action.tool}`,
-            toolRun: { runId, tool: p.action.tool, status: 'error', detail: r.error, round },
-            round
-          })
-        } else {
-          onChunk({
-            content: '',
-            done: false,
-            toolRun: {
-              runId,
-              tool: p.action.tool,
-              status: 'ok',
-              detail: toolResultDetail(r),
-              round
-            },
-            round
-          })
-        }
-        if (r.ok && p.action.tool === 'read_note' && r.result && typeof r.result === 'object') {
+      // Reads first (gather facts), then write proposals.
+      // R0-2: reads run in PARALLEL batches (rate-limit friendly) so N fact-gather
+      // calls don't serialize into N×latency; writes stay sequential (deterministic
+      // Apply order). The running/ok/error events are emitted in REQUEST order so
+      // the UI tool-run trail never reorders even though calls overlap.
+      const READ_BATCH_SIZE = 4
+      const collectReadCitations = (r: ToolResult): void => {
+        if (r.ok && r.tool === 'read_note' && r.result && typeof r.result === 'object') {
           const res = r.result as { title?: string; absolutePath?: string }
           if (res.absolutePath && res.title) {
             if (!lastCitations.some((c) => c.path === res.absolutePath)) {
@@ -1257,13 +1483,64 @@ export class AIMiddleware {
             }
           }
         }
-        if (r.ok && p.action.tool === 'search' && Array.isArray(r.result)) {
+        if (r.ok && r.tool === 'search' && Array.isArray(r.result)) {
           for (const hit of r.result as { title: string; absolutePath: string }[]) {
             if (hit.absolutePath && !lastCitations.some((c) => c.path === hit.absolutePath)) {
               lastCitations = [...lastCitations, { title: hit.title, path: hit.absolutePath }]
             }
           }
         }
+      }
+      const runReadBatch = async (batch: (typeof readPending)[number][]): Promise<void> => {
+        const runs = batch.map((p) => ({ p, runId: nextToolRunId() }))
+        // running events first, in order — the trail shows the whole batch kicking off
+        for (const { p, runId } of runs) {
+          onChunk({
+            content: '',
+            done: false,
+            toolStatus: `▸ ${p.action.tool}`,
+            toolRun: { runId, tool: p.action.tool, status: 'running', round },
+            round
+          })
+        }
+        const executed = await Promise.all(
+          runs.map(async ({ p, runId }) => ({
+            p,
+            runId,
+            r: await executeToolWithTimeout(p.action, agentRole)
+          }))
+        )
+        // completion events in the SAME request order (deterministic UI trail)
+        for (const { p, runId, r } of executed) {
+          results.push(r)
+          if (p.callId) resultByCall.set(p.callId, r)
+          if (!r.ok) {
+            onChunk({
+              content: `\n\n*(tool ${p.action.tool} failed: ${r.error})*\n`,
+              done: false,
+              toolStatus: `✗ ${p.action.tool}`,
+              toolRun: { runId, tool: p.action.tool, status: 'error', detail: r.error, round },
+              round
+            })
+          } else {
+            onChunk({
+              content: '',
+              done: false,
+              toolRun: {
+                runId,
+                tool: p.action.tool,
+                status: 'ok',
+                detail: toolResultDetail(r),
+                round
+              },
+              round
+            })
+          }
+          collectReadCitations(r)
+        }
+      }
+      for (let i = 0; i < readPending.length; i += READ_BATCH_SIZE) {
+        await runReadBatch(readPending.slice(i, i + READ_BATCH_SIZE))
       }
 
       for (const p of writePending) {
@@ -1307,6 +1584,22 @@ export class AIMiddleware {
               tool: p.action.tool,
               status: 'error',
               detail: r.error,
+              round
+            },
+            round
+          })
+        } else {
+          // Non-proposal write success (R0-1 MCP write tools execute directly —
+          // external side effects, not vault proposals). Emit a completion event
+          // so the tool-run trail doesn't hang on "running" forever.
+          onChunk({
+            content: '',
+            done: false,
+            toolRun: {
+              runId,
+              tool: p.action.tool,
+              status: 'ok',
+              detail: toolResultDetail(r),
               round
             },
             round

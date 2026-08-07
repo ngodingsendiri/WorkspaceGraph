@@ -65,8 +65,14 @@ export function registerAIHandlers(): void {
   wireEmbeddingProgressBroadcast()
 
   // --- AI Handlers ---
-  ipcMain.handle('ai:getProviders', async () => {
-    return aiMiddleware.getAllProvidersStatus()
+  ipcMain.handle('ai:getProviders', async (event) => {
+    // Push each provider's status as it resolves so the Settings panel can
+    // flip that card's spinner immediately (fast providers land way before
+    // slow ones in the parallel batch — never a blank "0 models" card).
+    return aiMiddleware.getAllProvidersStatus((status) => {
+      const win = BrowserWindow.fromWebContents(event.sender)
+      if (win && !win.isDestroyed()) win.webContents.send('ai:providerStatus', status)
+    })
   })
 
   ipcMain.handle('ai:testProvider', async (_, providerId?: string) => {

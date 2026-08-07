@@ -2,7 +2,42 @@ import React, { useEffect, useState } from 'react'
 import { applyTheme, getCachedThemePref, type ThemePreference } from '../../utils/theme'
 
 type Section =
-  'ai' | 'appearance' | 'index' | 'security' | 'automation' | 'plugins' | 'logs' | 'about'
+  'ai' | 'appearance' | 'index' | 'security' | 'automation' | 'plugins' | 'mcp' | 'logs' | 'about'
+
+/** R0-1 MCP server config (shape mirrors main's McpServerConfig). */
+interface McpServerCfg {
+  id: string
+  name: string
+  transport: 'stdio' | 'http'
+  command?: string
+  args?: string[]
+  env?: Record<string, string>
+  url?: string
+  enabled: boolean
+  allowWriteTools: boolean
+}
+
+interface McpServerSt {
+  id: string
+  name: string
+  transport: 'stdio' | 'http'
+  enabled: boolean
+  allowWriteTools: boolean
+  connected: boolean
+  tools: number
+  error?: string
+}
+
+const newMcpDraft = (): McpServerCfg => ({
+  id: '',
+  name: '',
+  transport: 'stdio',
+  command: '',
+  args: [],
+  url: '',
+  enabled: true,
+  allowWriteTools: false
+})
 
 /** One row of the AI event trail (shape mirrors AIEvent in main). */
 interface AIEventRow {
@@ -33,6 +68,35 @@ type LogFilter = (typeof LOG_FILTERS)[number]['id']
 
 const DAYS_ID = ['Min', 'Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab']
 
+/**
+ * Static card shells rendered instantly while getAIProviders is in flight.
+ * Mirrors the provider registration order in AIMiddleware — each card shows a
+ * spinner until the per-provider `ai:providerStatus` push (or the full batch
+ * result) replaces it with the real status. Keeps the panel from ever looking
+ * like an empty list while the parallel /models fetches resolve.
+ */
+const PROVIDER_SHELLS: { id: string; name: string }[] = [
+  { id: 'grok', name: 'Grok (xAI)' },
+  { id: 'gemini', name: 'Gemini' },
+  { id: 'openai', name: 'OpenAI' },
+  { id: 'claude', name: 'Claude' },
+  { id: 'ollama', name: 'Ollama' },
+  { id: 'openrouter', name: 'OpenRouter' }
+]
+
+/**
+ * Compact "diperbarui …" stamp for a provider card. Same-day → just the time;
+ * older → short date + time so a stale list is obvious at a glance.
+ */
+function formatRefreshedAt(ts?: number): string {
+  if (!ts) return ''
+  const d = new Date(ts)
+  const sameDay = d.toDateString() === new Date().toDateString()
+  const time = d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+  if (sameDay) return `diperbarui ${time}`
+  return `diperbarui ${d.toLocaleDateString([], { day: 'numeric', month: 'short' })} ${time}`
+}
+
 const DEFAULT_RULE_DRAFT = {
   name: '',
   mode: 'interval' as 'interval' | 'daily',
@@ -54,7 +118,9 @@ export const SettingsView: React.FC = () => {
       connected: boolean
       configured?: boolean
       error?: string
-      models: { id: string; name: string; free?: boolean }[]
+      models: { id: string; name: string; free?: boolean; ownedBy?: string }[]
+      /** Unix ms when main last fetched this provider's model list (cache set time). */
+      modelsFetchedAt?: number
     }[]
   >([])
   const [apiKeys, setApiKeys] = useState<Record<string, string>>({})
@@ -123,6 +189,8 @@ export const SettingsView: React.FC = () => {
     }[]
   >([])
   const [health, setHealth] = useState<Record<string, unknown> | null>(null)
+  /** Provider ids whose listModels is still in flight — card shows a spinner. */
+  const [loadingProviders, setLoadingProviders] = useState<Record<string, boolean>>({})
   const [semanticContext, setSemanticContext] = useState(true)
   const [trashEnabled, setTrashEnabled] = useState(true)
   const [showAddRule, setShowAddRule] = useState(false)
@@ -135,15 +203,92 @@ export const SettingsView: React.FC = () => {
     sizeBytes: number
   } | null>(null)
   const [retentionDays, setRetentionDays] = useState(0)
+  // R0-1 MCP: registered servers + live statuses + add-form draft
+  const [mcpServers, setMcpServers] = useState<McpServerCfg[]>([])
+  const [mcpStatuses, setMcpStatuses] = useState<McpServerSt[]>([])
+  const [mcpDraft, setMcpDraft] = useState<McpServerCfg>(newMcpDraft)
+  const [showMcpAdd, setShowMcpAdd] = useState(false)
+  const [mcpBusy, setMcpBusy] = useState<Record<string, boolean>>({})
 
   const flash = (msg: string): void => {
     setSavedStatus(msg)
     setTimeout(() => setSavedStatus(''), 3000)
   }
 
+  const loadMcp = async (): Promise<void> => {
+    try {
+      const res = await window.api.getMcpServers()
+      setMcpServers((res.servers || []) as McpServerCfg[])
+      setMcpStatuses((res.statuses || []) as McpServerSt[])
+    } catch {
+      /* ignore */
+    }
+  }
+
+  const saveMcp = async (servers: McpServerCfg[]): Promise<void> => {
+    try {
+      const res = await window.api.saveMcpServers(servers as never[])
+      if (res.ok) {
+        setMcpServers(servers)
+        setMcpStatuses((res.statuses || []) as McpServerSt[])
+        flash('MCP servers saved — tools siap dipakai AI')
+      } else {
+        flash(res.error || 'MCP save gagal')
+      }
+    } catch (e) {
+      flash(e instanceof Error ? e.message : 'MCP save failed')
+    }
+  }
+
+  const testMcpServer = async (server: McpServerCfg, label: string): Promise<void> => {
+    setMcpBusy((prev) => ({ ...prev, [label]: true }))
+    try {
+      const res = await window.api.testMcpServer(server as never)
+      if (res.ok) {
+        flash(`MCP OK ${label}: ${res.tools ?? 0} tools ditemukan`)
+      } else {
+        flash(`MCP FAIL ${label}: ${res.error || 'tidak terhubung'}`)
+      }
+      await loadMcp()
+    } catch (e) {
+      flash(e instanceof Error ? e.message : 'MCP test failed')
+    } finally {
+      setMcpBusy((prev) => {
+        const next = { ...prev }
+        delete next[label]
+        return next
+      })
+    }
+  }
+
   const loadAll = async (): Promise<void> => {
-    const list = await window.api.getAIProviders()
-    setProviders(list || [])
+    // First load: seed static card shells so the section renders instantly with
+    // spinners (never an empty list while the parallel /models fetches run).
+    // Refresh: mark the existing cards loading so counts don't look stale.
+    const known = providers.length > 0 ? providers : PROVIDER_SHELLS
+    if (providers.length === 0) {
+      setProviders(
+        PROVIDER_SHELLS.map((s) => ({
+          id: s.id,
+          name: s.name,
+          connected: false,
+          configured: undefined,
+          error: undefined,
+          models: []
+        }))
+      )
+    }
+    setLoadingProviders(Object.fromEntries(known.map((p) => [p.id, true])))
+    try {
+      const list = await window.api.getAIProviders()
+      setProviders(list || [])
+    } catch (err) {
+      // IPC failure: keep the shells/current cards visible; spinners must still
+      // clear (finally) or every card would spin forever + unhandled rejection
+      console.error('[settings] getAIProviders failed:', err)
+    } finally {
+      setLoadingProviders({})
+    }
     try {
       const settings = (await window.api.getSettings()) as {
         ai?: Record<string, { apiKey?: string; baseUrl?: string }>
@@ -180,6 +325,7 @@ export const SettingsView: React.FC = () => {
       setPlugins(await window.api.listPlugins())
       setPluginCmds(await window.api.listPluginCommands())
       setHealth(await window.api.getApiHealth())
+      await loadMcp()
     } catch {
       /* ignore */
     }
@@ -191,6 +337,60 @@ export const SettingsView: React.FC = () => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- one-shot bootstrap
     void loadAll()
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // Per-provider progress: main pushes each resolved status the moment its
+  // /models fetch lands — flip that card's spinner off and fill its models
+  // immediately, instead of waiting for the whole parallel batch.
+  useEffect(() => {
+    const unsub = window.api.onAIProviderStatus((status) => {
+      const s = status as {
+        id: string
+        name?: string
+        connected?: boolean
+        configured?: boolean
+        error?: string
+        models?: { id: string; name: string; free?: boolean; ownedBy?: string }[]
+        modelsFetchedAt?: number
+      }
+      if (!s?.id) return
+      setProviders((prev) => {
+        const exists = prev.some((p) => p.id === s.id)
+        return exists
+          ? prev.map((p) =>
+              p.id === s.id
+                ? {
+                    id: s.id,
+                    name: s.name || p.name,
+                    connected: Boolean(s.connected),
+                    configured: s.configured,
+                    error: s.error,
+                    models: s.models || [],
+                    modelsFetchedAt: s.modelsFetchedAt
+                  }
+                : p
+            )
+          : [
+              ...prev,
+              {
+                id: s.id,
+                name: s.name || s.id,
+                connected: Boolean(s.connected),
+                configured: s.configured,
+                error: s.error,
+                models: s.models || [],
+                modelsFetchedAt: s.modelsFetchedAt
+              }
+            ]
+      })
+      setLoadingProviders((prev) => {
+        if (!prev[s.id]) return prev
+        const next = { ...prev }
+        delete next[s.id]
+        return next
+      })
+    })
+    return unsub
   }, [])
 
   const handleSaveKey = async (providerId: string): Promise<void> => {
@@ -217,6 +417,20 @@ export const SettingsView: React.FC = () => {
       // BUGFIX: do NOT setActive on Save — that silently switched chat provider
       const pathHint = res && typeof res === 'object' && res.path ? ` · ${res.path}` : ''
       flash(`Saved ${providerId}. Klik Test, atau pilih provider di Chat.${pathHint}`)
+      // Auto-refresh THIS provider's model list right after a successful save
+      // so a new key/baseUrl shows its real catalog immediately — no manual
+      // Refresh click. configure() already busted the TTL cache; this just
+      // guarantees the fetch runs with the saved credentials and the card
+      // spinner reflects it. loadAll() below then reuses the fresh cache.
+      setLoadingProviders((prev) => ({ ...prev, [providerId]: true }))
+      // Surface a failed refresh: a wrong key/baseUrl would otherwise fall back
+      // to the static list and look "saved fine" while the real API rejects.
+      const refreshed = await window.api.refreshProviderModels(providerId).catch(() => null)
+      if (refreshed && typeof refreshed === 'object' && !refreshed.ok) {
+        flash(
+          `Saved, tapi model gagal dimuat: ${refreshed.error || 'unknown'} — cek key/baseUrl, lalu Refresh models`
+        )
+      }
       await loadAll()
     } catch (e) {
       flash(e instanceof Error ? e.message : 'Save failed')
@@ -251,6 +465,8 @@ export const SettingsView: React.FC = () => {
 
   /** Bypass the 5-min model cache: pull the live list from the API now. */
   const handleRefreshModels = async (providerId: string): Promise<void> => {
+    // Spinner on this card while the cache-busting fetch runs
+    setLoadingProviders((prev) => ({ ...prev, [providerId]: true }))
     try {
       const res = await window.api.refreshProviderModels(providerId)
       if (res.ok) {
@@ -261,6 +477,15 @@ export const SettingsView: React.FC = () => {
       await loadAll()
     } catch (e) {
       flash(e instanceof Error ? e.message : 'Refresh failed')
+    } finally {
+      // Error path never reached loadAll — clear THIS card's spinner explicitly
+      // (loadAll clears everything on success, so this is idempotent)
+      setLoadingProviders((prev) => {
+        if (!prev[providerId]) return prev
+        const next = { ...prev }
+        delete next[providerId]
+        return next
+      })
     }
   }
 
@@ -449,6 +674,7 @@ export const SettingsView: React.FC = () => {
     { id: 'security', label: 'Security' },
     { id: 'automation', label: 'Automation' },
     { id: 'plugins', label: 'Plugins' },
+    { id: 'mcp', label: 'MCP' },
     { id: 'appearance', label: 'Appearance' },
     { id: 'logs', label: 'AI Activity' },
     { id: 'about', label: 'About' }
@@ -464,7 +690,13 @@ export const SettingsView: React.FC = () => {
             className={`nav-item ${section === n.id ? 'active' : ''}`}
             onClick={() => {
               setSection(n.id)
-              if (n.id === 'automation' || n.id === 'plugins' || n.id === 'security') void loadAll()
+              if (
+                n.id === 'automation' ||
+                n.id === 'plugins' ||
+                n.id === 'security' ||
+                n.id === 'mcp'
+              )
+                void loadAll()
               if (n.id === 'logs') void loadAIEvents()
             }}
           >
@@ -547,6 +779,7 @@ export const SettingsView: React.FC = () => {
             {providers.map((p) => {
               // Ollama: "connected" = daemon reachable. Cloud: "configured" = key saved (not live ping).
               const isReady = p.id === 'ollama' ? Boolean(p.connected) : Boolean(p.configured)
+              const isLoading = Boolean(loadingProviders[p.id])
               const freeCount = p.models.filter((m) => m.free).length
               const freeHint =
                 freeCount > 0
@@ -554,13 +787,18 @@ export const SettingsView: React.FC = () => {
                   : p.id === 'ollama'
                     ? ' · semua lokal (gratis)'
                     : ''
+              // owned_by from /models — surfaced as the gateway vendor label
+              const vendor =
+                [...new Set(p.models.map((m) => m.ownedBy).filter(Boolean))]
+                  .slice(0, 2)
+                  .join('/') || ''
               const statusText =
                 p.id === 'ollama'
                   ? p.connected
                     ? `Online · ${p.models.length} models${freeHint}`
                     : 'Offline — jalankan Ollama di localhost'
                   : p.configured
-                    ? `Key saved · ${p.models.length} models${freeHint} · klik Test`
+                    ? `Key saved · ${p.models.length} models${freeHint}${vendor ? ` · vendor ${vendor}` : ''} · klik Test`
                     : p.error || 'Not configured'
               return (
                 <div key={p.id} className={`provider-card ${isReady ? 'active' : ''}`}>
@@ -568,16 +806,31 @@ export const SettingsView: React.FC = () => {
                   <div style={{ flex: 1, minWidth: 120 }}>
                     <div style={{ fontWeight: 600, fontSize: 'var(--text-sm)' }}>{p.name}</div>
                     <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
-                      {statusText}
-                      {secStatus?.secrets?.[p.id] ? ` · key:${secStatus.secrets[p.id]}` : ''}
+                      {isLoading ? (
+                        <span className="provider-loading">
+                          <span className="spinner spinner-sm" /> Memuat model…
+                        </span>
+                      ) : (
+                        <>
+                          {statusText}
+                          {p.modelsFetchedAt ? ` · ${formatRefreshedAt(p.modelsFetchedAt)}` : ''}
+                          {secStatus?.secrets?.[p.id] ? ` · key:${secStatus.secrets[p.id]}` : ''}
+                        </>
+                      )}
                     </div>
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                    {p.id === 'ollama' ? (
+                    {p.id === 'ollama' || p.id === 'openai' || p.id === 'grok' ? (
                       <input
                         type="text"
                         className="input"
-                        placeholder="http://localhost:11434"
+                        placeholder={
+                          p.id === 'ollama'
+                            ? 'http://localhost:11434'
+                            : p.id === 'grok'
+                              ? 'https://api.x.ai/v1'
+                              : 'https://api.openai.com/v1'
+                        }
                         style={{ width: 260 }}
                         value={baseUrls[p.id] || ''}
                         onChange={(e) => setBaseUrls({ ...baseUrls, [p.id]: e.target.value })}
@@ -618,9 +871,9 @@ export const SettingsView: React.FC = () => {
                         className="btn btn-surface btn-sm"
                         title="Bypass cache 5 menit — tarik ulang daftar model dari API sekarang"
                         onClick={() => void handleRefreshModels(p.id)}
-                        disabled={!isReady}
+                        disabled={!isReady || isLoading}
                       >
-                        Refresh models
+                        {isLoading ? 'Memuat…' : 'Refresh models'}
                       </button>
                       <button
                         className="btn btn-primary btn-sm"
@@ -1208,6 +1461,258 @@ export const SettingsView: React.FC = () => {
                 </span>
               </button>
             ))}
+          </div>
+        )}
+
+        {section === 'mcp' && (
+          <div className="settings-section">
+            <h2>MCP Servers</h2>
+            <p
+              style={{
+                fontSize: 'var(--text-sm)',
+                color: 'var(--text-secondary)',
+                marginBottom: 12
+              }}
+            >
+              Model Context Protocol — hubungkan server eksternal (filesystem, GitHub, database,
+              search, dsb.). Tool-nya muncul ke AI sebagai <code>mcp__server__tool</code> dan tunduk
+              pada izin peran + toggle write di bawah. Config tersimpan di{' '}
+              <code>.workspacegraph/mcp.json</code>.
+            </p>
+
+            {mcpServers.length === 0 && (
+              <div
+                style={{
+                  fontSize: 'var(--text-xs)',
+                  color: 'var(--text-muted)',
+                  padding: '10px 0',
+                  marginBottom: 8
+                }}
+              >
+                Belum ada server. Tambahkan di bawah, atau edit{' '}
+                <code>.workspacegraph/mcp.json</code> langsung (contoh: npx
+                @modelcontextprotocol/server-filesystem).
+              </div>
+            )}
+
+            {mcpServers.map((s) => {
+              const st = mcpStatuses.find((x) => x.id === s.id)
+              const busy = Boolean(mcpBusy[s.id])
+              return (
+                <div
+                  key={s.id}
+                  style={{
+                    background: 'var(--bg-surface)',
+                    padding: 12,
+                    borderRadius: 6,
+                    marginBottom: 8
+                  }}
+                >
+                  <div
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      gap: 8
+                    }}
+                  >
+                    <div style={{ fontWeight: 600, fontSize: 'var(--text-sm)', minWidth: 0 }}>
+                      {s.name}{' '}
+                      <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>· {s.id}</span>
+                      <span
+                        className="badge"
+                        style={{ marginLeft: 6, background: 'var(--bg-elevated)' }}
+                      >
+                        {s.transport}
+                      </span>
+                    </div>
+                    <span
+                      className={`badge ${st?.connected ? 'badge-success' : 'badge-surface'}`}
+                      style={{ flexShrink: 0 }}
+                    >
+                      {st?.connected ? `terhubung · ${st.tools} tools` : 'putus'}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
+                    {s.transport === 'stdio'
+                      ? `command: ${s.command} ${(s.args || []).join(' ')}`
+                      : `url: ${s.url}`}
+                    {st?.error ? (
+                      <span style={{ color: 'var(--color-error)' }}> · {st.error}</span>
+                    ) : null}
+                  </div>
+                  <div
+                    style={{
+                      display: 'flex',
+                      gap: 12,
+                      marginTop: 8,
+                      flexWrap: 'wrap',
+                      alignItems: 'center'
+                    }}
+                  >
+                    <label style={{ fontSize: 11, display: 'flex', alignItems: 'center', gap: 4 }}>
+                      <input
+                        type="checkbox"
+                        checked={s.enabled}
+                        onChange={(e) =>
+                          void saveMcp(
+                            mcpServers.map((x) =>
+                              x.id === s.id ? { ...x, enabled: e.target.checked } : x
+                            )
+                          )
+                        }
+                      />
+                      Enabled
+                    </label>
+                    <label
+                      style={{ fontSize: 11, display: 'flex', alignItems: 'center', gap: 4 }}
+                      title="Write tools (bukan readOnlyHint) hanya jalan jika ini ON — read tools selalu jalan"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={s.allowWriteTools}
+                        onChange={(e) =>
+                          void saveMcp(
+                            mcpServers.map((x) =>
+                              x.id === s.id ? { ...x, allowWriteTools: e.target.checked } : x
+                            )
+                          )
+                        }
+                      />
+                      Izinkan tool write
+                    </label>
+                    <button
+                      className="btn btn-surface btn-sm"
+                      disabled={busy || !s.enabled}
+                      onClick={() => void testMcpServer(s, s.id)}
+                    >
+                      {busy ? 'Memuat…' : 'Test'}
+                    </button>
+                    <button
+                      className="btn btn-ghost btn-sm"
+                      style={{ fontSize: 10 }}
+                      onClick={() => void saveMcp(mcpServers.filter((x) => x.id !== s.id))}
+                    >
+                      Hapus
+                    </button>
+                  </div>
+                </div>
+              )
+            })}
+
+            <button
+              className="btn btn-surface btn-sm"
+              style={{ marginTop: 4 }}
+              onClick={() => setShowMcpAdd((v) => !v)}
+            >
+              {showMcpAdd ? 'Batal' : '+ Tambah server MCP'}
+            </button>
+            {showMcpAdd && (
+              <div
+                style={{
+                  background: 'var(--bg-surface)',
+                  padding: 12,
+                  borderRadius: 6,
+                  marginTop: 8,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: 10
+                }}
+              >
+                <input
+                  className="input"
+                  placeholder="Nama server (mis. Filesystem)"
+                  value={mcpDraft.name}
+                  onChange={(e) => setMcpDraft({ ...mcpDraft, name: e.target.value })}
+                />
+                <div style={{ display: 'flex', gap: 6 }}>
+                  {(['stdio', 'http'] as const).map((t) => (
+                    <button
+                      key={t}
+                      className={`btn btn-sm ${mcpDraft.transport === t ? 'btn-primary' : 'btn-surface'}`}
+                      onClick={() => setMcpDraft({ ...mcpDraft, transport: t })}
+                    >
+                      {t === 'stdio' ? 'Local (stdio)' : 'Remote (HTTP)'}
+                    </button>
+                  ))}
+                </div>
+                {mcpDraft.transport === 'stdio' ? (
+                  <>
+                    <input
+                      className="input"
+                      placeholder="Command (mis. npx @modelcontextprotocol/server-filesystem)"
+                      value={mcpDraft.command || ''}
+                      onChange={(e) => setMcpDraft({ ...mcpDraft, command: e.target.value })}
+                    />
+                    <input
+                      className="input"
+                      placeholder="Args dipisah spasi (mis. ./vault)"
+                      value={(mcpDraft.args || []).join(' ')}
+                      onChange={(e) =>
+                        setMcpDraft({
+                          ...mcpDraft,
+                          args: e.target.value.split(/\s+/).filter(Boolean)
+                        })
+                      }
+                    />
+                  </>
+                ) : (
+                  <input
+                    className="input"
+                    placeholder="URL (mis. https://example.com/mcp)"
+                    value={mcpDraft.url || ''}
+                    onChange={(e) => setMcpDraft({ ...mcpDraft, url: e.target.value })}
+                  />
+                )}
+                <label style={{ fontSize: 11, display: 'flex', alignItems: 'center', gap: 4 }}>
+                  <input
+                    type="checkbox"
+                    checked={mcpDraft.allowWriteTools}
+                    onChange={(e) =>
+                      setMcpDraft({ ...mcpDraft, allowWriteTools: e.target.checked })
+                    }
+                  />
+                  Izinkan tool write (aktifkan hanya jika kamu percaya server ini)
+                </label>
+                <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+                  <button
+                    className="btn btn-surface btn-sm"
+                    disabled={!mcpDraft.name.trim() || Boolean(mcpBusy['__draft__'])}
+                    onClick={() => void testMcpServer(mcpDraft, '__draft__')}
+                  >
+                    {mcpBusy['__draft__'] ? 'Memuat…' : 'Test'}
+                  </button>
+                  <button
+                    className="btn btn-primary btn-sm"
+                    disabled={
+                      !mcpDraft.name.trim() ||
+                      (mcpDraft.transport === 'stdio'
+                        ? !mcpDraft.command?.trim()
+                        : !mcpDraft.url?.trim())
+                    }
+                    onClick={async () => {
+                      const id =
+                        mcpDraft.name
+                          .trim()
+                          .toLowerCase()
+                          .replace(/[^a-z0-9_-]+/g, '_')
+                          .replace(/^_+|_+$/g, '') || `srv${Date.now().toString(36)}`
+                      await saveMcp([...mcpServers, { ...mcpDraft, id }])
+                      setShowMcpAdd(false)
+                      setMcpDraft(newMcpDraft())
+                    }}
+                  >
+                    Simpan server
+                  </button>
+                </div>
+              </div>
+            )}
+            <p style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 12, lineHeight: 1.5 }}>
+              Alur: tambah → <b>Test</b> (handshake + tools/list) → <b>Simpan</b>. Tool read selalu
+              dipakai AI; tool write butuh toggle <b>Izinkan tool write</b> + role berizin menulis
+              (researcher hanya baca). Contoh server: filesystem, context7, memory, GitHub,
+              Postgres.
+            </p>
           </div>
         )}
 

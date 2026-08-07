@@ -25,7 +25,14 @@ import {
   finalizeToolCalls,
   MutableToolCall
 } from './openaiCompat'
-import { fetchOpenAICompatModels, mergeWithFallback, markFreeByHeuristic } from './modelDiscovery'
+import {
+  discoverOpenAICompat,
+  isVersionedBase,
+  mergeWithFallback,
+  markFreeByHeuristic,
+  shouldAdoptChatBase
+} from './modelDiscovery'
+import { withProviderRetry } from './providerRetry'
 
 export type GrokBackend = 'chat' | 'responses'
 
@@ -73,6 +80,25 @@ export class GrokProvider extends BaseProvider {
   /** When true, re-read ~/.grok/auth.json (and refresh OIDC) before each call */
   private useCliSession = false
   private lastCliRefreshMs = 0
+  /** True once the chat base was probed this process (avoids re-probing). */
+  private chatBaseProbed = false
+
+  /**
+   * Lazily adopt the working versioned base before a chat call, so a
+   * bare-domain baseUrl (user pasted only the host) works even before
+   * listModels() ran. No-op for official/cli bases (already versioned).
+   */
+  private async ensureChatBase(): Promise<void> {
+    if (this.chatBaseProbed) return
+    this.chatBaseProbed = true
+    const cur = (this.baseUrl || '').trim().replace(/\/+$/, '')
+    if (!cur || isVersionedBase(cur)) return
+    const adopted = shouldAdoptChatBase(this.baseUrl, await discoverOpenAICompat(cur, this.apiKey))
+    if (adopted) {
+      this.baseUrl = adopted
+      this.client = null // rebuild SDK client against the resolved base
+    }
+  }
 
   setBackend(backend: GrokBackend): void {
     this.backend = backend
@@ -120,6 +146,8 @@ export class GrokProvider extends BaseProvider {
     if (config.apiKey !== undefined || config.baseUrl !== undefined) {
       this.client = null
     }
+    // A new key or base can make a previously-failed discovery succeed
+    if (config.apiKey !== undefined || config.baseUrl !== undefined) this.chatBaseProbed = false
     this.modelCache.clear()
   }
 
@@ -131,10 +159,17 @@ export class GrokProvider extends BaseProvider {
     const cached = this.modelCache.get()
     if (cached) return cached
     // Priority: (1) runtime GET /models for the configured key/base — the
-    // account's real catalog; (2) models cached by the Grok CLI (if any);
-    // (3) the static snapshot. CLI cache used to be primary; it is now just
-    // the fallback so a stale local cache can't shadow the live API.
-    const runtime = await fetchOpenAICompatModels(this.baseUrl, this.apiKey)
+    // account's real catalog, with the base path auto-detected (/v1 vs bare)
+    // so pasting just the xAI domain works; (2) models cached by the Grok CLI
+    // (if any); (3) the static snapshot. CLI cache used to be primary; it is
+    // now just the fallback so a stale local cache can't shadow the live API.
+    const discovered = await discoverOpenAICompat(this.baseUrl, this.apiKey)
+    const adopted = shouldAdoptChatBase(this.baseUrl, discovered)
+    if (adopted) {
+      this.baseUrl = adopted
+      this.client = null // rebuild SDK client against the resolved base
+    }
+    const runtime = discovered?.models ?? []
     const merged = mergeWithFallback(runtime, [
       ...readGrokCliModels(),
       { id: 'grok-4.5', name: 'Grok 4.5', contextWindow: 500000 },
@@ -143,7 +178,7 @@ export class GrokProvider extends BaseProvider {
       { id: 'grok-2', name: 'Grok 2', contextWindow: 131072 }
     ])
     const out = markFreeByHeuristic(merged)
-    if (out.length > 0) this.modelCache.set(out)
+    if (out.length > 0) this.modelCache.set(out, runtime.length > 0)
     return out
   }
 
@@ -253,6 +288,7 @@ export class GrokProvider extends BaseProvider {
 
   async sendMessage(request: AIRequest): Promise<AIResponse> {
     await this.ensureSession()
+    await this.ensureChatBase()
     const client = this.getClient()
     const model = request.model || this.defaultModel
 
@@ -274,14 +310,17 @@ export class GrokProvider extends BaseProvider {
       }
 
       const messages = this.toChatMessages(request)
-      const response = await client.chat.completions.create({
-        model,
-        messages,
-        temperature: request.temperature,
-        // max_tokens: OpenAI-compat; xAI accepts max_tokens / max_completion_tokens
-        ...(request.maxTokens ? { max_tokens: request.maxTokens } : {}),
-        ...this.toolOptions(request)
-      })
+      // R0-3: transient 429/5xx are retried with backoff before surfacing
+      const response = await withProviderRetry(() =>
+        client.chat.completions.create({
+          model,
+          messages,
+          temperature: request.temperature,
+          // max_tokens: OpenAI-compat; xAI accepts max_tokens / max_completion_tokens
+          ...(request.maxTokens ? { max_tokens: request.maxTokens } : {}),
+          ...this.toolOptions(request)
+        })
+      )
       const toolCalls = grokToolCallsFromMessage(response.choices[0]?.message)
       return {
         content: response.choices[0]?.message?.content || '',
@@ -327,22 +366,29 @@ export class GrokProvider extends BaseProvider {
     signal?: AbortSignal
   ): Promise<void> {
     await this.ensureSession()
+    await this.ensureChatBase()
     const model = request.model || this.defaultModel
 
     const runChatStream = async (): Promise<void> => {
       const messages = this.toChatMessages(request)
-      const stream = await this.getClient().chat.completions.create(
-        {
-          model,
-          messages,
-          temperature: request.temperature,
-          stream: true,
-          // Request usage so the final chunk reports total tokens (OpenAI-compat).
-          stream_options: { include_usage: true } as never,
-          ...(request.maxTokens ? { max_tokens: request.maxTokens } : {}),
-          ...this.toolOptions(request)
-        },
-        { signal }
+      // R0-3: retry only the CREATE (a stream that already emitted chunks can't
+      // resume); stop if the user cancelled during the backoff window
+      const stream = await withProviderRetry(
+        () =>
+          this.getClient().chat.completions.create(
+            {
+              model,
+              messages,
+              temperature: request.temperature,
+              stream: true,
+              // Request usage so the final chunk reports total tokens (OpenAI-compat).
+              stream_options: { include_usage: true } as never,
+              ...(request.maxTokens ? { max_tokens: request.maxTokens } : {}),
+              ...this.toolOptions(request)
+            },
+            { signal }
+          ),
+        { shouldRetry: () => !(signal?.aborted ?? false) }
       )
       let tokensUsed: number | undefined
       // P-A1: accumulate streaming tool_calls deltas (args split across chunks)

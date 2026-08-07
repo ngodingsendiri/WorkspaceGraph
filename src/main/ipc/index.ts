@@ -8,6 +8,7 @@ import { registerTemplateHandlers } from './handlers/templates'
 import { registerDomainHandlers } from './handlers/domain'
 import { registerAutomationHandlers } from './handlers/automation'
 import { registerPluginsHandlers } from './handlers/plugins'
+import { registerMcpHandlers } from './handlers/mcp'
 import { registerSettingsHandlers } from './handlers/settings'
 import { loadSettingsIntoProviders } from './shared'
 
@@ -28,5 +29,6 @@ export function registerIPCHandlers(): void {
   registerDomainHandlers()
   registerAutomationHandlers()
   registerPluginsHandlers()
+  registerMcpHandlers()
   registerSettingsHandlers()
 }

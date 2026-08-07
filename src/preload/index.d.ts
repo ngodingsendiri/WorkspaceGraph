@@ -202,6 +202,8 @@ export interface API {
   renderMarkdown: (content: string) => Promise<string>
 
   getAIProviders: () => Promise<any[]>
+  /** Per-provider progress push while ai:getProviders is in flight (Settings spinner). */
+  onAIProviderStatus: (callback: (status: unknown) => void) => () => void
   testAIProvider: (providerId?: string) => Promise<{ ok: boolean; error?: string; sample?: string }>
   refreshProviderModels: (providerId: string) => Promise<{
     ok: boolean
@@ -442,6 +444,23 @@ export interface API {
   setAutomationEnabled: (enabled: boolean) => Promise<boolean>
   runAutomationRule: (ruleId: string) => Promise<{ ok: boolean; error?: string }>
 
+  // MCP (R0-1) — Model Context Protocol server registry
+  getMcpServers: () => Promise<{
+    servers: McpServerConfig[]
+    statuses: McpServerStatus[]
+  }>
+  saveMcpServers: (servers: McpServerConfig[]) => Promise<{
+    ok: boolean
+    error?: string
+    statuses?: McpServerStatus[]
+  }>
+  testMcpServer: (server: McpServerConfig) => Promise<{
+    ok: boolean
+    tools?: number
+    error?: string
+  }>
+  getMcpTools: () => Promise<McpToolInfo[]>
+
   listPlugins: () => Promise<
     {
       id: string
@@ -470,6 +489,38 @@ export interface API {
   saveSettings: (settings: Record<string, any>) => Promise<boolean>
 
   setTitleBarTheme: (mode: 'dark' | 'light') => Promise<boolean>
+}
+
+export interface McpServerConfig {
+  id: string
+  name: string
+  transport: 'stdio' | 'http'
+  command?: string
+  args?: string[]
+  env?: Record<string, string>
+  url?: string
+  enabled: boolean
+  allowWriteTools: boolean
+}
+
+export interface McpServerStatus {
+  id: string
+  name: string
+  transport: 'stdio' | 'http'
+  enabled: boolean
+  allowWriteTools: boolean
+  connected: boolean
+  tools: number
+  error?: string
+}
+
+export interface McpToolInfo {
+  name: string
+  serverId: string
+  serverName: string
+  description?: string
+  inputSchema?: Record<string, unknown>
+  readOnly: boolean
 }
 
 export interface WriteProposal {

@@ -8,6 +8,7 @@ import { embeddingEngine } from '../../ai/EmbeddingEngine'
 import { fileWatcher } from '../../engine/FileWatcher'
 import { automationEngine } from '../../engine/AutomationEngine'
 import { pluginHost } from '../../plugin/PluginHost'
+import { mcpManager } from '../../mcp/McpClientManager'
 import { readPermissions } from '../../security/Permissions'
 import { syncWorkspaceData, attachFileWatcher } from '../shared'
 
@@ -49,6 +50,9 @@ export function registerWorkspaceHandlers(): void {
     if (perms.automation) {
       automationEngine.handleEvent('workspace_opened')
     }
+    // R0-1: connect enabled MCP servers for this vault (fire-and-forget — a
+    // dead server must not block vault open; Settings shows the error).
+    mcpManager.connectAll()
     // Load persisted vectors, then background-index only new/changed files
     const db = indexDatabase.getDb()
     embeddingEngine
@@ -88,6 +92,7 @@ export function registerWorkspaceHandlers(): void {
         automationEngine.start()
         pluginHost.setAllowed(perms.plugins)
         pluginHost.load(state.rootPath)
+        mcpManager.connectAll()
         const db = indexDatabase.getDb()
         embeddingEngine
           .init()
@@ -107,6 +112,7 @@ export function registerWorkspaceHandlers(): void {
     automationEngine.stop()
     automationEngine.unload()
     pluginHost.unload()
+    mcpManager.disconnectAll()
     graphEngine.clear()
     searchEngine.clear()
     domainEngine.clear()

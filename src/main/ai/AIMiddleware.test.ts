@@ -16,10 +16,31 @@ import {
   AIRequest,
   AIResponse,
   AIStreamChunk,
+  AIMessage,
   ModelInfo,
   ProviderCapabilities
 } from './providers/BaseProvider'
 import { workspaceEngine } from '../engine/WorkspaceEngine'
+import { mcpManager } from '../mcp/McpClientManager'
+
+/** R0-1: compact real MCP server (stdio) for the middleware integration test. */
+const MCP_SERVER_SRC = `
+const { Server } = require('@modelcontextprotocol/sdk/server/index.js')
+const { StdioServerTransport } = require('@modelcontextprotocol/sdk/server/stdio.js')
+const { CallToolRequestSchema, ListToolsRequestSchema } = require('@modelcontextprotocol/sdk/types.js')
+const server = new Server({ name: 'wg-mid-mcp', version: '1.0.0' }, { capabilities: { tools: {} } })
+server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: [
+  { name: 'count_words', description: 'Count words', annotations: { readOnlyHint: true }, inputSchema: { type: 'object', properties: { text: { type: 'string' } } } },
+  { name: 'write_file', description: 'Write file', annotations: { destructiveHint: true }, inputSchema: { type: 'object', properties: { path: { type: 'string' } } } }
+] }))
+server.setRequestHandler(CallToolRequestSchema, async (req) => {
+  const { name, arguments: args } = req.params
+  if (name === 'count_words') return { content: [{ type: 'text', text: String(String(args.text || '').trim().split(/\\s+/).filter(Boolean).length) }] }
+  if (name === 'write_file') return { content: [{ type: 'text', text: 'wrote ' + String(args.path || '') }] }
+  return { content: [{ type: 'text', text: 'unknown' }], isError: true }
+})
+server.connect(new StdioServerTransport())
+`
 
 /**
  * Scripted fake provider: records every request it receives and replays a
@@ -28,8 +49,8 @@ import { workspaceEngine } from '../engine/WorkspaceEngine'
  * (exercises the middleware's watchdog).
  */
 class ScriptedProvider extends BaseProvider {
-  readonly id = 'fake'
-  readonly name = 'Fake'
+  readonly id: string
+  readonly name: string
   readonly capabilities: ProviderCapabilities = {
     chat: true,
     streaming: true,
@@ -41,8 +62,14 @@ class ScriptedProvider extends BaseProvider {
   calls: AIRequest[] = []
   script: ((req: AIRequest, onChunk: (c: AIStreamChunk) => void) => void | Promise<void>)[] = []
 
-  constructor(private native = true) {
+  constructor(
+    private native = true,
+    id = 'fake',
+    name = 'Fake'
+  ) {
     super()
+    this.id = id
+    this.name = name
   }
 
   isConfigured(): boolean {
@@ -483,6 +510,51 @@ describe('AIMiddleware.runStreamInner (P-B1)', () => {
     expect(done?.citations?.length).toBe(1)
     expect(done?.proposals?.length).toBe(1)
     expect(provider.calls).toHaveLength(3)
+  })
+
+  it('R0-2: read tools run in PARALLEL (both start before either resolves)', async () => {
+    const provider = new ScriptedProvider(false)
+    const mid = makeMid(provider)
+    const fence = [
+      '```wg-action',
+      '{"tool":"search","args":{"query":"alpha"}}',
+      '```',
+      '```wg-action',
+      '{"tool":"search","args":{"query":"beta"}}',
+      '```'
+    ].join('\n')
+    provider.script.push((_req, onChunk) => {
+      onChunk({ content: fence, done: false, model: 'fake' })
+      onChunk({ content: '', done: true, model: 'fake' })
+    })
+    provider.script.push((_req, onChunk) => {
+      onChunk({ content: 'Found.', done: false, model: 'fake' })
+      onChunk({ content: '', done: true, model: 'fake' })
+    })
+
+    const started: string[] = []
+    const resolvers: ((r: ToolResult) => void)[] = []
+    const execSpy = vi.spyOn(AgentTools, 'executeTool').mockImplementation((action) => {
+      started.push(action.tool)
+      return new Promise<ToolResult>((resolve) => resolvers.push(resolve))
+    })
+
+    const runPromise = run(mid, 'req-par')
+    try {
+      // Let the loop dispatch the batch — both deferred reads must be in flight
+      await new Promise((r) => setTimeout(r, 50))
+      // Sequential execution would have started only the FIRST search until the
+      // first resolved; parallelism starts both while neither has resolved
+      expect(started).toEqual(['search', 'search'])
+      expect(resolvers).toHaveLength(2)
+      for (const resolve of resolvers) resolve({ ok: true, tool: 'search', result: [] })
+      await runPromise
+      expect(execSpy).toHaveBeenCalledTimes(2)
+    } finally {
+      // The file's afterEach does NOT restore mocks — a leaked deferred spy
+      // would hang every later tool-loop test in this file
+      execSpy.mockRestore()
+    }
   })
 
   // ── Per-tool streaming events (P1-1) ────────────────────────────────────
@@ -1102,6 +1174,399 @@ describe('AIMiddleware.runStreamInner (P-B1)', () => {
     expect(done?.error).toBeUndefined()
   })
 
+  // ── R1-2 provider failover ──────────────────────────────────────────────
+
+  it('R1-2: terminal 429 on the active provider fails over to the next configured provider', async () => {
+    const provA = new ScriptedProvider(true, 'prov-a', 'Prov A')
+    const provB = new ScriptedProvider(true, 'prov-b', 'Prov B')
+    const mid = new AIMiddleware({ providers: { 'prov-a': provA, 'prov-b': provB } })
+    mid.setActiveProvider('prov-a')
+
+    // Provider A fails terminally (429 — its own retry budget is spent)
+    provA.script.push((_req, onChunk) => {
+      onChunk({ content: '', done: true, model: 'prov-a', error: 'Grok API error 429: rate limit' })
+    })
+    // Provider B answers normally
+    provB.script.push((_req, onChunk) => {
+      onChunk({ content: 'Jawaban dari B.', done: false, model: 'prov-b' })
+      onChunk({ content: '', done: true, model: 'prov-b' })
+    })
+
+    const chunks: StreamEvent[] = []
+    await mid.streamMessage(
+      { messages: [{ role: 'user', content: 'halo' }], model: 'prov-a' },
+      (c) => chunks.push(c),
+      undefined,
+      false,
+      'general',
+      false,
+      'req-failover'
+    )
+
+    // Both providers were tried, in order
+    expect(provA.calls).toHaveLength(1)
+    expect(provB.calls).toHaveLength(1)
+    // The user saw the failover note and B's answer, but NOT A's raw error
+    expect(chunks.some((c) => c.content.includes('failover: prov-a'))).toBe(true)
+    expect(chunks.some((c) => c.content.includes('Jawaban dari B.'))).toBe(true)
+    expect(chunks.some((c) => c.error === 'Grok API error 429: rate limit')).toBe(false)
+    // The stream ended OK (B succeeded)
+    const done = chunks.filter((c) => c.done).pop()
+    expect(done?.error).toBeUndefined()
+    expect(done?.done).toBe(true)
+
+    // AI event log: a failover event with from→target
+    const logFile = path.join(vault, '.workspacegraph', 'logs', 'ai-events.jsonl')
+    const events = fs
+      .readFileSync(logFile, 'utf-8')
+      .split('\n')
+      .filter(Boolean)
+      .map(
+        (l) =>
+          JSON.parse(l) as { kind: string; provider?: string; target?: string; status?: string }
+      )
+    const failover = events.find((e) => e.kind === 'failover')
+    expect(failover?.provider).toBe('prov-a')
+    expect(failover?.target).toBe('prov-b')
+    // stream_end records the provider that ACTUALLY served
+    const end = events.find((e) => e.kind === 'stream_end')
+    expect(end?.provider).toBe('prov-b')
+    expect(end?.status).toBe('ok')
+    // The user's selection is restored after the stream
+    expect(mid.getActiveProvider().id).toBe('prov-a')
+  })
+
+  it("R1-2: provider B also failing surfaces B's error (exhausted — no infinite loop)", async () => {
+    const provA = new ScriptedProvider(true, 'prov-a', 'Prov A')
+    const provB = new ScriptedProvider(true, 'prov-b', 'Prov B')
+    const mid = new AIMiddleware({ providers: { 'prov-a': provA, 'prov-b': provB } })
+    mid.setActiveProvider('prov-a')
+
+    provA.script.push((_req, onChunk) => {
+      onChunk({ content: '', done: true, model: 'prov-a', error: '429 rate limit' })
+    })
+    provB.script.push((_req, onChunk) => {
+      onChunk({ content: '', done: true, model: 'prov-b', error: '502 Bad Gateway' })
+    })
+
+    const chunks: StreamEvent[] = []
+    await mid.streamMessage(
+      { messages: [{ role: 'user', content: 'halo' }], model: 'prov-a' },
+      (c) => chunks.push(c),
+      undefined,
+      false,
+      'general',
+      false,
+      'req-failover-both'
+    )
+
+    expect(provA.calls).toHaveLength(1)
+    expect(provB.calls).toHaveLength(1)
+    // Failover note emitted once; the terminal error is B's (last attempt)
+    expect(chunks.filter((c) => c.content.includes('failover: prov-a')).length).toBe(1)
+    const done = chunks.filter((c) => c.done).pop()
+    expect(done?.error).toBe('502 Bad Gateway')
+  })
+
+  it('R1-2: non-terminal error (400) does NOT fail over — surfaces directly', async () => {
+    const provA = new ScriptedProvider(true, 'prov-a', 'Prov A')
+    const provB = new ScriptedProvider(true, 'prov-b', 'Prov B')
+    const mid = new AIMiddleware({ providers: { 'prov-a': provA, 'prov-b': provB } })
+    mid.setActiveProvider('prov-a')
+
+    provA.script.push((_req, onChunk) => {
+      onChunk({
+        content: '',
+        done: true,
+        model: 'prov-a',
+        error: '400 Bad Request: model not found'
+      })
+    })
+
+    const chunks: StreamEvent[] = []
+    await mid.streamMessage(
+      { messages: [{ role: 'user', content: 'halo' }], model: 'prov-a' },
+      (c) => chunks.push(c),
+      undefined,
+      false,
+      'general',
+      false,
+      'req-failover-400'
+    )
+
+    // B never ran — a 400 is the caller's bug, retrying elsewhere wastes a call
+    expect(provA.calls).toHaveLength(1)
+    expect(provB.calls).toHaveLength(0)
+    const done = chunks.filter((c) => c.done).pop()
+    expect(done?.error).toContain('400')
+    expect(chunks.some((c) => c.content.includes('failover: prov-a'))).toBe(false)
+  })
+
+  it('R1-2: no configured fallback → single-provider behavior, no note', async () => {
+    const provA = new ScriptedProvider(true, 'prov-a', 'Prov A')
+    const mid = new AIMiddleware({ providers: { 'prov-a': provA } })
+    mid.setActiveProvider('prov-a')
+    provA.script.push((_req, onChunk) => {
+      onChunk({ content: '', done: true, model: 'prov-a', error: '429 rate limit' })
+    })
+
+    const chunks: StreamEvent[] = []
+    await mid.streamMessage(
+      { messages: [{ role: 'user', content: 'halo' }], model: 'prov-a' },
+      (c) => chunks.push(c),
+      undefined,
+      false,
+      'general',
+      false,
+      'req-failover-solo'
+    )
+
+    expect(provA.calls).toHaveLength(1)
+    const done = chunks.filter((c) => c.done).pop()
+    expect(done?.error).toContain('429')
+    expect(chunks.some((c) => c.content.includes('failover:'))).toBe(false)
+  })
+
+  it('R1-2: user cancel during the first attempt never triggers failover', async () => {
+    const provA = new ScriptedProvider(true, 'prov-a', 'Prov A')
+    const provB = new ScriptedProvider(true, 'prov-b', 'Prov B')
+    const mid = new AIMiddleware({ providers: { 'prov-a': provA, 'prov-b': provB } })
+    mid.setActiveProvider('prov-a')
+    provA.script.push((_req, onChunk) => {
+      onChunk({ content: 'sebagian', done: false, model: 'prov-a' })
+      mid.cancelStream('req-failover-cancel')
+      onChunk({ content: '', done: true, model: 'prov-a' })
+    })
+
+    const chunks: StreamEvent[] = []
+    await mid.streamMessage(
+      { messages: [{ role: 'user', content: 'halo' }], model: 'prov-a' },
+      (c) => chunks.push(c),
+      undefined,
+      false,
+      'general',
+      false,
+      'req-failover-cancel'
+    )
+
+    // B never ran — the stream ended cancelled, not failed-over
+    expect(provA.calls).toHaveLength(1)
+    expect(provB.calls).toHaveLength(0)
+    const done = chunks.filter((c) => c.done).pop()
+    expect(done?.content).toContain('cancelled')
+  })
+
+  // ── R0-1 MCP integration ────────────────────────────────────────────────
+
+  it('R0-1: MCP tools run through the loop (read parallel + write direct), schemas advertised, results zipped', async () => {
+    const serverFile = path.join(vault, 'mcp-server.cjs')
+    fs.writeFileSync(serverFile, MCP_SERVER_SRC, 'utf-8')
+    await mcpManager.saveServers(
+      [
+        {
+          id: 'test',
+          name: 'Test',
+          transport: 'stdio',
+          command: process.execPath,
+          args: [serverFile],
+          env: { NODE_PATH: path.resolve(__dirname, '../../..', 'node_modules') },
+          enabled: true,
+          allowWriteTools: true
+        }
+      ],
+      vault
+    )
+    try {
+      await mcpManager.ensureConnected(['test'])
+
+      const provider = new ScriptedProvider(true)
+      const mid = makeMid(provider)
+      // Round 1: one read MCP tool + one write MCP tool
+      provider.script.push((_req, onChunk) => {
+        onChunk({ content: '', done: false, model: 'fake' })
+        onChunk({
+          content: '',
+          done: true,
+          model: 'fake',
+          toolCalls: [
+            {
+              id: 'mc1',
+              name: 'mcp__test__count_words',
+              arguments: '{"text":"a b c"}'
+            },
+            { id: 'mc2', name: 'mcp__test__write_file', arguments: '{"path":"x"}' }
+          ]
+        })
+      })
+      provider.script.push((_req, onChunk) => {
+        onChunk({ content: 'Selesai.', done: false, model: 'fake' })
+        onChunk({ content: '', done: true, model: 'fake' })
+      })
+
+      const chunks = await run(mid, 'req-mcp')
+
+      // MCP schemas ride the native tools array for a write-capable role
+      expect(provider.calls).toHaveLength(2)
+      const r0 = provider.calls[0]
+      expect(r0.tools?.some((t) => t.function.name === 'mcp__test__count_words')).toBe(true)
+      expect(r0.tools?.some((t) => t.function.name === 'mcp__test__write_file')).toBe(true)
+
+      // Both results zip back 1:1 with the call ids
+      const second = provider.calls[1]
+      const toolMsgs = second.messages.filter((m) => m.role === 'tool')
+      expect(toolMsgs).toHaveLength(2)
+      expect(toolMsgs[0].tool_call_id).toBe('mc1')
+      expect(String(toolMsgs[0].content)).toContain('3')
+      expect(toolMsgs[1].tool_call_id).toBe('mc2')
+      expect(String(toolMsgs[1].content)).toContain('wrote x')
+
+      // Tool-run trail: read completed in its batch, write got its own ok run
+      const readRun = chunks.find(
+        (c) => c.toolRun?.tool === 'mcp__test__count_words' && c.toolRun.status === 'ok'
+      )
+      expect(readRun?.toolRun?.detail).toContain('3')
+      expect(
+        chunks.some((c) => c.toolRun?.tool === 'mcp__test__write_file' && c.toolRun.status === 'ok')
+      ).toBe(true)
+      const done = chunks.filter((c) => c.done).pop()
+      expect(done?.done).toBe(true)
+    } finally {
+      await mcpManager.disconnectAll()
+    }
+  }, 30000)
+
+  // ── R1-1 auto context compaction ────────────────────────────────────────
+
+  it('R1-1: a long history is compacted into a [Compacted] block before the provider call', async () => {
+    const provider = new ScriptedProvider(true)
+    const mid = makeMid(provider)
+    provider.script.push((_req, onChunk) => {
+      onChunk({ content: 'Jawaban setelah kompaksi.', done: false, model: 'fake' })
+      onChunk({ content: '', done: true, model: 'fake' })
+    })
+
+    const chunks: StreamEvent[] = []
+    const messages: AIMessage[] = [{ role: 'user', content: 'Topik awal riset' }]
+    for (let i = 0; i < 60; i++) {
+      messages.push({ role: 'assistant', content: `jawaban ${i} ` + 'y'.repeat(1200) })
+      messages.push({ role: 'user', content: `pertanyaan ${i} ` + 'y'.repeat(1200) })
+    }
+    await mid.streamMessage(
+      { messages, model: 'fake' },
+      (c) => chunks.push(c),
+      undefined,
+      false,
+      'general',
+      false,
+      'req-compact'
+    )
+
+    // The provider received the folded history (block first, recent tail intact)
+    const sent = provider.calls[0]
+    expect(String(sent.messages[0].content)).toContain('[Compacted]')
+    expect(String(sent.messages[0].content)).toContain('Topik awal riset')
+    expect(sent.messages.length).toBeLessThan(messages.length)
+    // The recent tail (last 8) survived byte-for-byte
+    expect(sent.messages.slice(-8)).toEqual(messages.slice(-8))
+    // The UI saw the compaction note + toolStatus
+    expect(chunks.some((c) => c.content.includes('context di-compact'))).toBe(true)
+    expect(chunks.some((c) => c.toolStatus?.includes('Context compacted'))).toBe(true)
+  })
+
+  it('R1-1: the provider-reported ModelInfo.contextWindow drives the budget (small window → compacts early)', async () => {
+    const provider = new ScriptedProvider(true)
+    // A tiny real context window: the static family map would say 32k, but the
+    // provider's cached listModels must win and trigger compaction far earlier.
+    const listSpy = vi
+      .spyOn(provider, 'listModels')
+      .mockResolvedValue([{ id: 'fake', name: 'Fake', contextWindow: 4000 }])
+    const mid = makeMid(provider)
+    provider.script.push((_req, onChunk) => {
+      onChunk({ content: 'Ok.', done: false, model: 'fake' })
+      onChunk({ content: '', done: true, model: 'fake' })
+    })
+
+    // ~3.75k tokens — over the tiny window's 80% (3.2k) but far under 32k's
+    const messages: AIMessage[] = []
+    for (let i = 0; i < 15; i++) {
+      messages.push({ role: 'user', content: `pertanyaan ${i} ` + 'y'.repeat(1000) })
+    }
+    await mid.streamMessage(
+      { messages, model: 'fake' },
+      () => {
+        /* ignore */
+      },
+      undefined,
+      false,
+      'general',
+      false,
+      'req-compact-window'
+    )
+
+    try {
+      expect(String(provider.calls[0].messages[0].content)).toContain('[Compacted]')
+      expect(listSpy).toHaveBeenCalled()
+    } finally {
+      listSpy.mockRestore()
+    }
+  })
+
+  it('R1-1: a short history reaches the provider untouched (no compaction)', async () => {
+    const provider = new ScriptedProvider(true)
+    const mid = makeMid(provider)
+    provider.script.push((_req, onChunk) => {
+      onChunk({ content: 'Ok.', done: false, model: 'fake' })
+      onChunk({ content: '', done: true, model: 'fake' })
+    })
+
+    const chunks: StreamEvent[] = []
+    const messages: AIMessage[] = [
+      { role: 'user', content: 'hai' },
+      { role: 'assistant', content: 'halo' },
+      { role: 'user', content: 'apa kabar?' }
+    ]
+    await mid.streamMessage(
+      { messages, model: 'fake' },
+      (c) => chunks.push(c),
+      undefined,
+      false,
+      'general',
+      false,
+      'req-nocompact'
+    )
+
+    expect(provider.calls[0].messages).toEqual(messages)
+    expect(chunks.some((c) => c.content.includes('context di-compact'))).toBe(false)
+  })
+
+  it('R0-1: advertised-but-disconnected MCP tool errors as not-connected, never "unknown tool skipped"', async () => {
+    // No server registered — the mcp__ name must still classify as KNOWN so
+    // executeTool produces the accurate "tidak terhubung" error instead of the
+    // misleading unknown-tool skip path.
+    const provider = new ScriptedProvider(true)
+    const mid = makeMid(provider)
+    provider.script.push((_req, onChunk) => {
+      onChunk({ content: '', done: false, model: 'fake' })
+      onChunk({
+        content: '',
+        done: true,
+        model: 'fake',
+        toolCalls: [{ id: 'mcx', name: 'mcp__ghost__read', arguments: '{}' }]
+      })
+    })
+    provider.script.push((_req, onChunk) => {
+      onChunk({ content: 'Ok.', done: false, model: 'fake' })
+      onChunk({ content: '', done: true, model: 'fake' })
+    })
+
+    const chunks = await run(mid, 'req-mcp-ghost')
+
+    expect(chunks.some((c) => c.content.includes('unknown tools skipped'))).toBe(false)
+    const err = chunks.find((c) => c.toolRun?.status === 'error')
+    expect(err?.toolRun?.tool).toBe('mcp__ghost__read')
+    expect(err?.toolRun?.detail).toMatch(/tidak terhubung/)
+  })
+
   it('vision gate: non-vision provider rejects the request before any API call', async () => {
     const provider = new ScriptedProvider(false) // vision: false
     const mid = makeMid(provider)
@@ -1239,5 +1704,46 @@ describe('AIMiddleware.refreshProviderModels (model discovery refresh)', () => {
     expect(res.ok).toBe(false)
     expect(res.models).toEqual([])
     expect(res.error).toContain('nope')
+  })
+})
+
+describe('AIMiddleware.getAllProvidersStatus progress push (per-provider spinner)', () => {
+  it('invokes onProgress once per provider with its resolved status', async () => {
+    const provider = new ScriptedProvider()
+    const mid = new AIMiddleware({ providers: { fake: provider } })
+    const models: ModelInfo[] = [{ id: 'm1', name: 'Model 1' }]
+    vi.spyOn(provider, 'listModels').mockResolvedValue(models)
+
+    // Stub the network so the 6 real providers resolve fast+deterministic
+    // (no key → fetchers return [] anyway; this just guarantees it).
+    const origFetch = globalThis.fetch
+    globalThis.fetch = (async () => ({ ok: false, json: async () => ({}) })) as typeof fetch
+    try {
+      const progress: string[] = []
+      const statuses = await mid.getAllProvidersStatus((s) => progress.push(s.id))
+
+      // The fake provider's status was pushed with its real model list
+      expect(progress).toContain('fake')
+      // Every pushed id also landed in the final batch (no phantom providers)
+      for (const id of progress) expect(statuses.some((s) => s.id === id)).toBe(true)
+      const fake = statuses.find((s) => s.id === 'fake')
+      expect(fake?.name).toBe('Fake')
+      expect(fake?.models).toEqual(models)
+    } finally {
+      globalThis.fetch = origFetch
+    }
+  })
+
+  it('works without a callback (full array only)', async () => {
+    const mid = new AIMiddleware({ providers: {} })
+    const origFetch = globalThis.fetch
+    globalThis.fetch = (async () => ({ ok: false, json: async () => ({}) })) as typeof fetch
+    try {
+      const statuses = await mid.getAllProvidersStatus()
+      expect(Array.isArray(statuses)).toBe(true)
+      expect(statuses.length).toBeGreaterThan(0)
+    } finally {
+      globalThis.fetch = origFetch
+    }
   })
 })

@@ -136,6 +136,12 @@ const api = {
 
   // AI
   getAIProviders: () => ipcRenderer.invoke('ai:getProviders'),
+  /** Per-provider progress push while ai:getProviders is in flight (spinner). */
+  onAIProviderStatus: (callback: (status: unknown) => void) => {
+    const handler = (_: unknown, status: unknown): void => callback(status)
+    ipcRenderer.on('ai:providerStatus', handler)
+    return () => ipcRenderer.removeListener('ai:providerStatus', handler)
+  },
   testAIProvider: (providerId?: string) => ipcRenderer.invoke('ai:testProvider', providerId),
   refreshProviderModels: (providerId: string) =>
     ipcRenderer.invoke('ai:refreshProviderModels', providerId),
@@ -281,6 +287,12 @@ const api = {
   saveAutomation: (config: unknown) => ipcRenderer.invoke('automation:save', config),
   setAutomationEnabled: (enabled: boolean) => ipcRenderer.invoke('automation:setEnabled', enabled),
   runAutomationRule: (ruleId: string) => ipcRenderer.invoke('automation:runRule', ruleId),
+
+  // MCP (R0-1) — server registry + tool discovery for the AI agent
+  getMcpServers: () => ipcRenderer.invoke('mcp:getServers'),
+  saveMcpServers: (servers: unknown[]) => ipcRenderer.invoke('mcp:saveServers', servers),
+  testMcpServer: (server: unknown) => ipcRenderer.invoke('mcp:testServer', server),
+  getMcpTools: () => ipcRenderer.invoke('mcp:getTools'),
 
   listPlugins: () => ipcRenderer.invoke('plugins:list'),
   listPluginCommands: () => ipcRenderer.invoke('plugins:commands'),
