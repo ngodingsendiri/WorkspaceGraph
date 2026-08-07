@@ -121,6 +121,12 @@ export interface ChatStore {
     content?: string
   ) => Promise<{ ok: boolean; error?: string; path?: string }>
   rejectProposal: (id: string) => Promise<void>
+  /** P2: promote a chat answer into a Knowledge/ note proposal (with backlinks
+   * to its citations). Returns the created proposal so the dock can hydrate. */
+  promoteAnswer: (
+    msgId: string,
+    suggestedTitle?: string
+  ) => Promise<{ ok: boolean; proposal?: WriteProposalItem; error?: string }>
   saveCurrentChat: () => Promise<void>
   loadChat: (id: string) => Promise<void>
   /** Delete a saved conversation file (keeps current session untouched unless same id). */
@@ -533,6 +539,38 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       })),
       lastKernelStatus: 'Proposal rejected'
     }))
+  },
+
+  promoteAnswer: async (msgId: string, suggestedTitle?: string) => {
+    const msg = get().messages.find((m) => m.id === msgId)
+    if (!msg) return { ok: false, error: 'Pesan tidak ditemukan' }
+    try {
+      const res = await window.api.promoteToKnowledge(
+        msg.content,
+        msg.citations || [],
+        suggestedTitle
+      )
+      if (res.ok && res.proposal) {
+        const p = res.proposal as WriteProposalItem
+        set((state) => ({
+          // Dock + message trail both learn about the new pending proposal
+          pendingProposals: mergeProposals(state.pendingProposals, [p]).filter(
+            (x) => x.status === 'pending' || !x.status
+          ),
+          messages: state.messages.map((m) =>
+            m.id === msgId ? { ...m, proposals: mergeProposals(m.proposals, [p]) } : m
+          ),
+          lastKernelStatus: `Proposal Knowledge/${p.relativePath.split('/').pop()} dibuat — Apply di panel`
+        }))
+      } else {
+        set({ lastKernelStatus: res.error || 'Promosi gagal' })
+      }
+      return res
+    } catch (err) {
+      const error = err instanceof Error ? err.message : String(err)
+      set({ lastKernelStatus: error })
+      return { ok: false, error }
+    }
   },
 
   learnWorkspace: async (activeFilePath?: string) => {

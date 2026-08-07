@@ -36,7 +36,7 @@ import { useEditorStore } from '../../store/editorStore'
 import { useWorkspaceStore } from '../../store/workspaceStore'
 import { MergeDialog } from '../editor/MergeDialog'
 import { Icon } from '../ui/Icons'
-import { confirmDialog } from '../ui/Dialog'
+import { confirmDialog, promptDialog } from '../ui/Dialog'
 import { usePanelWidth } from '../../hooks/usePanelWidth'
 import { renderStreamingMarkdown } from './streamingMarkdown'
 
@@ -248,6 +248,7 @@ export const ChatPanel: React.FC = () => {
     refreshProposals,
     applyProposal,
     rejectProposal,
+    promoteAnswer,
     saveCurrentChat,
     loadChat,
     deleteChat,
@@ -820,6 +821,28 @@ export const ChatPanel: React.FC = () => {
     inputRef.current?.focus()
   }
 
+  /** P2: promote this answer into a Knowledge/ note proposal (+ backlinks). */
+  const handlePromoteKnowledge = async (msg: ChatMessage): Promise<void> => {
+    if (isGenerating) return
+    // Optional title — defaults to the answer's first line (promoteToKnowledge)
+    const title = await promptDialog({
+      title: 'Simpan sebagai Knowledge',
+      message: 'Judul catatan (kosongkan untuk memakai baris pertama jawaban):',
+      okLabel: 'Buat proposal',
+      initialValue: ''
+    })
+    if (title === null) return // user cancelled
+    const res = await promoteAnswer(msg.id, title.trim() || undefined)
+    if (res.ok) {
+      setApplyOk(true)
+      setApplyMsg(`Proposal Knowledge dibuat — Apply di panel untuk menyimpan`)
+    } else {
+      setApplyOk(false)
+      setApplyMsg(res.error || 'Gagal menyimpan ke Knowledge')
+    }
+    setTimeout(() => setApplyMsg(''), 4000)
+  }
+
   // P3-1: composer chip source — the message must still exist (rephrase/clear
   // removes it); sendMessage also tolerates a missing source (plain send).
   const followUpMsg = followUpMessageId
@@ -1291,6 +1314,16 @@ export const ChatPanel: React.FC = () => {
                           title="Lanjutkan dari proposal pesan ini — konteksnya ikut pada pertanyaan berikutnya"
                         >
                           Follow-up
+                        </button>
+                      )}
+                      {!isErr && (
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-sm"
+                          onClick={() => void handlePromoteKnowledge(msg)}
+                          title="Simpan jawaban ini sebagai catatan Knowledge/ dengan backlink ke sumbernya (proposal — Apply di panel)"
+                        >
+                          <Icon name="plus" size={12} /> Simpan sebagai Knowledge
                         </button>
                       )}
                     </div>

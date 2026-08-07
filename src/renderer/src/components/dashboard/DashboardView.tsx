@@ -136,6 +136,124 @@ function SemanticRagCard(): React.JSX.Element {
   )
 }
 
+/** Compact "AI usage" card — 7-day window from the structured event log (P3). */
+interface AiUsageWindow {
+  days: number
+  operations: number
+  tokensUsed: number
+  errors: number
+  cancelled: number
+  timedOut: number
+  errorRate: number
+  avgDurationMs: number
+  series: { day: string; operations: number; errors: number; tokensUsed: number }[]
+}
+
+function formatTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}jt`
+  if (n >= 1000) return `${(n / 1000).toFixed(1)}k`
+  return String(n)
+}
+
+function AiUsageCard(): React.JSX.Element {
+  const [w, setW] = useState<AiUsageWindow | null>(null)
+
+  useEffect(() => {
+    let mounted = true
+    const load = async (): Promise<void> => {
+      try {
+        const res = (await window.api.getAIEventStats(7)) as { windowed?: AiUsageWindow | null }
+        if (mounted) setW(res.windowed ?? null)
+      } catch {
+        /* ignore */
+      }
+    }
+    void load()
+    // Refresh alongside the rest of the dashboard (vault switch / new notes)
+    const unsub = window.api.onGraphUpdated?.(() => {
+      void load()
+    })
+    return () => {
+      mounted = false
+      unsub?.()
+    }
+  }, [])
+
+  const ops = w?.operations ?? 0
+  const tokens = w?.tokensUsed ?? 0
+  const errPct = w && w.operations > 0 ? Math.round(w.errorRate * 100) : 0
+  const tone =
+    !w || w.operations === 0
+      ? 'var(--text-muted)'
+      : w.errors > 0
+        ? 'var(--color-warning)'
+        : 'var(--color-success)'
+  const maxOps = Math.max(1, ...(w?.series.map((s) => s.operations) ?? [1]))
+  const avgSec = w && w.avgDurationMs > 0 ? (w.avgDurationMs / 1000).toFixed(1) : '–'
+
+  const statusText = !w
+    ? 'belum ada aktivitas'
+    : w.operations === 0
+      ? 'tidak ada aktivitas 7 hari'
+      : `${errPct}% error`
+
+  return (
+    <div className="dash-rag" style={{ '--rag-tone': tone } as React.CSSProperties}>
+      <div className="dash-rag-head">
+        <span className="dash-rag-title">
+          <Icon name="bot" size={14} />
+          AI usage
+          <span className="dash-rag-sub">7 hari</span>
+        </span>
+        <span className="dash-rag-state" style={{ color: tone }}>
+          {statusText}
+        </span>
+      </div>
+
+      <div className="dash-ai-stats">
+        <div className="dash-ai-stat">
+          <span className="dash-ai-stat-value">{ops}</span>
+          <span className="dash-ai-stat-label">stream</span>
+        </div>
+        <div className="dash-ai-stat">
+          <span className="dash-ai-stat-value">{formatTokens(tokens)}</span>
+          <span className="dash-ai-stat-label">token</span>
+        </div>
+        <div className="dash-ai-stat">
+          <span className="dash-ai-stat-value">{avgSec}s</span>
+          <span className="dash-ai-stat-label">rata-rata</span>
+        </div>
+      </div>
+
+      {w && w.series.length > 0 ? (
+        <div className="dash-ai-bars">
+          {w.series.map((s) => (
+            <div
+              key={s.day}
+              className="dash-ai-bar-col"
+              title={`${s.day}: ${s.operations} stream${s.errors ? ` · ${s.errors} error` : ''} · ${formatTokens(s.tokensUsed)} token`}
+            >
+              <div
+                className="dash-ai-bar"
+                style={{
+                  height: `${Math.max(4, Math.round((s.operations / maxOps) * 100))}%`,
+                  background: s.errors > 0 ? 'var(--color-warning)' : tone
+                }}
+              />
+            </div>
+          ))}
+        </div>
+      ) : null}
+
+      <div className="dash-rag-meta">
+        {w && w.operations > 0
+          ? `${w.operations} operasi · ${w.errors} error${w.cancelled ? ` · ${w.cancelled} batal` : ''}${w.timedOut ? ` · ${w.timedOut} timeout` : ''} — dari log .workspacegraph/logs`
+          : 'Aktivitas AI tercatat otomatis ke log event — stream, token, dan error di sini.'}
+      </div>
+    </div>
+  )
+}
+
 interface DomainOverview {
   projects: { title: string; path: string; status?: string; relativePath: string }[]
   tasks: { title: string; path: string; status?: string; priority?: string; relativePath: string }[]
@@ -396,6 +514,8 @@ export const DashboardView: React.FC<{ onOpenSearch: () => void }> = ({ onOpenSe
       </div>
 
       <SemanticRagCard />
+
+      <AiUsageCard />
 
       <div className="dash-grid">
         {/* Open tasks + checkboxes */}

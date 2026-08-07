@@ -17,6 +17,7 @@ function mockWindowApi(): Record<string, MockFn> {
     applyWriteProposal: vi.fn().mockResolvedValue({ ok: true }),
     rejectWriteProposal: vi.fn().mockResolvedValue({ ok: true }),
     listWriteProposals: vi.fn().mockResolvedValue([]),
+    promoteToKnowledge: vi.fn().mockResolvedValue({ ok: true, proposal: null }),
     ensureAiMemory: vi.fn().mockResolvedValue({ ok: true, created: [] }),
     listAiMemory: vi.fn().mockResolvedValue({ files: [], core: [] })
   }
@@ -637,6 +638,68 @@ describe('chatStore follow-up mode (P3-1)', () => {
     const msgs = useChatStore.getState().messages
     expect((msgs.find((m) => m.id === 'a1')?.proposals || []).length).toBe(1)
     expect(msgs.find((m) => m.id === 'u2')?.followUpFrom).toBe('a1')
+  })
+})
+
+describe('chatStore promoteAnswer (P2 knowledge promotion)', () => {
+  const knowledgeProposal: WriteProposalItem = {
+    id: 'kp1',
+    tool: 'create_note',
+    absolutePath: 'C:/v/Knowledge/Riset X.md',
+    relativePath: 'Knowledge/Riset X.md',
+    content: '---\ntype: knowledge\n---\n\nJawaban.',
+    mode: 'create',
+    preview: 'Jawaban.',
+    status: 'pending',
+    createdAt: '2026-08-07T00:00:00.000Z'
+  }
+
+  it('promoteAnswer sends content + citations and hydrates the dock + message trail', async () => {
+    const api = mockWindowApi()
+    api.promoteToKnowledge.mockResolvedValue({ ok: true, proposal: knowledgeProposal })
+    useChatStore.setState({
+      messages: [
+        msg('u1', 'user', 'riset X'),
+        {
+          ...msg('a1', 'assistant', 'Jawaban.'),
+          citations: [{ title: 'Basis', path: 'C:/v/Knowledge/Basis.md' }]
+        }
+      ]
+    })
+
+    const res = await useChatStore.getState().promoteAnswer('a1', 'Riset X')
+
+    expect(res.ok).toBe(true)
+    // IPC got the answer body + its citations + the suggested title
+    expect(api.promoteToKnowledge).toHaveBeenCalledWith(
+      'Jawaban.',
+      [{ title: 'Basis', path: 'C:/v/Knowledge/Basis.md' }],
+      'Riset X'
+    )
+    // Dock now shows the pending proposal (Apply button appears)
+    expect(useChatStore.getState().pendingProposals.map((p) => p.id)).toContain('kp1')
+    // The message trail carries it too — Follow-up/regenerate can reference it
+    const asst = useChatStore.getState().messages.find((m) => m.id === 'a1')
+    expect(asst?.proposals?.some((p) => p.id === 'kp1')).toBe(true)
+  })
+
+  it('promoteAnswer without a title sends undefined; failure surfaces lastKernelStatus', async () => {
+    const api = mockWindowApi()
+    api.promoteToKnowledge.mockResolvedValue({ ok: false, error: 'Jawaban kosong' })
+    useChatStore.setState({ messages: [msg('a1', 'assistant', 'halo')] })
+
+    const res = await useChatStore.getState().promoteAnswer('a1')
+
+    expect(api.promoteToKnowledge).toHaveBeenCalledWith('halo', [], undefined)
+    expect(res.ok).toBe(false)
+    expect(useChatStore.getState().lastKernelStatus).toContain('Jawaban kosong')
+  })
+
+  it('promoteAnswer no-ops on a missing message', async () => {
+    const api = mockWindowApi()
+    const res = await useChatStore.getState().promoteAnswer('ghost')
+    expect(res.ok).toBe(false)
+    expect(api.promoteToKnowledge).not.toHaveBeenCalled()
   })
 })
 

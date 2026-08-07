@@ -1009,7 +1009,136 @@ describe('AI system contracts', () => {
       )
     ).toBe(true)
     expect(has(mid, 'importGrokFromCli', 'getAllProvidersStatus')).toBe(true)
-    expect(has(mid, 'KERNEL_SYSTEM_PROMPT', 'unknown tools skipped')).toBe(true)
+    // P2: kernel comes from the Prompt Registry (per-vault override), not a literal
+    expect(has(mid, "renderPrompt('kernel')", 'unknown tools skipped')).toBe(true)
+  })
+  it('P2 prompt registry: versioned JSON assets under .workspacegraph/prompts/', () => {
+    const reg = read('src/main/ai/PromptRegistry.ts')
+    const wm = read('src/main/ai/WorkspaceMemory.ts')
+    const tools = read('src/main/ai/AgentTools.ts')
+    // Registry ships versioned defaults and renders {{...}} placeholders at runtime
+    expect(has(reg, 'PROMPT_DEFAULTS', 'version: 1', 'renderPrompt', '{{tools}}')).toBe(true)
+    // Materializes/loads a per-vault JSON snapshot, gated by version
+    expect(
+      has(
+        reg,
+        "'.workspacegraph', 'prompts'",
+        'prompts.json',
+        'e.version >= PROMPT_DEFAULTS[id].version'
+      )
+    ).toBe(true)
+    // Kernel + bootstrap derive from the registry; tools head/tail rendered with {{tools}}
+    expect(wm.includes("renderPrompt('kernel')")).toBe(true)
+    expect(wm.includes("renderPrompt('bootstrap')")).toBe(true)
+    expect(
+      has(tools, "renderPrompt('toolsHead', { tools: lines })", "renderPrompt('toolsTail')")
+    ).toBe(true)
+  })
+  it('P3 structured AI event log: JSONL under .workspacegraph/logs + rotation + read IPC', () => {
+    const log = read('src/main/ai/AIEventLog.ts')
+    const mid = read('src/main/ai/AIMiddleware.ts')
+    const ipc = read('src/main/ipc/handlers/ai.ts')
+    const pre = read('src/preload/index.ts')
+    // Module: JSONL append + size rotation + read/stats APIs
+    expect(
+      has(
+        log,
+        'ai-events.jsonl',
+        "LOG_DIR = '.workspacegraph'",
+        "LOG_SUBDIR = 'logs'",
+        'export function rotateAIEventLog',
+        'export function logAIEvent',
+        'export function readAIEvents',
+        'export function getAIEventStats',
+        'LOG_MAX_BYTES'
+      )
+    ).toBe(true)
+    // Middleware emits lifecycle + tool events with the audit fields
+    expect(has(mid, 'logAIEvent', 'logAIOutcome', 'stream_start', 'stream_end')).toBe(true)
+    expect(has(mid, 'durationMs: Date.now() - startedAt', 'status: finalMeta.status')).toBe(true)
+    expect(has(mid, 'tokensUsed: finalMeta.tokensUsed')).toBe(true)
+    expect(has(mid, "logAIOutcome('tool',", 'startedAt')).toBe(true)
+    // IPC exposes the trail to the renderer + logs handler-level ops
+    expect(
+      has(ipc, "'ai:listAIEvents'", "'ai:getAIEventStats'", 'readAIEvents', 'getAIEventStats')
+    ).toBe(true)
+    expect(has(ipc, "'ai:promoteKnowledge'", "channel: 'ai:promoteKnowledge'")).toBe(true)
+    expect(has(pre, 'listAIEvents', 'getAIEventStats')).toBe(true)
+  })
+  it('AI Activity Log panel: list + filter + clear wired end-to-end', () => {
+    const log = read('src/main/ai/AIEventLog.ts')
+    const ipc = read('src/main/ipc/handlers/ai.ts')
+    const pre = read('src/preload/index.ts')
+    const set = read('src/renderer/src/components/settings/SettingsView.tsx')
+    const css = read('src/renderer/src/styles/globals.css')
+    // Main: wipe API over the whole trail (active + rotated)
+    expect(has(log, 'export function clearAIEvents', "f.startsWith('ai-events')")).toBe(true)
+    expect(has(ipc, "'ai:clearAIEvents'", 'clearAIEvents(root)')).toBe(true)
+    expect(has(pre, "clearAIEvents: () => ipcRenderer.invoke('ai:clearAIEvents')")).toBe(true)
+    // Settings: dedicated nav section + terminal-event list + status filter chips
+    expect(has(set, "id: 'logs', label: 'AI Activity'", 'TERMINAL_KINDS', 'LOG_FILTERS')).toBe(true)
+    expect(has(set, 'listAIEvents(300)', 'logFilter', 'handleClearAIEvents')).toBe(true)
+    expect(has(set, 'ai-log-filters', 'ai-log-row', 'Konfirmasi hapus?')).toBe(true)
+    expect(has(css, '.ai-log-filter-chip', '.ai-log-row', '.ai-log-status', '.ai-log-nums')).toBe(
+      true
+    )
+  })
+  it('AI Activity CSV export: CSV builder + save dialog + preload wired end-to-end', () => {
+    const log = read('src/main/ai/AIEventLog.ts')
+    const ipc = read('src/main/ipc/handlers/ai.ts')
+    const pre = read('src/preload/index.ts')
+    const set = read('src/renderer/src/components/settings/SettingsView.tsx')
+    // Main: pure CSV serializer + terminal-only reader (drops 'started' bookends)
+    expect(has(log, 'export function aiEventsToCSV', 'export function readTerminalAIEvents')).toBe(
+      true
+    )
+    expect(
+      has(log, "'timestamp', 'kind', 'provider', 'model'", "'duration_ms', 'tokens_used'")
+    ).toBe(true)
+    // IPC: native save dialog defaulting to Downloads; preload bridges it
+    expect(has(ipc, "'ai:exportAIEventsCSV'", "app.getPath('downloads')", 'showSaveDialog')).toBe(
+      true
+    )
+    expect(has(ipc, 'aiEventsToCSV(events)', 'readTerminalAIEvents(root, 50_000)')).toBe(true)
+    expect(has(pre, "exportAIEventsCSV: () => ipcRenderer.invoke('ai:exportAIEventsCSV')")).toBe(
+      true
+    )
+    // Settings: the Export button calls the bridge and flashes the result
+    expect(has(set, 'exportAIEventsCSV()', 'Ekspor CSV')).toBe(true)
+  })
+  it('AI log retention: age-prune on append + Settings control wired end-to-end', () => {
+    const log = read('src/main/ai/AIEventLog.ts')
+    const set = read('src/renderer/src/components/settings/SettingsView.tsx')
+    // Main: prune helper + rotation takes retentionDays + logAIEvent reads the
+    // settings key and gates pruning to at most once per 6h per vault
+    expect(
+      has(log, 'export function pruneAIEventsOlderThan', 'retentionDays = 0', 'retentionDays > 0')
+    ).toBe(true)
+    expect(has(log, "RETENTION_SETTING_KEY = 'aiEventRetentionDays'")).toBe(true)
+    expect(has(log, 'workspaceEngine.getSettings()', 'lastPruneAt', 'PRUNE_MIN_INTERVAL_MS')).toBe(
+      true
+    )
+    // Settings: retention select loads the key and saves it back
+    expect(has(set, 'aiEventRetentionDays', 'saveLogRetention', 'id="ai-log-retention"')).toBe(true)
+    expect(has(set, 'Hapus otomatis event lebih tua dari', 'Off (simpan semua)')).toBe(true)
+  })
+  it('AI usage dashboard card: windowed stats wired end-to-end', () => {
+    const log = read('src/main/ai/AIEventLog.ts')
+    const ipc = read('src/main/ipc/handlers/ai.ts')
+    const pre = read('src/preload/index.ts')
+    const dash = read('src/renderer/src/components/dashboard/DashboardView.tsx')
+    const css = read('src/renderer/src/styles/globals.css')
+    // Main: 7-day windowed aggregation over terminal ops
+    expect(
+      has(log, 'export function getAIEventStatsWindow', 'errorRate', 'series', 'avgDurationMs')
+    ).toBe(true)
+    // IPC passes the window to the handler; preload forwards days
+    expect(has(ipc, 'getAIEventStatsWindow(root,', 'windowed')).toBe(true)
+    expect(has(pre, 'getAIEventStats: (days?: number)')).toBe(true)
+    // Dashboard renders the card from the window + mini bars
+    expect(has(dash, 'AiUsageCard', 'getAIEventStats(7)', 'dash-ai-bars', 'windowed')).toBe(true)
+    expect(has(dash, 'stream', 'token', 'rata-rata')).toBe(true)
+    expect(has(css, '.dash-ai-bars', '.dash-ai-stat-value', '.dash-ai-bar')).toBe(true)
   })
   it('provider modules implement interface', () => {
     const files = ['Grok', 'Gemini', 'OpenAI', 'Claude', 'Ollama', 'OpenRouter']
@@ -1044,7 +1173,7 @@ describe('AI system contracts', () => {
     const mid = read('src/main/ai/AIMiddleware.ts')
     // Per-invocation tool timeout guards the loop (watchdog only runs BETWEEN rounds)
     expect(has(mid, 'EXECUTE_TOOL_TIMEOUT_MS', 'executeToolWithTimeout')).toBe(true)
-    expect(has(mid, 'await executeToolWithTimeout(p.action)')).toBe(true)
+    expect(has(mid, 'executeToolWithTimeout(p.action, agentRole)')).toBe(true)
     // Claude/Gemini/Ollama don't report usage → char-based estimate on terminal chunk
     expect(has(mid, 'reportedTokens', 'estimatedTokens')).toBe(true)
     expect(has(mid, 'tokensUsed: reportedTokens ? undefined : estimatedTokens')).toBe(true)
@@ -1082,9 +1211,9 @@ describe('AI system contracts', () => {
     const base = read('src/main/ai/providers/BaseProvider.ts')
     const compat = read('src/main/ai/providers/openaiCompat.ts')
     // Middleware routes by provider capability and sends the native contract
-    expect(has(mid, 'capabilities.toolCalling', 'buildToolSchemas()', "tool_choice = 'auto'")).toBe(
-      true
-    )
+    expect(
+      has(mid, 'capabilities.toolCalling', 'buildToolSchemas(agentRole)', "tool_choice = 'auto'")
+    ).toBe(true)
     // OpenAI-compat providers consume request.tools and parse stream deltas
     for (const p of ['OpenAI', 'Grok', 'OpenRouter']) {
       const src = read(`src/main/ai/providers/${p}Provider.ts`)
@@ -1119,6 +1248,66 @@ describe('AI system contracts', () => {
     // Renderer pulls persisted proposals via the preload bridge on mount
     expect(has(store, 'refreshProposals', 'listWriteProposals')).toBe(true)
     expect(has(panel, 'refreshProposals', 'void refreshProposals()')).toBe(true)
+  })
+  it('P2 knowledge promotion: Simpan sebagai Knowledge wired end-to-end', () => {
+    const tools = read('src/main/ai/AgentTools.ts')
+    // Main-side promotion: Knowledge/ proposal + automatic backlink Sumber section
+    expect(has(tools, 'export function promoteToKnowledge', "'Knowledge'", '## Sumber')).toBe(true)
+    expect(has(tools, '[[', 'type: knowledge')).toBe(true)
+    // IPC handler + preload bridge
+    expect(readIpcSource().includes("'ai:promoteKnowledge'")).toBe(true)
+    const pre = read('src/preload/index.ts')
+    expect(has(pre, 'promoteToKnowledge', "invoke('ai:promoteKnowledge'")).toBe(true)
+    // Store action hydrates the dock + message trail from the returned proposal
+    const store = read('src/renderer/src/store/chatStore.ts')
+    expect(
+      has(
+        store,
+        'promoteAnswer:',
+        'promoteToKnowledge(',
+        'pendingProposals: mergeProposals(state.pendingProposals, [p])',
+        'Proposal Knowledge/'
+      )
+    ).toBe(true)
+    // Button on assistant messages (never while streaming/error)
+    const panel = read('src/renderer/src/components/chat/ChatPanel.tsx')
+    expect(
+      has(
+        panel,
+        'handlePromoteKnowledge',
+        'Simpan sebagai Knowledge',
+        'promptDialog',
+        'promoteAnswer'
+      )
+    ).toBe(true)
+  })
+  it('P1: per-role tool permissions + sequential pipeline wired end-to-end', () => {
+    const tools = read('src/main/ai/AgentTools.ts')
+    // Permission matrix lives in AgentTools (single source), guard in executeTool
+    expect(has(tools, 'ROLE_TOOL_PERMISSIONS', 'export function isToolAllowed')).toBe(true)
+    expect(has(tools, 'tidak diizinkan untuk role')).toBe(true)
+    // Role-filtered advertisement for BOTH protocols (fence prompt + native schemas)
+    expect(has(tools, 'export function buildToolsSystemPrompt')).toBe(true)
+    expect(has(tools, 'export function buildToolSchemas(role')).toBe(true)
+    // Middleware routes role → executeTool guard + per-role advertisement
+    const mid = read('src/main/ai/AIMiddleware.ts')
+    expect(has(mid, 'executeToolWithTimeout(p.action, agentRole)')).toBe(true)
+    expect(has(mid, 'buildToolSchemas(agentRole)', 'buildToolsSystemPrompt(agentRole)')).toBe(true)
+    // Sequential pipeline: stages with roles, suppression of intermediate done
+    expect(
+      has(
+        mid,
+        'streamPipeline',
+        'PipelineStage',
+        'RESEARCH_TO_WRITER_STAGES',
+        'Hasil Stage',
+        'toolStatus: `Stage ${i + 1}/${stages.length} done`'
+      )
+    ).toBe(true)
+    // IPC + preload bridge for the pipeline
+    expect(readIpcSource().includes("'ai:streamPipeline'")).toBe(true)
+    expect(read('src/preload/index.ts').includes('streamAIPipeline')).toBe(true)
+    expect(read('src/preload/index.d.ts').includes('streamAIPipeline')).toBe(true)
   })
   it('P-A2 vision: image content blocks per provider + renderer attach UI', () => {
     const base = read('src/main/ai/providers/BaseProvider.ts')

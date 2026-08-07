@@ -272,6 +272,33 @@ export interface API {
     agentRole?: string,
     enableTools?: boolean
   ) => string
+  streamAIPipeline: (
+    request: any,
+    stages: { role: string; instruction: string }[],
+    onChunk: (chunk: {
+      content: string
+      done: boolean
+      citations?: { title: string; path: string }[]
+      proposals?: WriteProposal[]
+      toolStatus?: string
+      toolRun?: {
+        runId: string
+        tool: string
+        status: 'running' | 'ok' | 'error'
+        detail?: string
+        round?: number
+      }
+      round?: number
+      error?: string
+      tokensUsed?: number
+      contextTokens?: number
+      contextSavedTokens?: number
+      reasoning?: string
+      verifications?: { path: string; title: string; supported: boolean; score: number }[]
+    }) => void,
+    activeFilePath?: string,
+    useContext?: boolean
+  ) => string
   cancelAIStream: (requestId: string) => Promise<boolean>
   applyWriteProposal: (
     proposalId: string,
@@ -279,6 +306,11 @@ export interface API {
   ) => Promise<{ ok: boolean; path?: string; error?: string }>
   rejectWriteProposal: (proposalId: string) => Promise<{ ok: boolean }>
   listWriteProposals: () => Promise<WriteProposal[]>
+  promoteToKnowledge: (
+    content: string,
+    citations: { title: string; path: string }[],
+    suggestedTitle?: string
+  ) => Promise<{ ok: boolean; proposal?: WriteProposal; error?: string }>
   getWriteProposal: (proposalId: string) => Promise<WriteProposal | null>
   ensureAiMemory: () => Promise<{
     ok: boolean
@@ -292,6 +324,51 @@ export interface API {
     dir: string
     files: string[]
     core?: string[]
+  }>
+  listAIEvents: (limit?: number) => Promise<
+    {
+      ts: string
+      kind: string
+      provider?: string
+      model?: string
+      requestId?: string
+      channel?: string
+      role?: string
+      stageCount?: number
+      durationMs?: number
+      tokensUsed?: number
+      status?: string
+      error?: string
+      tool?: string
+      rounds?: number
+    }[]
+  >
+  clearAIEvents: () => Promise<{ ok: boolean; removed: number }>
+  exportAIEventsCSV: () => Promise<{
+    ok: boolean
+    path?: string
+    count?: number
+    canceled?: boolean
+    error?: string
+  }>
+  getAIEventStats: (days?: number) => Promise<{
+    total: number
+    sizeBytes: number
+    file: string | null
+    byKind: Record<string, number>
+    byStatus: Record<string, number>
+    lastTs: string | null
+    windowed: {
+      days: number
+      operations: number
+      tokensUsed: number
+      errors: number
+      cancelled: number
+      timedOut: number
+      errorRate: number
+      avgDurationMs: number
+      series: { day: string; operations: number; errors: number; tokensUsed: number }[]
+    } | null
   }>
 
   saveChat: (conv: any) => Promise<{ ok: boolean; path?: string; error?: string }>

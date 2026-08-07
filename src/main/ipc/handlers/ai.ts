@@ -1,13 +1,24 @@
-import { ipcMain, BrowserWindow } from 'electron'
+import { app, dialog, ipcMain, BrowserWindow } from 'electron'
+import fs from 'fs'
 import path from 'path'
 import { workspaceEngine } from '../../engine/WorkspaceEngine'
 import { aiMiddleware } from '../../ai/AIMiddleware'
 import { embeddingEngine } from '../../ai/EmbeddingEngine'
 import {
+  logAIEvent,
+  readAIEvents,
+  readTerminalAIEvents,
+  aiEventsToCSV,
+  getAIEventStats,
+  getAIEventStatsWindow,
+  clearAIEvents
+} from '../../ai/AIEventLog'
+import {
   applyProposal,
   rejectProposal,
   listPendingProposals,
-  getProposal
+  getProposal,
+  promoteToKnowledge
 } from '../../ai/AgentTools'
 import {
   ensureAiMemoryScaffold,
@@ -220,6 +231,75 @@ export function registerAIHandlers(): void {
     return true
   })
 
+  /**
+   * P1 pipeline: sequential agent orchestration (e.g. Research → Writer).
+   * Mirrors ai:streamMessage's chunk delivery but drives middleware.streamPipeline
+   * with a stage list; each stage runs with its own role (per-role tool gates).
+   */
+  ipcMain.handle(
+    'ai:streamPipeline',
+    async (
+      event,
+      {
+        requestId,
+        request,
+        stages,
+        activeFilePath,
+        useContext
+      }: {
+        requestId: string
+        request: unknown
+        stages: { role: string; instruction: string }[]
+        activeFilePath?: string
+        useContext?: boolean
+      }
+    ) => {
+      const perms = readPermissions(workspaceEngine.getSettings())
+      if (!perms.aiAccess) {
+        const win = BrowserWindow.fromWebContents(event.sender)
+        win?.webContents.send(`ai:stream:${requestId}`, {
+          content: '**Error:** AI access disabled in Settings → Security.',
+          done: true,
+          error: 'AI access disabled in Settings → Security.'
+        })
+        return
+      }
+      if (!perms.aiTools) {
+        const win = BrowserWindow.fromWebContents(event.sender)
+        win?.webContents.send(`ai:stream:${requestId}`, {
+          content: '**Error:** Pipeline membutuhkan izin tools (Settings → Security).',
+          done: true,
+          error: 'AI tools disabled in Settings → Security.'
+        })
+        return
+      }
+      if (activeFilePath) assertPathInVault(activeFilePath, requireOpenVault())
+      const win = BrowserWindow.fromWebContents(event.sender)
+      const send = (chunk: unknown): void => {
+        if (win && !win.isDestroyed()) {
+          win.webContents.send(`ai:stream:${requestId}`, chunk)
+        }
+      }
+      try {
+        await aiMiddleware.streamPipeline(
+          request as never,
+          stages as never,
+          send,
+          activeFilePath,
+          useContext,
+          requestId
+        )
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        send({
+          content: `\n\n**Error:** ${msg}`,
+          done: true,
+          error: msg
+        })
+      }
+    }
+  )
+
   ipcMain.handle('ai:applyProposal', async (_, proposalId: string, content?: string) => {
     // P2-6: optional edited content from the diff preview dialog
     const result = applyProposal(proposalId, content)
@@ -240,6 +320,32 @@ export function registerAIHandlers(): void {
   ipcMain.handle('ai:listProposals', async () => {
     return listPendingProposals()
   })
+
+  /**
+   * P2 knowledge promotion: turn a chat answer into a Knowledge/ note proposal
+   * (with automatic backlinks to the cited notes). Same lifecycle as agent
+   * writes — pending → dock → user Apply.
+   */
+  ipcMain.handle(
+    'ai:promoteKnowledge',
+    async (
+      _,
+      content: string,
+      citations: { title: string; path: string }[],
+      suggestedTitle?: string
+    ) => {
+      const res = promoteToKnowledge(content, citations, suggestedTitle)
+      // P3 audit logging: handler-level operation (promote is not a middleware call)
+      logAIEvent({
+        kind: 'ipc',
+        channel: 'ai:promoteKnowledge',
+        status: res.ok ? 'ok' : 'error',
+        error: res.error,
+        role: 'curator'
+      })
+      return res
+    }
+  )
 
   ipcMain.handle('ai:getProposal', async (_, proposalId: string) => {
     return getProposal(proposalId) || null
@@ -273,6 +379,55 @@ export function registerAIHandlers(): void {
       dir: AI_MEMORY_DIR,
       files: abs.map((p) => path.relative(root, p).replace(/\\/g, '/')),
       core: getCoreMemoryRelPaths(root)
+    }
+  })
+
+  /**
+   * P3 audit logging: read the structured AI event trail (newest first) and
+   * aggregate stats. Backed by the JSONL under .workspacegraph/logs/.
+   */
+  ipcMain.handle('ai:listAIEvents', async (_, limit?: number) => {
+    const root = workspaceEngine.getState().rootPath
+    return readAIEvents(root, Math.min(Math.max(Number(limit) || 200, 1), 5000))
+  })
+
+  ipcMain.handle('ai:getAIEventStats', async (_, days?: number) => {
+    const root = workspaceEngine.getState().rootPath
+    // Windowed summary powers the dashboard "AI usage" card. `days` of 0/NaN
+    // falls back to the 7-day default (never 1) — the || 7 default wins first.
+    const windowed = getAIEventStatsWindow(root, Math.max(Number(days) || 7, 1))
+    return { ...getAIEventStats(root), windowed }
+  })
+
+  /** P3: wipe the AI event trail (Settings → AI Activity → Clear). */
+  ipcMain.handle('ai:clearAIEvents', async () => {
+    const root = workspaceEngine.getState().rootPath
+    return clearAIEvents(root)
+  })
+
+  /**
+   * P3: export terminal AI events to CSV via a native save dialog, defaulting
+   * to the Downloads folder. Mirrors graph:savePng's dialog pattern.
+   */
+  ipcMain.handle('ai:exportAIEventsCSV', async () => {
+    try {
+      const root = workspaceEngine.getState().rootPath
+      if (!root) return { ok: false, error: 'No vault open' }
+      const events = readTerminalAIEvents(root, 50_000)
+      if (events.length === 0) return { ok: false, error: 'Belum ada aktivitas AI untuk diekspor' }
+      const res = await dialog.showSaveDialog({
+        title: 'Export AI activity log',
+        defaultPath: path.join(
+          app.getPath('downloads'),
+          `ai-events-${new Date().toISOString().slice(0, 10)}.csv`
+        ),
+        filters: [{ name: 'CSV', extensions: ['csv'] }]
+      })
+      if (res.canceled || !res.filePath) return { ok: false, canceled: true }
+      fs.writeFileSync(res.filePath, aiEventsToCSV(events), 'utf-8')
+      return { ok: true, path: res.filePath, count: events.length }
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
     }
   })
 }

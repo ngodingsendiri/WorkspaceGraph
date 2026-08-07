@@ -6,6 +6,7 @@ import fs from 'fs'
 import path from 'path'
 import { workspaceEngine } from '../engine/WorkspaceEngine'
 import { isPathInVault } from '../security/PathSandbox'
+import { renderPrompt } from './PromptRegistry'
 
 export const AI_MEMORY_DIR = 'AI Memory'
 
@@ -291,32 +292,10 @@ export function getCoreMemoryRelPaths(vaultRoot: string | null | undefined): str
   return out
 }
 
-export const BOOTSTRAP_USER_PROMPT = `Mode: **PELAJARI WORKSPACE** (bootstrap memori).
+export const BOOTSTRAP_USER_PROMPT = renderPrompt('bootstrap')
 
-Tugasmu:
-1. Pakai tools: \`list_dir\` (root + folder penting), \`search\`, \`read_note\` untuk memahami struktur vault.
-2. Baca dulu catatan di folder \`AI Memory/\` (index + cara kerja).
-3. Isi / perbarui memori lewat **write_note** atau **append_note** (proposal — user akan Apply):
-   - \`AI Memory/Cara Kerja.md\` — struktur folder, alur rutin
-   - \`AI Memory/Aturan.md\` — aturan / larangan
-   - \`AI Memory/Pola & Naming.md\` — naming & template
-   - \`AI Memory/Glossary.md\` — istilah
-   - \`AI Memory/00 Index.md\` — pastikan wikilink ke memori + domain penting
-   - \`AI Memory/Log Ingest.md\` — append log tanggal hari ini
-4. Pakai **[[wikilink]]** antar note supaya graph memadat.
-5. Jangan invent data yang tidak ada di vault. Jika kosong, catat "belum ada / TBD".
-6. Akhiri dengan ringkasan: apa yang dipelajari + proposal apa yang dibuat.
-
-Mulai sekarang: list_dir root, lalu baca AI Memory/00 Index.md.`
-
-export const KERNEL_SYSTEM_PROMPT = `
-## WorkspaceGraph AI Kernel
-
-You are the **workspace kernel assistant** — not a generic chatbot.
-- Long-term memory lives in Markdown under **AI Memory/** (+ domain notes). Graph edges grow via [[wikilinks]].
-- On every task: prefer reading AI Memory first, then search/graph domain notes.
-- After discovering a new durable pattern, propose updating AI Memory (append/write) so future tasks get smarter.
-- Never invent vault facts. If memory is empty, say so and offer bootstrap ("Pelajari workspace").
-- Write tools create **proposals**; user confirms Apply before disk write.
-- Output clear Markdown with [[WikiLinks]] when referencing notes.
-`.trim()
+// Derived from the Prompt Registry (doc 19) — the kernel is a versioned prompt
+// asset, overridable per vault via .workspacegraph/prompts/prompts.json. At
+// module load no vault is open, so this const carries the shipped default;
+// AIMiddleware re-renders per stream (renderPrompt) so a vault override applies.
+export const KERNEL_SYSTEM_PROMPT = renderPrompt('kernel')

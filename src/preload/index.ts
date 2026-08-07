@@ -197,6 +197,41 @@ const api = {
       })
     return requestId
   },
+  /** P1 pipeline: sequential agent orchestration (Research → Writer, etc.). */
+  streamAIPipeline: (
+    request: unknown,
+    stages: { role: string; instruction: string }[],
+    onChunk: (chunk: AiStreamChunkPayload) => void,
+    activeFilePath?: string,
+    useContext?: boolean
+  ) => {
+    const requestId = Math.random().toString(36).slice(2)
+    const channel = `ai:stream:${requestId}`
+    const handler: (_: unknown, chunk: AiStreamChunkPayload) => void = (_, chunk) => {
+      onChunk(chunk)
+      if (chunk.done) cleanupStream(requestId)
+    }
+    ipcRenderer.on(channel, handler)
+    const timer = setTimeout(() => cleanupStream(requestId), STREAM_WATCHDOG_MS)
+    streamWatchdogs.set(requestId, { channel, handler, timer })
+    ipcRenderer
+      .invoke('ai:streamPipeline', {
+        requestId,
+        request,
+        stages,
+        activeFilePath,
+        useContext
+      })
+      .catch((err: Error) => {
+        onChunk({
+          content: `\n\n**Error:** ${err?.message || String(err)}`,
+          done: true,
+          error: err?.message || String(err)
+        })
+        cleanupStream(requestId)
+      })
+    return requestId
+  },
   cancelAIStream: (requestId: string) => {
     // Release the renderer-side listener so cancel always cleans up, even if the
     // main-process stream never emits a final `done` chunk.
@@ -207,9 +242,18 @@ const api = {
     ipcRenderer.invoke('ai:applyProposal', proposalId, content),
   rejectWriteProposal: (proposalId: string) => ipcRenderer.invoke('ai:rejectProposal', proposalId),
   listWriteProposals: () => ipcRenderer.invoke('ai:listProposals'),
+  promoteToKnowledge: (
+    content: string,
+    citations: { title: string; path: string }[],
+    suggestedTitle?: string
+  ) => ipcRenderer.invoke('ai:promoteKnowledge', content, citations, suggestedTitle),
   getWriteProposal: (proposalId: string) => ipcRenderer.invoke('ai:getProposal', proposalId),
   ensureAiMemory: () => ipcRenderer.invoke('ai:ensureMemory'),
   listAiMemory: () => ipcRenderer.invoke('ai:listMemory'),
+  listAIEvents: (limit?: number) => ipcRenderer.invoke('ai:listAIEvents', limit),
+  getAIEventStats: (days?: number) => ipcRenderer.invoke('ai:getAIEventStats', days),
+  clearAIEvents: () => ipcRenderer.invoke('ai:clearAIEvents'),
+  exportAIEventsCSV: () => ipcRenderer.invoke('ai:exportAIEventsCSV'),
 
   saveChat: (conv: unknown) => ipcRenderer.invoke('chat:save', conv),
   listChats: () => ipcRenderer.invoke('chat:list'),

@@ -6,7 +6,8 @@ import {
   AIMiddleware,
   StreamEvent,
   executeToolWithTimeout,
-  EXECUTE_TOOL_TIMEOUT_MS
+  EXECUTE_TOOL_TIMEOUT_MS,
+  RESEARCH_TO_WRITER_STAGES
 } from './AIMiddleware'
 import * as AgentTools from './AgentTools'
 import type { ToolResult } from './AgentTools'
@@ -279,6 +280,15 @@ describe('AIMiddleware.runStreamInner (P-B1)', () => {
     expect(done?.done).toBe(true)
     // No second round is started after an abort
     expect(provider.calls).toHaveLength(1)
+    // P3: the audit trail records the abort as status 'cancelled'
+    const logFile = path.join(vault, '.workspacegraph', 'logs', 'ai-events.jsonl')
+    const endEvent = fs
+      .readFileSync(logFile, 'utf-8')
+      .split('\n')
+      .filter(Boolean)
+      .map((l) => JSON.parse(l) as { kind: string; status?: string })
+      .find((e) => e.kind === 'stream_end')
+    expect(endEvent?.status).toBe('cancelled')
   })
 
   it('watchdog kills a stalled stream with a timeout chunk', async () => {
@@ -790,6 +800,245 @@ describe('AIMiddleware.runStreamInner (P-B1)', () => {
     }
   })
 
+  // ── P1 per-role capabilities + pipeline orchestration ───────────────────
+
+  it('P1: researcher role gets only read-only tools advertised (native path)', async () => {
+    const provider = new ScriptedProvider(true)
+    const mid = makeMid(provider)
+    provider.script.push((_req, onChunk) => {
+      onChunk({ content: 'No tools needed.', done: false, model: 'fake' })
+      onChunk({ content: '', done: true, model: 'fake' })
+    })
+
+    const chunks: StreamEvent[] = []
+    await mid.streamMessage(
+      { messages: [{ role: 'user', content: 'riset' }], model: 'fake' },
+      (c) => chunks.push(c),
+      undefined,
+      false,
+      'researcher',
+      true,
+      'req-p1-researcher'
+    )
+
+    const sent = provider.calls[0]
+    expect(sent.tools?.map((t) => t.function.name)).toEqual([
+      'search',
+      'read_note',
+      'list_dir',
+      'list_templates'
+    ])
+    // Fence prompt (if used) would also be role-filtered — no writes advertised
+    expect(sent.systemPrompt).not.toContain('write_note — args')
+    const done = chunks.filter((c) => c.done).pop()
+    expect(done?.done).toBe(true)
+  })
+
+  it('P1 guard: researcher calling a write tool gets a denied toolRun error + no proposal', async () => {
+    writeVaultNote('Knowledge/Note.md', '# Note\n\nIsi.')
+    const provider = new ScriptedProvider(true)
+    const mid = makeMid(provider)
+    provider.script.push((_req, onChunk) => {
+      onChunk({ content: '', done: false, model: 'fake' })
+      onChunk({
+        content: '',
+        done: true,
+        model: 'fake',
+        toolCalls: [
+          {
+            id: 'w1',
+            name: 'create_note',
+            arguments: '{"path":"Knowledge/Denied.md","content":"# X"}'
+          }
+        ]
+      })
+    })
+
+    const chunks: StreamEvent[] = []
+    await mid.streamMessage(
+      { messages: [{ role: 'user', content: 'buat catatan' }], model: 'fake' },
+      (c) => chunks.push(c),
+      undefined,
+      false,
+      'researcher',
+      true,
+      'req-p1-deny'
+    )
+
+    // The denied write surfaced as an error toolRun with the role in the detail
+    const err = chunks.find((c) => c.toolRun?.status === 'error')
+    expect(err?.toolRun?.tool).toBe('create_note')
+    expect(err?.toolRun?.detail).toContain('tidak diizinkan')
+    expect(err?.toolRun?.detail).toContain('researcher')
+    // No proposal was created; the write-only round stops cleanly
+    const done = chunks.filter((c) => c.done).pop()
+    expect(done?.proposals?.length ?? 0).toBe(0)
+    expect(fs.existsSync(path.join(vault, 'Knowledge', 'Denied.md'))).toBe(false)
+  })
+
+  it('P1 pipeline: Research → Writer runs both stages, hands the summary over, single done', async () => {
+    writeVaultNote('Knowledge/Note.md', '# Note\n\nFakta penting tentang X.')
+    const provider = new ScriptedProvider(true)
+    const mid = makeMid(provider)
+
+    // Stage 1 — researcher: read_note, then produce the research summary
+    provider.script.push((_req, onChunk) => {
+      onChunk({ content: '', done: false, model: 'fake' })
+      onChunk({
+        content: '',
+        done: true,
+        model: 'fake',
+        toolCalls: [{ id: 'r1', name: 'read_note', arguments: '{"path":"Knowledge/Note.md"}' }]
+      })
+    })
+    provider.script.push((_req, onChunk) => {
+      onChunk({ content: 'RINGKASAN RISET: X adalah Y.', done: false, model: 'fake' })
+      onChunk({ content: '', done: true, model: 'fake' })
+    })
+    // Stage 2 — writer: propose a durable note (write-only round stops the loop)
+    provider.script.push((_req, onChunk) => {
+      onChunk({ content: '', done: false, model: 'fake' })
+      onChunk({
+        content: '',
+        done: true,
+        model: 'fake',
+        toolCalls: [
+          {
+            id: 'w1',
+            name: 'create_note',
+            arguments: '{"path":"Knowledge/Summary.md","content":"# X\\n\\nY"}'
+          }
+        ]
+      })
+    })
+
+    const chunks: StreamEvent[] = []
+    await mid.streamPipeline(
+      { messages: [{ role: 'user', content: 'Riset X lalu tulis ringkasannya' }], model: 'fake' },
+      RESEARCH_TO_WRITER_STAGES,
+      (c) => chunks.push(c),
+      undefined,
+      false,
+      'req-pipeline'
+    )
+
+    // 3 provider calls: researcher round 0 + 1, then writer's write-only round
+    expect(provider.calls).toHaveLength(3)
+    const research = provider.calls[0]
+    const writing = provider.calls[2]
+    // Stage system prompts + role-scoped tool advertisement
+    expect(research.systemPrompt).toContain('Stage 1/2')
+    expect(research.systemPrompt).toContain('RESEARCH')
+    expect(research.tools?.map((t) => t.function.name)).toEqual([
+      'search',
+      'read_note',
+      'list_dir',
+      'list_templates'
+    ])
+    expect(writing.systemPrompt).toContain('Stage 2/2')
+    expect(writing.tools?.map((t) => t.function.name)).toHaveLength(8)
+    // Stage 2's messages carry the stage-1 summary as handoff context
+    const stage2Last = writing.messages[writing.messages.length - 1]
+    expect(stage2Last.role).toBe('user')
+    expect(String(stage2Last.content)).toContain('RINGKASAN RISET')
+    expect(String(stage2Last.content)).toContain('Hasil Stage 1')
+
+    // Only ONE terminal done chunk (intermediate stages are suppressed)
+    const done = chunks.filter((c) => c.done)
+    expect(done).toHaveLength(1)
+    // Citations from stage 1 + proposals from stage 2 accumulate on the final done
+    expect(done[0].citations?.length).toBe(1)
+    expect(done[0].proposals?.length).toBe(1)
+    expect(done[0].proposals?.[0].relativePath).toContain('Summary.md')
+    // The stage boundary status is visible to the UI
+    expect(chunks.some((c) => c.toolStatus?.includes('Stage 1/2 done'))).toBe(true)
+  })
+
+  it('P1 pipeline: abort during stage 1 stops the pipeline before stage 2', async () => {
+    writeVaultNote('Knowledge/Note.md', '# Note\n\nFakta.')
+    const provider = new ScriptedProvider(true)
+    const mid = makeMid(provider)
+    // Stage 1 round 0 cancels mid-stream (like the user hitting Cancel)
+    provider.script.push((_req, onChunk) => {
+      onChunk({ content: 'sebagian riset', done: false, model: 'fake' })
+      mid.cancelStream('req-pipeline-abort')
+      onChunk({ content: ' dibuang', done: false, model: 'fake' })
+      onChunk({ content: '', done: true, model: 'fake' })
+    })
+    // Stage 2 must NEVER run
+    provider.script.push((_req, onChunk) => {
+      onChunk({ content: 'SEHARUSNYA TIDAK MUNCUL', done: false, model: 'fake' })
+      onChunk({ content: '', done: true, model: 'fake' })
+    })
+
+    const chunks: StreamEvent[] = []
+    await mid.streamPipeline(
+      { messages: [{ role: 'user', content: 'riset' }], model: 'fake' },
+      RESEARCH_TO_WRITER_STAGES,
+      (c) => chunks.push(c),
+      undefined,
+      false,
+      'req-pipeline-abort'
+    )
+
+    // Only stage 1's single round ran; stage 2 never dispatched
+    expect(provider.calls).toHaveLength(1)
+    // Text before cancel kept, dropped text swallowed, pipeline ends cancelled
+    expect(chunks.some((c) => c.content.includes('sebagian riset'))).toBe(true)
+    expect(chunks.some((c) => c.content.includes('dibuang'))).toBe(false)
+    const done = chunks.filter((c) => c.done).pop()
+    expect(done?.content).toContain('cancelled')
+  })
+
+  it('P1 guard: fence-path researcher write denial surfaces as an error run', async () => {
+    const provider = new ScriptedProvider(false) // fence fallback
+    const mid = makeMid(provider)
+    const fence =
+      'Saya coba tulis.\n\n```wg-action\n{"tool":"write_note","args":{"path":"Knowledge/F.md","content":"# X"}}\n```'
+    provider.script.push((_req, onChunk) => {
+      onChunk({ content: fence, done: false, model: 'fake' })
+      onChunk({ content: '', done: true, model: 'fake' })
+    })
+    provider.script.push((_req, onChunk) => {
+      onChunk({ content: 'Selesai.', done: false, model: 'fake' })
+      onChunk({ content: '', done: true, model: 'fake' })
+    })
+
+    const chunks: StreamEvent[] = []
+    await mid.streamMessage(
+      { messages: [{ role: 'user', content: 'tulis' }], model: 'fake' },
+      (c) => chunks.push(c),
+      undefined,
+      false,
+      'researcher',
+      true,
+      'req-p1-fence-deny'
+    )
+
+    // Denied write emits an error toolRun; no proposal reaches the dock
+    const err = chunks.find((c) => c.toolRun?.status === 'error')
+    expect(err?.toolRun?.tool).toBe('write_note')
+    expect(err?.toolRun?.detail).toContain('tidak diizinkan')
+    expect(fs.existsSync(path.join(vault, 'Knowledge', 'F.md'))).toBe(false)
+  })
+
+  it('P1 pipeline: empty stages emit a terminal error chunk', async () => {
+    const provider = new ScriptedProvider(true)
+    const mid = makeMid(provider)
+    const chunks: StreamEvent[] = []
+    await mid.streamPipeline(
+      { messages: [{ role: 'user', content: 'x' }], model: 'fake' },
+      [],
+      (c) => chunks.push(c),
+      undefined,
+      false,
+      'req-pipeline-empty'
+    )
+    const done = chunks.filter((c) => c.done).pop()
+    expect(done?.error).toContain('tidak ada stage')
+    expect(provider.calls).toHaveLength(0)
+  })
+
   // ── Reasoning streaming (P2-4) ──────────────────────────────────────────
 
   it('P2-4: provider reasoning deltas pass through to stream chunks untouched', async () => {
@@ -915,6 +1164,54 @@ describe('executeToolWithTimeout (P1-runtime)', () => {
       expect(r.error).toContain('disk exploded')
     } finally {
       spy.mockRestore()
+    }
+  })
+
+  it('P3: a stream writes stream_start + stream_end events to the JSONL audit log', async () => {
+    // This describe has no vault — open one so logAIEvent has a target
+    const v = fs.mkdtempSync(path.join(tmpdir(), 'wg-mid-audit-'))
+    workspaceEngine.openWorkspace(v)
+    try {
+      const provider = new ScriptedProvider(false)
+      const mid = new AIMiddleware({ providers: { fake: provider } })
+      mid.setActiveProvider('fake')
+      provider.script.push((_req, onChunk) => {
+        onChunk({ content: 'Halo.', done: false, model: 'fake' })
+        onChunk({ content: '', done: true, model: 'fake' })
+      })
+
+      const chunks: StreamEvent[] = []
+      await mid.streamMessage(
+        { messages: [{ role: 'user', content: 'halo' }], model: 'fake' },
+        (c) => chunks.push(c),
+        undefined,
+        false,
+        'general',
+        false,
+        'req-audit'
+      )
+
+      const file = path.join(v, '.workspacegraph', 'logs', 'ai-events.jsonl')
+      expect(fs.existsSync(file)).toBe(true)
+      const events = fs
+        .readFileSync(file, 'utf-8')
+        .split('\n')
+        .filter(Boolean)
+        .map(
+          (l) =>
+            JSON.parse(l) as { kind: string; status?: string; provider?: string; model?: string }
+        )
+      const start = events.find((e) => e.kind === 'stream_start')
+      const end = events.find((e) => e.kind === 'stream_end')
+      expect(start).toBeDefined()
+      expect(start?.provider).toBe('fake')
+      expect(start?.status).toBe('started')
+      expect(end).toBeDefined()
+      expect(end?.status).toBe('ok')
+      expect(end?.model).toBe('fake')
+    } finally {
+      workspaceEngine.closeWorkspace()
+      fs.rmSync(v, { recursive: true, force: true })
     }
   })
 })

@@ -17,7 +17,7 @@ import { ContextEngine, AgentRole } from './ContextEngine'
 import { workspaceEngine } from '../engine/WorkspaceEngine'
 import { searchEngine } from '../engine/SearchEngine'
 import {
-  TOOLS_SYSTEM_PROMPT,
+  buildToolsSystemPrompt,
   parseToolActions,
   stripToolActions,
   executeTool,
@@ -32,7 +32,8 @@ import {
   type ToolResult,
   type ToolAction
 } from './AgentTools'
-import { KERNEL_SYSTEM_PROMPT } from './WorkspaceMemory'
+import { renderPrompt } from './PromptRegistry'
+import { logAIEvent, logAIOutcome, type AIEventStatus } from './AIEventLog'
 import { verifyCitations, type CitationVerification } from './CitationVerifier'
 
 /**
@@ -68,6 +69,36 @@ export type StreamEvent = AIStreamChunk & {
 
 const MAX_TOOL_ROUNDS = 4
 
+/**
+ * One stage of a sequential agent pipeline (P1 — doc 20 orchestration).
+ * Each stage runs as a sub-invocation with its own AgentRole, so the
+ * per-role tool permissions gate what that stage may do (e.g. a researcher
+ * stage can read/search but never write).
+ */
+export interface PipelineStage {
+  role: AgentRole
+  /** Short instruction appended to the system prompt for this stage. */
+  instruction: string
+}
+
+/**
+ * Preset: Research → Writer. The researcher stage gathers + verifies facts
+ * (read-only tools), hands its summary to the writer stage, which composes
+ * the final document (may propose writes).
+ */
+export const RESEARCH_TO_WRITER_STAGES: PipelineStage[] = [
+  {
+    role: 'researcher',
+    instruction:
+      'Stage 1/2 — RESEARCH. Gather and verify facts from the workspace using search/read/list tools. End with a concise research summary with [[WikiLinks]]. Do NOT propose writes yet.'
+  },
+  {
+    role: 'writer',
+    instruction:
+      'Stage 2/2 — WRITING. Using the research summary from Stage 1, compose the final document/answer. You may propose writes for durable output.'
+  }
+]
+
 /** Hard per-invocation tool timeout — a stuck fs/search call must not freeze
  * the whole tool loop (the round watchdog only guards BETWEEN rounds). */
 export const EXECUTE_TOOL_TIMEOUT_MS = 30_000
@@ -75,35 +106,59 @@ export const EXECUTE_TOOL_TIMEOUT_MS = 30_000
 /**
  * Run one tool with a bounded lifetime. A hung tool resolves to an error
  * result after EXECUTE_TOOL_TIMEOUT_MS so the loop continues with a visible
- * failure instead of stalling forever.
+ * failure instead of stalling forever. `role` gates the tool via the P1
+ * per-role capability matrix (denied tools never execute).
  */
-export async function executeToolWithTimeout(action: ToolAction): Promise<ToolResult> {
+export async function executeToolWithTimeout(
+  action: ToolAction,
+  role: AgentRole = 'general'
+): Promise<ToolResult> {
+  // P3 audit logging: one structured 'tool' event per invocation (tool, role,
+  // duration, ok/error) so the JSONL trail matches what the UI tool-run pills show.
+  const startedAt = Date.now()
   return new Promise<ToolResult>((resolve) => {
     let settled = false
     const timer = setTimeout(() => {
       if (settled) return
       settled = true
-      resolve({
+      const r: ToolResult = {
         ok: false,
         tool: action.tool,
         error: `Tool timeout (${EXECUTE_TOOL_TIMEOUT_MS / 1000}s)`
+      }
+      logAIOutcome('tool', {
+        startedAt,
+        ok: false,
+        error: r.error,
+        tool: action.tool,
+        role
       })
+      resolve(r)
     }, EXECUTE_TOOL_TIMEOUT_MS)
-    executeTool(action).then(
+    executeTool(action, role).then(
       (r) => {
         if (settled) return
         settled = true
         clearTimeout(timer)
+        logAIOutcome('tool', {
+          startedAt,
+          ok: r.ok,
+          error: r.error,
+          tool: action.tool,
+          role
+        })
         resolve(r)
       },
       (err: unknown) => {
         if (settled) return
         settled = true
         clearTimeout(timer)
+        const msg = err instanceof Error ? err.message : String(err)
+        logAIOutcome('tool', { startedAt, ok: false, error: msg, tool: action.tool, role })
         resolve({
           ok: false,
           tool: action.tool,
-          error: err instanceof Error ? err.message : String(err)
+          error: msg
         })
       }
     )
@@ -135,6 +190,41 @@ function toolResultDetail(r: ToolResult, max = 400): string | undefined {
   text = text.trim().replace(/\s+/g, ' ')
   if (!text) return undefined
   return text.length > max ? `${text.slice(0, max)}…` : text
+}
+
+/**
+ * Shared stream-audit wrapper (P3): capture the final outcome from the LAST
+ * done chunk — status (ok/error/cancelled/timeout), tokensUsed, error, rounds —
+ * so the stream_end log event reflects the real terminal state. The markers
+ * `(cancelled)` / `(timeout` only ride on middleware-generated terminal chunks
+ * (controlled content), so model prose can never false-positive them.
+ */
+function withStreamAudit(onChunk: (c: StreamEvent) => void): {
+  wrapped: (c: StreamEvent) => void
+  finalMeta: { status: AIEventStatus; tokensUsed?: number; error?: string; rounds?: number }
+} {
+  const finalMeta: {
+    status: AIEventStatus
+    tokensUsed?: number
+    error?: string
+    rounds?: number
+  } = { status: 'ok' }
+  const wrapped: (c: StreamEvent) => void = (c) => {
+    if (c.done) {
+      finalMeta.status = c.error
+        ? 'error'
+        : c.content?.includes('(cancelled)')
+          ? 'cancelled'
+          : c.content?.includes('(timeout')
+            ? 'timeout'
+            : 'ok'
+      finalMeta.tokensUsed = c.tokensUsed
+      finalMeta.error = c.error
+      if (typeof c.round === 'number') finalMeta.rounds = c.round + 1
+    }
+    onChunk(c)
+  }
+  return { wrapped, finalMeta }
 }
 
 export class AIMiddleware {
@@ -322,6 +412,7 @@ export class AIMiddleware {
             : 'API key / base URL belum dikonfigurasi'
       }
     }
+    const startedAt = Date.now()
     try {
       const res = await provider.sendMessage({
         model: provider.getDefaultModel(),
@@ -329,9 +420,23 @@ export class AIMiddleware {
         maxTokens: 16,
         systemPrompt: 'You are a connectivity test. Reply only OK.'
       })
+      logAIOutcome('test', {
+        startedAt,
+        ok: true,
+        provider: provider.id,
+        model: provider.getDefaultModel()
+      })
       return { ok: true, sample: (res.content || '').slice(0, 80) }
     } catch (err) {
-      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+      const msg = err instanceof Error ? err.message : String(err)
+      logAIOutcome('test', {
+        startedAt,
+        ok: false,
+        error: msg,
+        provider: provider.id,
+        model: provider.getDefaultModel()
+      })
+      return { ok: false, error: msg }
     }
   }
 
@@ -349,8 +454,11 @@ export class AIMiddleware {
     citations: { title: string; path: string }[]
     contextTokens?: number
   }> {
-    // Kernel layer always present
-    let systemPrompt = KERNEL_SYSTEM_PROMPT
+    // Kernel layer always present (Prompt Registry — re-rendered per stream so
+    // a vault override in .workspacegraph/prompts/prompts.json takes effect).
+    // Resolved once: systemPrompt + leanSystemPrompt share the same kernel text.
+    const kernelPrompt = renderPrompt('kernel')
+    let systemPrompt = kernelPrompt
     if (request.systemPrompt) {
       systemPrompt += '\n\n' + request.systemPrompt
     }
@@ -385,9 +493,10 @@ export class AIMiddleware {
 
     // Fence protocol instructions only for the fence fallback — the native
     // path declares tools through the API, so teaching wg-action fences there
-    // would encourage double-calling (fences AND tool_calls).
+    // would encourage double-calling (fences AND tool_calls). P1: the tool
+    // list is role-filtered — a researcher never sees write tools advertised.
     if (toolMode === 'fence') {
-      systemPrompt += '\n\n' + TOOLS_SYSTEM_PROMPT
+      systemPrompt += '\n\n' + buildToolsSystemPrompt(agentRole)
     }
 
     // P1-4: lean variant for tool-loop rounds 1+ — kernel + overrides + fence
@@ -397,9 +506,9 @@ export class AIMiddleware {
     // Tradeoff: vault rules / AI-memory snippets are dropped too — acceptable
     // because the model can re-read them via tools (read_note/search) if a
     // later-round answer needs them.
-    let leanSystemPrompt = KERNEL_SYSTEM_PROMPT
+    let leanSystemPrompt = kernelPrompt
     if (request.systemPrompt) leanSystemPrompt += '\n\n' + request.systemPrompt
-    if (toolMode === 'fence') leanSystemPrompt += '\n\n' + TOOLS_SYSTEM_PROMPT
+    if (toolMode === 'fence') leanSystemPrompt += '\n\n' + buildToolsSystemPrompt(agentRole)
 
     return { systemPrompt, leanSystemPrompt, citations, contextTokens }
   }
@@ -412,8 +521,8 @@ export class AIMiddleware {
     agentRole: AgentRole,
     enableTools: boolean
   ): { systemPrompt: string; citations: { title: string; path: string }[] } {
-    // Kernel layer always present
-    let systemPrompt = KERNEL_SYSTEM_PROMPT
+    // Kernel layer always present (Prompt Registry default — sendMessage path)
+    let systemPrompt = renderPrompt('kernel')
     if (request.systemPrompt) {
       systemPrompt += '\n\n' + request.systemPrompt
     }
@@ -444,7 +553,7 @@ export class AIMiddleware {
     }
 
     if (enableTools) {
-      systemPrompt += '\n\n' + TOOLS_SYSTEM_PROMPT
+      systemPrompt += '\n\n' + buildToolsSystemPrompt(agentRole)
     }
 
     return { systemPrompt, citations }
@@ -465,8 +574,28 @@ export class AIMiddleware {
       false
     )
     request.systemPrompt = systemPrompt
-    const res = await provider.sendMessage(request)
-    return { response: res, citations }
+    const startedAt = Date.now()
+    try {
+      const res = await provider.sendMessage(request)
+      logAIOutcome('send', {
+        startedAt,
+        ok: true,
+        provider: provider.id,
+        model: request.model,
+        tokensUsed: res.tokensUsed
+      })
+      return { response: res, citations }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err)
+      logAIOutcome('send', {
+        startedAt,
+        ok: false,
+        error: msg,
+        provider: provider.id,
+        model: request.model
+      })
+      throw err
+    }
   }
 
   /**
@@ -485,10 +614,28 @@ export class AIMiddleware {
     const controller = requestId ? new AbortController() : undefined
     if (controller && requestId) this.abortControllers.set(requestId, controller)
     const signal = controller?.signal
+    // P3 audit logging: stream_start at entry, stream_end in finally with the
+    // final status/tokens captured from the LAST done chunk (never per-chunk).
+    const startedAt = Date.now()
+    const { wrapped, finalMeta } = withStreamAudit(onChunk)
+    let providerId: string | undefined
+    try {
+      providerId = this.getActiveProvider().id
+    } catch {
+      /* provider may be unconfigured — runStreamInner surfaces the error */
+    }
+    logAIEvent({
+      kind: 'stream_start',
+      provider: providerId,
+      model: request.model,
+      requestId,
+      role: agentRole,
+      status: 'started'
+    })
     try {
       await this.runStreamInner(
         request,
-        onChunk,
+        wrapped,
         activeFilePath,
         useContext,
         agentRole,
@@ -498,7 +645,208 @@ export class AIMiddleware {
         controller
       )
     } finally {
+      logAIEvent({
+        kind: 'stream_end',
+        provider: providerId,
+        model: request.model,
+        requestId,
+        role: agentRole,
+        status: finalMeta.status,
+        tokensUsed: finalMeta.tokensUsed,
+        error: finalMeta.error,
+        rounds: finalMeta.rounds,
+        durationMs: Date.now() - startedAt
+      })
       if (requestId) this.abortControllers.delete(requestId)
+    }
+  }
+
+  /**
+   * Sequential agent pipeline (P1): runs each PipelineStage as a sub-invocation
+   * of the tool loop, handing each stage's accumulated output to the next stage
+   * as a synthetic user message. Intermediate `done` chunks are suppressed in
+   * favor of a stage-boundary status chunk; only the final stage terminates the
+   * stream. Proposals + citations accumulate across stages.
+   */
+  async streamPipeline(
+    request: AIRequest,
+    stages: PipelineStage[],
+    onChunk: (chunk: StreamEvent) => void,
+    activeFilePath?: string,
+    useContext = true,
+    requestId?: string
+  ): Promise<void> {
+    if (requestId) this.clearCancel(requestId)
+    const controller = requestId ? new AbortController() : undefined
+    if (controller && requestId) this.abortControllers.set(requestId, controller)
+    const signal = controller?.signal
+    const startedAt = Date.now()
+    const { wrapped, finalMeta } = withStreamAudit(onChunk)
+    let providerId: string | undefined
+    try {
+      providerId = this.getActiveProvider().id
+    } catch {
+      /* provider may be unconfigured */
+    }
+    logAIEvent({
+      kind: 'pipeline',
+      provider: providerId,
+      model: request.model,
+      requestId,
+      stageCount: stages.length,
+      status: 'started'
+    })
+    try {
+      await this.runPipelineInner(
+        request,
+        stages,
+        wrapped,
+        activeFilePath,
+        useContext,
+        requestId,
+        signal,
+        controller
+      )
+    } finally {
+      logAIEvent({
+        kind: 'pipeline',
+        provider: providerId,
+        model: request.model,
+        requestId,
+        stageCount: stages.length,
+        status: finalMeta.status,
+        tokensUsed: finalMeta.tokensUsed,
+        error: finalMeta.error,
+        durationMs: Date.now() - startedAt
+      })
+      if (requestId) this.abortControllers.delete(requestId)
+    }
+  }
+
+  private async runPipelineInner(
+    request: AIRequest,
+    stages: PipelineStage[],
+    onChunk: (chunk: StreamEvent) => void,
+    activeFilePath: string | undefined,
+    useContext: boolean,
+    requestId: string | undefined,
+    signal: AbortSignal | undefined,
+    controller: AbortController | undefined
+  ): Promise<void> {
+    if (stages.length === 0) {
+      onChunk({ content: '', done: true, error: 'Pipeline: tidak ada stage' })
+      return
+    }
+
+    let messages: AIMessage[] = [...request.messages]
+    const allProposals: WriteProposal[] = []
+    const allCitations: { title: string; path: string }[] = []
+
+    for (let i = 0; i < stages.length; i++) {
+      if (requestId && this.isCancelled(requestId)) {
+        onChunk({
+          content: '\n\n*(pipeline cancelled)*\n',
+          done: true,
+          citations: allCitations,
+          proposals: allProposals
+        })
+        return
+      }
+      const stage = stages[i]
+      const isLast = i === stages.length - 1
+      const stageRequest: AIRequest = {
+        ...request,
+        messages,
+        systemPrompt: [
+          request.systemPrompt,
+          `[Pipeline Stage ${i + 1}/${stages.length} — ${stage.role}]\n${stage.instruction}`
+        ]
+          .filter(Boolean)
+          .join('\n\n')
+      }
+
+      let stageText = ''
+      let stageError: string | undefined
+      // runStreamInner clears its own cancel flag on abort, so we detect the
+      // abort via the cancelled terminal chunk itself (can't trust isCancelled
+      // after the call returns).
+      let stageAborted = false
+      let forwardedDone = false
+      const stageOnChunk: (chunk: StreamEvent) => void = (chunk) => {
+        if (chunk.content) stageText += chunk.content
+        if (chunk.error) stageError = chunk.error
+        if (chunk.proposals) {
+          for (const p of chunk.proposals) {
+            if (!allProposals.some((x) => x.id === p.id)) allProposals.push(p)
+          }
+        }
+        if (chunk.citations) {
+          for (const c of chunk.citations) {
+            if (!allCitations.some((x) => x.path === c.path)) allCitations.push(c)
+          }
+        }
+        if (chunk.done) {
+          // Terminal = the middleware's own error/cancel/timeout markers (its
+          // done chunks carry controlled content — model prose never rides here).
+          const terminal =
+            Boolean(chunk.error) ||
+            chunk.content?.includes('(cancelled)') === true ||
+            chunk.content?.includes('(timeout') === true
+          if (!isLast && !terminal) {
+            // Intermediate stage: boundary status instead of terminating the stream
+            onChunk({
+              content: `\n\n---\n*[Stage ${i + 1}/${stages.length}: ${stage.role}] selesai — melanjutkan ke ${stages[i + 1]?.role}…*\n\n`,
+              done: false,
+              citations: allCitations,
+              round: chunk.round,
+              toolStatus: `Stage ${i + 1}/${stages.length} done`
+            })
+            return
+          }
+          // Final stage (or terminal error/cancel): forward with accumulated refs
+          forwardedDone = true
+          if (chunk.content?.includes('(cancelled)') === true) stageAborted = true
+          onChunk({ ...chunk, citations: allCitations, proposals: allProposals })
+          return
+        }
+        onChunk(chunk)
+      }
+
+      await this.runStreamInner(
+        stageRequest,
+        stageOnChunk,
+        activeFilePath,
+        useContext,
+        stage.role,
+        true, // tools on for every stage — permissions gate what each role may call
+        requestId,
+        signal,
+        controller
+      )
+
+      if (stageError || stageAborted || (requestId && this.isCancelled(requestId))) {
+        // runStreamInner already forwarded a terminal chunk — just stop
+        return
+      }
+
+      // Safety net: runStreamInner terminates with done on every path today, but
+      // if a future path returns without one, the renderer must not hang forever.
+      if (isLast && !forwardedDone) {
+        onChunk({ content: '', done: true, citations: allCitations, proposals: allProposals })
+        return
+      }
+
+      // Hand the stage's accumulated output to the next stage as context
+      if (!isLast) {
+        const cleaned = stripToolActions(stageText).trim()
+        messages = [
+          ...messages,
+          {
+            role: 'user',
+            content: `[Hasil Stage ${i + 1} — ${stage.role}]\n${cleaned || '(tidak ada output)'}\n\nLanjutkan ke stage berikutnya.`
+          }
+        ]
+      }
     }
   }
 
@@ -664,7 +1012,8 @@ export class AIMiddleware {
         stream: true
       }
       if (nativeTools) {
-        req.tools = buildToolSchemas()
+        // P1: only advertise the tools this role may call (researcher sees reads only)
+        req.tools = buildToolSchemas(agentRole)
         req.tool_choice = 'auto'
       }
 
@@ -850,7 +1199,7 @@ export class AIMiddleware {
           toolRun: { runId, tool: p.action.tool, status: 'running', round },
           round
         })
-        const r = await executeToolWithTimeout(p.action)
+        const r = await executeToolWithTimeout(p.action, agentRole)
         results.push(r)
         if (p.callId) resultByCall.set(p.callId, r)
         if (!r.ok) {
@@ -901,7 +1250,7 @@ export class AIMiddleware {
           toolRun: { runId, tool: p.action.tool, status: 'running', round },
           round
         })
-        const r = await executeToolWithTimeout(p.action)
+        const r = await executeToolWithTimeout(p.action, agentRole)
         results.push(r)
         if (p.callId) resultByCall.set(p.callId, r)
         if (r.proposalId) {

@@ -4385,6 +4385,63 @@ button {
   font-size: 10px;
   color: var(--text-muted);
 }
+.dash-rag-sub {
+  font-size: 10px;
+  font-weight: var(--weight-regular);
+  color: var(--text-muted);
+  letter-spacing: 0.02em;
+}
+/* AI usage card (P3): compact 7-day window — stream/token/avg stats + mini bars */
+.dash-ai-stats {
+  display: flex;
+  align-items: stretch;
+  gap: 8px;
+}
+.dash-ai-stat {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 6px 8px;
+  background: var(--bg-hover);
+  border-radius: var(--radius-sm);
+}
+.dash-ai-stat-value {
+  font-size: 14px;
+  font-weight: var(--weight-semibold);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-primary);
+  line-height: 1.15;
+}
+.dash-ai-stat-label {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+}
+.dash-ai-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 36px;
+  padding-top: 2px;
+}
+.dash-ai-bar-col {
+  flex: 1;
+  display: flex;
+  align-items: flex-end;
+  height: 100%;
+}
+.dash-ai-bar {
+  width: 100%;
+  min-height: 4px;
+  border-radius: 3px;
+  background: var(--rag-tone, var(--color-accent));
+  transition: height 0.3s var(--ease-default), background 0.2s var(--ease-default);
+}
+.dash-ai-bar-col:hover .dash-ai-bar {
+  filter: brightness(1.2);
+}
 .is-spinning {
   animation: wg-spin 0.9s linear infinite;
 }
@@ -4395,6 +4452,81 @@ button {
   to {
     transform: rotate(360deg);
   }
+}
+/* AI Activity Log panel (Settings → AI Activity): status filter chips + event rows */
+.ai-log-filters {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+.ai-log-filter-chip {
+  font-size: 11px;
+  padding: 3px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border-subtle);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: background 0.15s var(--ease-default), color 0.15s var(--ease-default);
+}
+.ai-log-filter-chip:hover {
+  background: var(--bg-hover);
+  color: var(--text-primary);
+}
+.ai-log-filter-chip.active {
+  background: var(--color-primary-subtle);
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+.ai-log-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.ai-log-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+}
+.ai-log-time {
+  font-size: 10px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.ai-log-status {
+  flex-shrink: 0;
+  min-width: 52px;
+  text-align: center;
+}
+.ai-log-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.ai-log-title {
+  font-size: 11px;
+  font-weight: var(--weight-medium);
+  color: var(--text-primary);
+}
+.ai-log-err {
+  font-size: 10px;
+  color: var(--color-error);
+}
+.ai-log-nums {
+  font-size: 10px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 /* Tag chips: pill shape, ellipsis so long tags can't pierce the edge */
 .dash-tag {

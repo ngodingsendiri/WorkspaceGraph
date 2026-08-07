@@ -1,7 +1,35 @@
 import React, { useEffect, useState } from 'react'
 import { applyTheme, getCachedThemePref, type ThemePreference } from '../../utils/theme'
 
-type Section = 'ai' | 'appearance' | 'index' | 'security' | 'automation' | 'plugins' | 'about'
+type Section =
+  'ai' | 'appearance' | 'index' | 'security' | 'automation' | 'plugins' | 'logs' | 'about'
+
+/** One row of the AI event trail (shape mirrors AIEvent in main). */
+interface AIEventRow {
+  ts: string
+  kind: string
+  provider?: string
+  model?: string
+  requestId?: string
+  role?: string
+  stageCount?: number
+  durationMs?: number
+  tokensUsed?: number
+  status?: string
+  error?: string
+  tool?: string
+  rounds?: number
+}
+
+const TERMINAL_KINDS = new Set(['stream_end', 'pipeline', 'send'])
+const LOG_FILTERS = [
+  { id: 'all', label: 'Semua' },
+  { id: 'ok', label: 'OK' },
+  { id: 'error', label: 'Error' },
+  { id: 'cancelled', label: 'Batal' },
+  { id: 'timeout', label: 'Timeout' }
+] as const
+type LogFilter = (typeof LOG_FILTERS)[number]['id']
 
 const DAYS_ID = ['Min', 'Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab']
 
@@ -99,6 +127,14 @@ export const SettingsView: React.FC = () => {
   const [trashEnabled, setTrashEnabled] = useState(true)
   const [showAddRule, setShowAddRule] = useState(false)
   const [draft, setDraft] = useState({ ...DEFAULT_RULE_DRAFT })
+  const [aiEvents, setAiEvents] = useState<AIEventRow[]>([])
+  const [logFilter, setLogFilter] = useState<LogFilter>('all')
+  const [confirmClear, setConfirmClear] = useState(false)
+  const [logStats, setLogStats] = useState<{
+    total: number
+    sizeBytes: number
+  } | null>(null)
+  const [retentionDays, setRetentionDays] = useState(0)
 
   const flash = (msg: string): void => {
     setSavedStatus(msg)
@@ -115,6 +151,7 @@ export const SettingsView: React.FC = () => {
         permissions?: typeof permissions
         semanticContext?: boolean
         trashEnabled?: boolean
+        aiEventRetentionDays?: number
       }
       if (settings?.ai) {
         const urls: Record<string, string> = {}
@@ -135,6 +172,7 @@ export const SettingsView: React.FC = () => {
       }
       setSemanticContext(settings?.semanticContext !== false)
       setTrashEnabled(settings?.trashEnabled !== false)
+      setRetentionDays(Number(settings?.aiEventRetentionDays) || 0)
       setIndexStats(await window.api.getSearchStats())
       setEmbeddingStatus(await window.api.getEmbeddingStatus())
       setSecStatus(await window.api.getSecurityStatus())
@@ -339,6 +377,57 @@ export const SettingsView: React.FC = () => {
     setAutomation(await window.api.getAutomation())
   }
 
+  const loadAIEvents = async (): Promise<void> => {
+    try {
+      const events = ((await window.api.listAIEvents(300)) || []) as AIEventRow[]
+      // Terminal kinds only, and drop pipeline/stream 'started' bookends (they
+      // carry no outcome — just entry markers) so every row has a real status.
+      setAiEvents(
+        events.filter((e) => TERMINAL_KINDS.has(e.kind) && e.status && e.status !== 'started')
+      )
+      const stats = (await window.api.getAIEventStats(7)) as {
+        total?: number
+        sizeBytes?: number
+      }
+      setLogStats({ total: stats.total ?? 0, sizeBytes: stats.sizeBytes ?? 0 })
+    } catch {
+      /* ignore */
+    }
+  }
+
+  const saveLogRetention = async (days: number): Promise<void> => {
+    setRetentionDays(days)
+    const settings = ((await window.api.getSettings()) as Record<string, unknown>) || {}
+    settings.aiEventRetentionDays = days
+    await window.api.saveSettings(settings)
+    flash(
+      days > 0
+        ? `Log AI dipangkas otomatis setelah ${days} hari`
+        : 'Retensi off — log disimpan tanpa batas'
+    )
+  }
+
+  const handleClearAIEvents = async (): Promise<void> => {
+    if (!confirmClear) {
+      // Two-step confirm: first click arms, second click wipes (no window.confirm)
+      setConfirmClear(true)
+      setTimeout(() => setConfirmClear(false), 3500)
+      return
+    }
+    setConfirmClear(false)
+    try {
+      const res = await window.api.clearAIEvents()
+      if (res.ok) {
+        flash(`Log AI dibersihkan (${res.removed} file)`)
+        await loadAIEvents()
+      } else {
+        flash('Gagal membersihkan log')
+      }
+    } catch (e) {
+      flash(e instanceof Error ? e.message : 'Clear failed')
+    }
+  }
+
   const nav: { id: Section; label: string }[] = [
     { id: 'ai', label: 'AI Providers' },
     { id: 'index', label: 'Search Index' },
@@ -346,6 +435,7 @@ export const SettingsView: React.FC = () => {
     { id: 'automation', label: 'Automation' },
     { id: 'plugins', label: 'Plugins' },
     { id: 'appearance', label: 'Appearance' },
+    { id: 'logs', label: 'AI Activity' },
     { id: 'about', label: 'About' }
   ]
 
@@ -360,6 +450,7 @@ export const SettingsView: React.FC = () => {
             onClick={() => {
               setSection(n.id)
               if (n.id === 'automation' || n.id === 'plugins' || n.id === 'security') void loadAll()
+              if (n.id === 'logs') void loadAIEvents()
             }}
           >
             {n.label}
@@ -1120,6 +1211,165 @@ export const SettingsView: React.FC = () => {
                 ? document.documentElement.getAttribute('data-theme') || 'dark'
                 : '—'}
             </p>
+          </div>
+        )}
+
+        {section === 'logs' && (
+          <div className="settings-section">
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 8,
+                marginBottom: 8
+              }}
+            >
+              <h2 style={{ margin: 0 }}>AI Activity Log</h2>
+              <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+                <button
+                  className="btn btn-surface btn-sm"
+                  onClick={async () => {
+                    try {
+                      const res = await window.api.exportAIEventsCSV()
+                      if (res.canceled) return
+                      if (res.ok) flash(`CSV diekspor (${res.count} event): ${res.path}`)
+                      else flash(res.error || 'Export gagal')
+                    } catch (e) {
+                      flash(e instanceof Error ? e.message : 'Export failed')
+                    }
+                  }}
+                >
+                  Ekspor CSV
+                </button>
+                <button className="btn btn-surface btn-sm" onClick={() => void loadAIEvents()}>
+                  Refresh
+                </button>
+                <button
+                  className={`btn btn-sm ${confirmClear ? 'btn-danger' : 'btn-ghost'}`}
+                  onClick={() => void handleClearAIEvents()}
+                >
+                  {confirmClear ? 'Konfirmasi hapus?' : 'Clear log'}
+                </button>
+              </div>
+            </div>
+            <p
+              style={{
+                fontSize: 'var(--text-sm)',
+                color: 'var(--text-secondary)',
+                marginBottom: 8
+              }}
+            >
+              Jejak terstruktur stream AI ke <code>.workspacegraph/logs/ai-events.jsonl</code>
+              {logStats ? (
+                <>
+                  {' '}
+                  · <b>{logStats.total}</b> event · {(logStats.sizeBytes / 1024).toFixed(0)} KB
+                </>
+              ) : null}
+            </p>
+
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 8,
+                marginBottom: 12,
+                fontSize: 'var(--text-sm)'
+              }}
+            >
+              <label htmlFor="ai-log-retention" style={{ color: 'var(--text-secondary)' }}>
+                Hapus otomatis event lebih tua dari
+              </label>
+              <select
+                id="ai-log-retention"
+                className="input"
+                style={{ width: 150 }}
+                value={retentionDays}
+                onChange={(e) => void saveLogRetention(Number(e.target.value))}
+              >
+                <option value={0}>Off (simpan semua)</option>
+                <option value={7}>7 hari</option>
+                <option value={30}>30 hari</option>
+                <option value={90}>90 hari</option>
+                <option value={180}>180 hari</option>
+                <option value={365}>1 tahun</option>
+              </select>
+            </div>
+
+            <div className="ai-log-filters">
+              {LOG_FILTERS.map((f) => (
+                <button
+                  key={f.id}
+                  className={`ai-log-filter-chip ${logFilter === f.id ? 'active' : ''}`}
+                  onClick={() => setLogFilter(f.id)}
+                >
+                  {f.label}
+                </button>
+              ))}
+            </div>
+
+            {aiEvents.length === 0 ? (
+              <div
+                style={{
+                  fontSize: 'var(--text-xs)',
+                  color: 'var(--text-muted)',
+                  padding: '10px 0'
+                }}
+              >
+                Belum ada aktivitas AI tercatat. Jalankan chat atau Test provider untuk mengisi log.
+              </div>
+            ) : (
+              <div className="ai-log-list">
+                {aiEvents
+                  .filter((e) => logFilter === 'all' || e.status === logFilter)
+                  .slice(0, 60)
+                  .map((e, i) => (
+                    <div key={`${e.ts}-${i}`} className="ai-log-row">
+                      <div className="ai-log-time">
+                        {e.ts
+                          ? new Date(e.ts).toLocaleTimeString([], {
+                              hour: '2-digit',
+                              minute: '2-digit',
+                              second: '2-digit'
+                            })
+                          : '—'}
+                      </div>
+                      <span
+                        className={`badge ai-log-status ${
+                          e.status === 'ok'
+                            ? 'badge-success'
+                            : e.status === 'error'
+                              ? 'badge-error'
+                              : e.status === 'timeout'
+                                ? 'badge-warning'
+                                : 'badge-surface'
+                        }`}
+                      >
+                        {e.status || e.kind}
+                      </span>
+                      <div className="ai-log-main">
+                        <div className="ai-log-title truncate">
+                          {e.provider || '—'}
+                          {e.model ? ` · ${e.model}` : ''}
+                          {e.kind === 'pipeline' && e.stageCount
+                            ? ` · pipeline ${e.stageCount} stage`
+                            : ''}
+                        </div>
+                        {e.error && <div className="ai-log-err truncate">{e.error}</div>}
+                      </div>
+                      <div className="ai-log-nums">
+                        {typeof e.durationMs === 'number'
+                          ? `${(e.durationMs / 1000).toFixed(1)}s`
+                          : '—'}
+                        {typeof e.tokensUsed === 'number' && e.tokensUsed > 0
+                          ? ` · ${e.tokensUsed >= 1000 ? `${(e.tokensUsed / 1000).toFixed(1)}k` : e.tokensUsed} tok`
+                          : ''}
+                      </div>
+                    </div>
+                  ))}
+              </div>
+            )}
           </div>
         )}
 

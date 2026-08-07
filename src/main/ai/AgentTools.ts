@@ -11,6 +11,8 @@ import { searchEngine } from '../engine/SearchEngine'
 import { markdownEngine } from '../engine/MarkdownEngine'
 import { templateEngine } from '../engine/TemplateEngine'
 import { isPathInVault } from '../security/PathSandbox'
+import { renderPrompt } from './PromptRegistry'
+import type { AgentRole } from './ContextEngine'
 import type { AIToolCall, ProviderTool } from './providers/BaseProvider'
 
 export type ToolName =
@@ -57,6 +59,63 @@ const WRITE_TOOLS = new Set<ToolName>([
   'create_from_template'
 ])
 const READ_TOOLS = new Set<ToolName>(['search', 'read_note', 'list_dir', 'list_templates'])
+
+// ── Per-role tool permissions (P1 — doc 20 agent capabilities) ─────────────
+// Each AgentRole is a specialist with a bounded toolset; the `general` role is
+// the only one with full access. Enforcement is defense-in-depth: the prompt /
+// schema builders only ADVERTISE allowed tools (so the model rarely tries the
+// rest), and executeTool GUARDS execution even if a denied tool slips through
+// (fence path / malicious input).
+const ALL_TOOLS: ToolName[] = [
+  'search',
+  'read_note',
+  'list_dir',
+  'write_note',
+  'append_note',
+  'create_note',
+  'list_templates',
+  'create_from_template'
+]
+
+/** Canonical tool order shared by the fence prompt + schema builders. */
+export const TOOL_ORDER: ToolName[] = [...ALL_TOOLS]
+
+/**
+ * Tools each role may call.
+ * - researcher: read-only (no writes — gathers facts for downstream stages)
+ * - curator: read + create/append (can build backlinks / knowledge notes, never
+ *   replace existing content wholesale — append is additive)
+ * - planner: read + create (task/plan notes via templates; no append to notes)
+ * - writer: full authoring set
+ * - general: everything (default)
+ */
+export const ROLE_TOOL_PERMISSIONS: Record<AgentRole, ReadonlySet<ToolName>> = {
+  general: new Set(ALL_TOOLS),
+  writer: new Set(ALL_TOOLS),
+  researcher: new Set(['search', 'read_note', 'list_dir', 'list_templates']),
+  curator: new Set([
+    'search',
+    'read_note',
+    'list_dir',
+    'list_templates',
+    'create_note',
+    'append_note'
+  ]),
+  planner: new Set([
+    'search',
+    'read_note',
+    'list_dir',
+    'list_templates',
+    'create_note',
+    'create_from_template'
+  ])
+}
+
+/** Is `tool` callable by `role`? Unknown roles degrade to general (allow). */
+export function isToolAllowed(role: AgentRole, tool: ToolName | string): boolean {
+  const allowed = ROLE_TOOL_PERMISSIONS[role] || ROLE_TOOL_PERMISSIONS.general
+  return allowed.has(tool as ToolName)
+}
 
 // ── Proposal persistence (P-B2) ────────────────────────────────────────────
 // Pending write proposals survive app restarts: one JSON file per proposal
@@ -152,35 +211,133 @@ export function rejectProposal(id: string): boolean {
   return true
 }
 
-/** Tool instructions injected into system prompt when worker tools enabled */
-export const TOOLS_SYSTEM_PROMPT = `
-## Workspace Tools (AI Kernel)
+/**
+ * P2 knowledge promotion: turn a chat answer into a `create_note` proposal
+ * under Knowledge/ with an automatic "Sumber" backlink section pointing at the
+ * cited notes. Uses the exact same proposal lifecycle as agent writes, so the
+ * dock + Apply/Reject + diff preview all work unchanged.
+ */
+export function promoteToKnowledge(
+  content: string,
+  citations: { title: string; path: string }[],
+  suggestedTitle?: string
+): { ok: boolean; proposal?: WriteProposal; error?: string } {
+  const root = workspaceEngine.getState().rootPath
+  if (!root) return { ok: false, error: 'No workspace open' }
+  const body = String(content || '').trim()
+  if (!body) return { ok: false, error: 'Jawaban kosong — tidak ada yang disimpan' }
 
-You MAY call tools by emitting one or more fenced blocks. Use EXACTLY this format:
+  // Derive a filename from the suggestion, or the first non-fence line
+  const raw = (suggestedTitle && suggestedTitle.trim()) || firstContentLine(body)
+  const title =
+    raw
+      .replace(/^#+\s*/, '')
+      .replace(/\[\[(.+?)\]\]/g, '$1')
+      .replace(/[*_`>|]/g, '')
+      .replace(/[:\\/"?<>|]+/g, ' ')
+      .trim()
+      .slice(0, 80) || 'Knowledge Note'
 
-\`\`\`wg-action
-{"tool":"search","args":{"query":"cara kerja","limit":5}}
-\`\`\`
+  // Unique path under Knowledge/ — avoid clobbering an existing note
+  let abs: string | null = null
+  let fileName = `${title}.md`
+  let n = 2
+  while (!abs || fs.existsSync(abs)) {
+    abs = path.resolve(root, 'Knowledge', fileName)
+    if (!fs.existsSync(abs)) break
+    fileName = `${title}-${n}.md`
+    n++
+  }
+  if (!abs || !isPathInVault(abs, root)) {
+    return { ok: false, error: 'Invalid Knowledge path' }
+  }
 
-Available tools:
-1. search — args: { query: string, limit?: number }
-2. read_note — args: { path: string }  // absolute or vault-relative path, or note title
-3. list_dir — args: { path?: string }  // relative folder under vault root; default ""
-4. write_note — args: { path: string, content: string }  // overwrite entire file (preserve frontmatter if present)
-5. append_note — args: { path: string, content: string }  // append markdown section
-6. create_note — args: { path: string, content: string }  // create new .md (e.g. AI Memory/Topik.md)
-7. list_templates — args: {}
-8. create_from_template — args: { templateId: string, title: string, folder?: string }
+  // Backlink section: one [[wikilink]] per cited note (vault-relative alias)
+  const sourceLines: string[] = []
+  const seen = new Set<string>()
+  for (const c of citations || []) {
+    const norm = String(c.path || '').replace(/\\/g, '/')
+    // Boundary check — plain startsWith would wrongly treat a sibling prefix
+    // (root `C:/vault` vs citation `C:/vault-other/...`) as inside the vault
+    // and slice a corrupted `-other/...` path. Fall back to path.relative.
+    const rootN = root.replace(/\\/g, '/')
+    const rel =
+      norm === rootN || norm.startsWith(rootN + '/')
+        ? norm.slice(rootN.length).replace(/^\/+/, '')
+        : path.relative(root, norm).replace(/\\/g, '/')
+    if (!rel || seen.has(rel)) continue
+    seen.add(rel)
+    const alias = (c.title || path.basename(rel, '.md')).trim()
+    sourceLines.push(`- [[${rel.replace(/\.md$/i, '')}|${alias}]]`)
+  }
 
-Memory / graph rules:
-- Long-term how-to memory lives in **AI Memory/**. Read it early; update it when you learn durable patterns.
-- Use [[wikilinks]] between memory + domain notes so the **graph densifies** as the workspace gets smarter.
-- Prefer search + read_note before inventing vault facts (Law 006).
-- Writes create proposals — user must Apply before disk write.
-- Paths: vault-relative (AI Memory/..., Knowledge/..., Daily/...).
-- After tool results, continue answering. Do not invent tool results.
-- Finish with a clear Markdown summary + [[WikiLinks]].
-`.trim()
+  const noteContent = [
+    `---`,
+    `title: ${title}`,
+    `type: knowledge`,
+    `created: ${nowIsoDate()}`,
+    `updated: ${nowIsoDate()}`,
+    `tags: [knowledge]`,
+    `---`,
+    ``,
+    body,
+    ``,
+    `## Sumber`,
+    ``,
+    ...(sourceLines.length > 0 ? sourceLines : ['- _(tidak ada sitasi)_'])
+  ].join('\n')
+
+  const prop = createProposal('create_note', abs, noteContent, 'create')
+  return { ok: true, proposal: prop }
+}
+
+/** First meaningful line of an answer — the knowledge-note title seed. */
+function firstContentLine(text: string): string {
+  const line = (
+    text.split('\n').find((l) => {
+      const t = l.trim()
+      return t && !t.startsWith('```') && !t.startsWith('---') && !/^[-*]\s*$/.test(t)
+    }) || 'Knowledge Note'
+  ).trim()
+  return line.replace(/^#+\s*/, '').slice(0, 80)
+}
+
+function nowIsoDate(): string {
+  return new Date().toISOString().split('T')[0]
+}
+
+/** One-line tool signature shown in the fence prompt (kept in sync with buildToolSchemas). */
+const TOOL_DESCRIPTIONS: Record<ToolName, string> = {
+  search: 'search — args: { query: string, limit?: number }',
+  read_note:
+    'read_note — args: { path: string }  // absolute or vault-relative path, or note title',
+  list_dir: 'list_dir — args: { path?: string }  // relative folder under vault root; default ""',
+  write_note:
+    'write_note — args: { path: string, content: string }  // overwrite entire file (preserve frontmatter if present)',
+  append_note: 'append_note — args: { path: string, content: string }  // append markdown section',
+  create_note:
+    'create_note — args: { path: string, content: string }  // create new .md (e.g. AI Memory/Topik.md)',
+  list_templates: 'list_templates — args: {}',
+  create_from_template:
+    'create_from_template — args: { templateId: string, title: string, folder?: string }'
+}
+
+/**
+ * Fence-protocol tool instructions for a specific role — only the tools that
+ * role may call are listed (P1 capability advertisement). The head/tail prose
+ * comes from the Prompt Registry (doc 19) with the role-filtered numbered
+ * tool list injected into the {{tools}} placeholder — so the whole tools
+ * prompt is a versioned, per-vault editable asset.
+ */
+export function buildToolsSystemPrompt(role: AgentRole = 'general'): string {
+  const allowed = ROLE_TOOL_PERMISSIONS[role] || ROLE_TOOL_PERMISSIONS.general
+  const tools = TOOL_ORDER.filter((t) => allowed.has(t))
+  const lines = tools.map((t, i) => `${i + 1}. ${TOOL_DESCRIPTIONS[t]}`).join('\n')
+  return (renderPrompt('toolsHead', { tools: lines }) + renderPrompt('toolsTail')).trim()
+}
+
+/** Fence instructions for the full (general) toolset — kept for compatibility. */
+export const TOOLS_SYSTEM_PROMPT = buildToolsSystemPrompt('general')
 
 function pushAction(actions: ToolAction[], raw: unknown): void {
   if (!raw || typeof raw !== 'object') return
@@ -371,9 +528,22 @@ function createProposal(
   return prop
 }
 
-export async function executeTool(action: ToolAction): Promise<ToolResult> {
+export async function executeTool(
+  action: ToolAction,
+  role: AgentRole = 'general'
+): Promise<ToolResult> {
   const tool = action.tool
   const args = action.args || {}
+
+  // P1 capability guard: even if a denied tool slips past the prompt / schema
+  // advertisement (fence hallucination, replayed messages), it must not run.
+  if (!isToolAllowed(role, tool)) {
+    return {
+      tool,
+      ok: false,
+      error: `Tool "${tool}" tidak diizinkan untuk role "${role}"`
+    }
+  }
 
   try {
     if (!workspaceEngine.getState().rootPath) {
@@ -658,7 +828,7 @@ export function applyProposal(
  * instead of emitting wg-action fences. Keep descriptions aligned with
  * TOOLS_SYSTEM_PROMPT so both protocols teach the same tool semantics.
  */
-export function buildToolSchemas(): ProviderTool[] {
+export function buildToolSchemas(role: AgentRole = 'general'): ProviderTool[] {
   const fn = (
     name: string,
     description: string,
@@ -672,7 +842,7 @@ export function buildToolSchemas(): ProviderTool[] {
       parameters: { type: 'object', properties: parameters, required }
     }
   })
-  return [
+  const all: ProviderTool[] = [
     fn(
       'search',
       'Full-text search notes in the workspace vault. Returns matching notes with titles, paths, snippets and scores.',
@@ -734,6 +904,9 @@ export function buildToolSchemas(): ProviderTool[] {
       ['templateId', 'title']
     )
   ]
+  // P1: only advertise tools the role may call (researcher sees reads only).
+  const allowed = ROLE_TOOL_PERMISSIONS[role] || ROLE_TOOL_PERMISSIONS.general
+  return all.filter((s) => allowed.has(s.function.name as ToolName))
 }
 
 /**

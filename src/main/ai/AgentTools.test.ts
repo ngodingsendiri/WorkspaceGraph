@@ -7,11 +7,15 @@ import {
   stripToolActions,
   isWriteTool,
   isReadTool,
+  isToolAllowed,
   executeTool,
   applyProposal,
   listPendingProposals,
   rejectProposal,
+  promoteToKnowledge,
   buildToolSchemas,
+  buildToolsSystemPrompt,
+  ROLE_TOOL_PERMISSIONS,
   nativeCallsToActions,
   formatToolResultForModel
 } from './AgentTools'
@@ -24,6 +28,12 @@ describe('AgentTools', () => {
     vault = fs.mkdtempSync(path.join(tmpdir(), 'wg-agent-'))
     workspaceEngine.openWorkspace(vault)
   })
+
+  function writeVaultNote(rel: string, content: string): void {
+    const abs = path.join(vault, rel)
+    fs.mkdirSync(path.dirname(abs), { recursive: true })
+    fs.writeFileSync(abs, content)
+  }
 
   afterEach(() => {
     try {
@@ -108,6 +118,79 @@ Keep me.`
       expect(isReadTool('search')).toBe(true)
       expect(isReadTool('read_note')).toBe(true)
       expect(isReadTool('list_dir')).toBe(true)
+    })
+  })
+
+  describe('P1 per-role tool permissions (doc 20 agent capabilities)', () => {
+    it('researcher is read-only; general/writer have the full toolset', () => {
+      for (const t of ['search', 'read_note', 'list_dir', 'list_templates']) {
+        expect(isToolAllowed('researcher', t)).toBe(true)
+      }
+      for (const t of ['write_note', 'append_note', 'create_note', 'create_from_template']) {
+        expect(isToolAllowed('researcher', t)).toBe(false)
+      }
+      for (const t of [
+        'search',
+        'read_note',
+        'list_dir',
+        'list_templates',
+        'write_note',
+        'append_note',
+        'create_note',
+        'create_from_template'
+      ]) {
+        expect(isToolAllowed('general', t)).toBe(true)
+        expect(isToolAllowed('writer', t)).toBe(true)
+      }
+    })
+
+    it('curator may create/append but never overwrite; planner may create + template', () => {
+      expect(isToolAllowed('curator', 'create_note')).toBe(true)
+      expect(isToolAllowed('curator', 'append_note')).toBe(true)
+      expect(isToolAllowed('curator', 'write_note')).toBe(false)
+      expect(isToolAllowed('planner', 'create_from_template')).toBe(true)
+      expect(isToolAllowed('planner', 'create_note')).toBe(true)
+      expect(isToolAllowed('planner', 'write_note')).toBe(false)
+      expect(isToolAllowed('planner', 'append_note')).toBe(false)
+    })
+
+    it('buildToolSchemas(role) advertises only allowed tools', () => {
+      const research = buildToolSchemas('researcher').map((s) => s.function.name)
+      expect(research).toEqual(['search', 'read_note', 'list_dir', 'list_templates'])
+      const general = buildToolSchemas('general').map((s) => s.function.name)
+      expect(general).toHaveLength(8)
+      expect(general).toContain('create_from_template')
+      // Researcher never sees write schemas
+      expect(buildToolSchemas('researcher').some((s) => s.function.name === 'write_note')).toBe(
+        false
+      )
+    })
+
+    it('buildToolsSystemPrompt(role) lists only allowed tools in the fence protocol', () => {
+      const rp = buildToolsSystemPrompt('researcher')
+      expect(rp).toContain('wg-action')
+      expect(rp).toContain('read_note — args')
+      expect(rp).not.toContain('write_note — args')
+      expect(rp).not.toContain('create_from_template')
+      expect(buildToolsSystemPrompt('general')).toContain('write_note — args')
+    })
+
+    it('ROLE_TOOL_PERMISSIONS covers every AgentRole', () => {
+      for (const r of ['general', 'writer', 'researcher', 'curator', 'planner']) {
+        expect(ROLE_TOOL_PERMISSIONS[r as keyof typeof ROLE_TOOL_PERMISSIONS]).toBeDefined()
+      }
+    })
+
+    it('P2 registry: tools prompt renders the {{tools}} placeholder (no literal token leaks)', () => {
+      const p = buildToolsSystemPrompt('general')
+      expect(p).not.toContain('{{tools}}')
+      expect(p).toContain('1. search — args')
+      expect(p).toContain('8. create_from_template — args')
+      // Researcher role-filtered list is numbered fresh (1..4), not the general 1..8
+      const rp = buildToolsSystemPrompt('researcher')
+      expect(rp).toContain('1. search — args')
+      expect(rp).toContain('4. list_templates — args')
+      expect(rp).not.toContain('5.')
     })
   })
 
@@ -277,6 +360,60 @@ Keep me.`
       expect(rejectProposal('nope')).toBe(false)
     })
 
+    it('P2 promoteToKnowledge: creates a Knowledge/ proposal with backlink sources', () => {
+      writeVaultNote('Knowledge/Basis.md', '# Basis\n\nFakta.')
+      writeVaultNote('Daily/2026-08-07.md', '# Harian')
+      const res = promoteToKnowledge(
+        '# Ringkasan\n\nIni hasil riset.',
+        [
+          { title: 'Basis', path: path.join(vault, 'Knowledge', 'Basis.md') },
+          { title: 'Harian', path: path.join(vault, 'Daily', '2026-08-07.md') }
+        ],
+        'Riset Topik X'
+      )
+      expect(res.ok).toBe(true)
+      const p = res.proposal!
+      expect(p.mode).toBe('create')
+      expect(p.relativePath).toContain('Knowledge/Riset Topik X.md')
+      expect(p.content).toContain('type: knowledge')
+      expect(p.content).toContain('# Ringkasan')
+      // Backlinks to the cited notes (vault-relative wikilinks)
+      expect(p.content).toContain('[[Knowledge/Basis|Basis]]')
+      expect(p.content).toContain('[[Daily/2026-08-07|Harian]]')
+      // Proposal lands in the dock, applies to disk on confirm
+      expect(listPendingProposals().some((x) => x.id === p.id)).toBe(true)
+      const applied = applyProposal(p.id)
+      expect(applied.ok).toBe(true)
+      expect(fs.existsSync(path.join(vault, 'Knowledge', 'Riset Topik X.md'))).toBe(true)
+    })
+
+    it('P2 promoteToKnowledge: empty answer is rejected; unique filename on clash', () => {
+      expect(promoteToKnowledge('', [], 'X').ok).toBe(false)
+      writeVaultNote('Knowledge/Clash.md', '# Lama')
+      const a = promoteToKnowledge('Isi baru', [], 'Clash')
+      expect(a.ok).toBe(true)
+      expect(a.proposal!.relativePath).toBe('Knowledge/Clash-2.md')
+    })
+
+    it('P2 promoteToKnowledge: title defaults to the first content line', () => {
+      const res = promoteToKnowledge('## Ringkasan Eksekutif\n\nBla bla.', [])
+      expect(res.ok).toBe(true)
+      expect(res.proposal!.relativePath).toContain('Ringkasan Eksekutif')
+    })
+
+    it('P2 promoteToKnowledge: sibling-prefix citation path falls back to path.relative', () => {
+      // A sibling of the vault (e.g. C:/vault-evil when root is C:/vault) must
+      // NOT be treated as inside it — a naive startsWith would slice a
+      // corrupted `-evil/Note` backlink. Expected: the ../-style relative path.
+      const sibling = `${vault}-evil/Note.md`
+      const res = promoteToKnowledge('# Ringkasan\n\nTeks.', [{ title: 'Evil', path: sibling }])
+      expect(res.ok).toBe(true)
+      expect(res.proposal!.content).not.toContain('[[-evil/Note|Evil]]')
+      expect(res.proposal!.content).toContain(
+        `[[${path.relative(vault, sibling).replace(/\\/g, '/').replace(/\.md$/i, '')}|Evil]]`
+      )
+    })
+
     it('rejects path outside vault', async () => {
       const res = await executeTool({
         tool: 'create_note',
@@ -318,6 +455,21 @@ Keep me.`
       const res = await executeTool({ tool: 'search', args: { query: 'x' } })
       expect(res.ok).toBe(false)
       expect(res.error).toContain('No workspace')
+    })
+
+    it('P1 guard: researcher cannot execute write tools even when called directly', async () => {
+      const res = await executeTool(
+        { tool: 'create_note', args: { path: 'Knowledge/Denied.md', content: '# X' } },
+        'researcher'
+      )
+      expect(res.ok).toBe(false)
+      expect(res.error).toContain('tidak diizinkan')
+      expect(res.error).toContain('researcher')
+      // Nothing was created — the guard runs BEFORE any filesystem access
+      expect(fs.existsSync(path.join(vault, 'Knowledge', 'Denied.md'))).toBe(false)
+      // Read tools still work under the same role
+      const read = await executeTool({ tool: 'search', args: { query: 'x' } }, 'researcher')
+      expect(read.ok).toBe(true)
     })
 
     it('rejects unclosed frontmatter content', async () => {
