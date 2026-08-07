@@ -13,6 +13,7 @@
         "typecheck:web": "tsc --noEmit -p tsconfig.web.json --composite false",
         "typecheck": "npm run typecheck:node && npm run typecheck:web",
         "test": "vitest run",
+        "test:flaky": "vitest run && vitest run",
         "test:watch": "vitest",
         "qa": "vitest run",
         "qa:engines": "vitest run src/main/engine",

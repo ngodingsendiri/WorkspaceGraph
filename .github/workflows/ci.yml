@@ -43,9 +43,25 @@ jobs:
       - run: npm ci
       - run: npx vitest run --coverage
 
+  # R1-4: flakiness gate — the full suite runs TWICE back-to-back under the
+  # same parallel worker pool. Cross-file races (shared fixtures, spawned MCP
+  # child processes) surface as a non-deterministic failure on one of the two
+  # runs; a single green run can no longer mask a race regression.
+  test-flaky:
+    name: Unit Tests (2x flaky check)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+      - run: npm ci
+      - run: npm run test:flaky
+
   build:
     name: Build
-    needs: [typecheck, lint, test]
+    needs: [typecheck, lint, test, test-flaky]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
