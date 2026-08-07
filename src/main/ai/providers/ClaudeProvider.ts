@@ -7,6 +7,7 @@ import {
   ModelInfo,
   ProviderCapabilities
 } from './BaseProvider'
+import { fetchAnthropicModels, mergeWithFallback } from './modelDiscovery'
 
 export class ClaudeProvider extends BaseProvider {
   readonly id = 'claude'
@@ -39,6 +40,7 @@ export class ClaudeProvider extends BaseProvider {
     if (config.apiKey) {
       this.client = new Anthropic({ apiKey: config.apiKey })
     }
+    this.modelCache.clear()
   }
 
   async healthCheck(): Promise<boolean> {
@@ -46,11 +48,18 @@ export class ClaudeProvider extends BaseProvider {
   }
 
   async listModels(): Promise<ModelInfo[]> {
-    return [
+    const cached = this.modelCache.get()
+    if (cached) return cached
+    // Runtime: Anthropic's GET /v1/models (the account's real catalog). Falls
+    // back to the static snapshot when the endpoint is unreachable/older keys.
+    const runtime = await fetchAnthropicModels(this.apiKey, this.baseUrl || undefined)
+    const out = mergeWithFallback(runtime, [
       { id: 'claude-3-5-sonnet-20241022', name: 'Claude 3.5 Sonnet', contextWindow: 200000 },
       { id: 'claude-3-5-haiku-20241022', name: 'Claude 3.5 Haiku', contextWindow: 200000 },
       { id: 'claude-3-opus-20240229', name: 'Claude 3 Opus', contextWindow: 200000 }
-    ]
+    ])
+    if (out.length > 0) this.modelCache.set(out)
+    return out
   }
 
   /** Map WG messages to Anthropic messages — images become image blocks (P-A2). */

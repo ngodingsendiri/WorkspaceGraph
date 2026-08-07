@@ -54,7 +54,7 @@ export const SettingsView: React.FC = () => {
       connected: boolean
       configured?: boolean
       error?: string
-      models: { id: string; name: string }[]
+      models: { id: string; name: string; free?: boolean }[]
     }[]
   >([])
   const [apiKeys, setApiKeys] = useState<Record<string, string>>({})
@@ -246,6 +246,21 @@ export const SettingsView: React.FC = () => {
       await loadAll()
     } catch (e) {
       flash(e instanceof Error ? e.message : 'Set default failed')
+    }
+  }
+
+  /** Bypass the 5-min model cache: pull the live list from the API now. */
+  const handleRefreshModels = async (providerId: string): Promise<void> => {
+    try {
+      const res = await window.api.refreshProviderModels(providerId)
+      if (res.ok) {
+        flash(`${providerId}: ${res.models.length} model dimuat ulang`)
+      } else {
+        flash(res.error || `Refresh ${providerId} gagal`)
+      }
+      await loadAll()
+    } catch (e) {
+      flash(e instanceof Error ? e.message : 'Refresh failed')
     }
   }
 
@@ -532,13 +547,20 @@ export const SettingsView: React.FC = () => {
             {providers.map((p) => {
               // Ollama: "connected" = daemon reachable. Cloud: "configured" = key saved (not live ping).
               const isReady = p.id === 'ollama' ? Boolean(p.connected) : Boolean(p.configured)
+              const freeCount = p.models.filter((m) => m.free).length
+              const freeHint =
+                freeCount > 0
+                  ? ` · ${freeCount} model gratis`
+                  : p.id === 'ollama'
+                    ? ' · semua lokal (gratis)'
+                    : ''
               const statusText =
                 p.id === 'ollama'
                   ? p.connected
-                    ? `Online · ${p.models.length} models`
+                    ? `Online · ${p.models.length} models${freeHint}`
                     : 'Offline — jalankan Ollama di localhost'
                   : p.configured
-                    ? `Key saved · ${p.models.length} models · klik Test`
+                    ? `Key saved · ${p.models.length} models${freeHint} · klik Test`
                     : p.error || 'Not configured'
               return (
                 <div key={p.id} className={`provider-card ${isReady ? 'active' : ''}`}>
@@ -591,6 +613,14 @@ export const SettingsView: React.FC = () => {
                         onClick={() => void handleSetDefault(p.id)}
                       >
                         Set default
+                      </button>
+                      <button
+                        className="btn btn-surface btn-sm"
+                        title="Bypass cache 5 menit — tarik ulang daftar model dari API sekarang"
+                        onClick={() => void handleRefreshModels(p.id)}
+                        disabled={!isReady}
+                      >
+                        Refresh models
                       </button>
                       <button
                         className="btn btn-primary btn-sm"

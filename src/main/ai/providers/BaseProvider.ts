@@ -89,6 +89,10 @@ export interface ModelInfo {
   name: string
   contextWindow?: number
   maxOutput?: number
+  /** True when the provider reports/implies the model is free tier ($0). */
+  free?: boolean
+  /** Provider-reported owner (OpenAI-compat `owned_by`), when available. */
+  ownedBy?: string
 }
 
 export interface ProviderStatus {
@@ -100,6 +104,8 @@ export interface ProviderStatus {
   models: ModelInfo[]
   defaultModel?: string
 }
+
+import { createModelCache } from './modelDiscovery'
 
 export abstract class BaseProvider {
   abstract readonly id: string
@@ -126,6 +132,18 @@ export abstract class BaseProvider {
     if (!this.apiKey) return ''
     if (this.apiKey.length <= 8) return '••••••••'
     return this.apiKey.slice(0, 4) + '…' + this.apiKey.slice(-4)
+  }
+
+  /**
+   * TTL cache for the runtime model list (shared by every provider). Cleared
+   * by clearModelCache() — Settings → Refresh models — and on configure() so
+   * a new key/base URL never serves a stale catalog.
+   */
+  protected modelCache = createModelCache()
+
+  /** Bust the runtime model-list cache (Settings → Refresh models). */
+  clearModelCache(): void {
+    this.modelCache.clear()
   }
 
   /** Lightweight: key present / base URL reachable — do NOT burn tokens */

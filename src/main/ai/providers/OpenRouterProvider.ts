@@ -15,6 +15,7 @@ import {
   finalizeToolCalls,
   MutableToolCall
 } from './openaiCompat'
+import { fetchOpenRouterModels, mergeWithFallback } from './modelDiscovery'
 
 /** tools/tool_choice pass-through (cast: ProviderTool mirrors the SDK shape). */
 function toolOptions(
@@ -73,6 +74,7 @@ export class OpenRouterProvider extends BaseProvider {
         }
       })
     }
+    this.modelCache.clear()
   }
 
   async healthCheck(): Promise<boolean> {
@@ -80,13 +82,20 @@ export class OpenRouterProvider extends BaseProvider {
   }
 
   async listModels(): Promise<ModelInfo[]> {
-    return [
+    const cached = this.modelCache.get()
+    if (cached) return cached
+    // Runtime: the full OpenRouter catalog with EXACT per-model pricing — the
+    // `free` flag is real ($0 prompt/completion), not a heuristic.
+    const runtime = await fetchOpenRouterModels(this.apiKey)
+    const out = mergeWithFallback(runtime, [
       { id: 'anthropic/claude-3.5-sonnet', name: 'Claude 3.5 Sonnet' },
       { id: 'openai/gpt-4o', name: 'GPT-4o' },
-      { id: 'google/gemini-2.5-flash', name: 'Gemini 2.5 Flash' },
+      { id: 'google/gemini-2.5-flash', name: 'Gemini 2.5 Flash', free: true },
       { id: 'deepseek/deepseek-chat', name: 'DeepSeek V3' },
       { id: 'meta-llama/llama-3.3-70b-instruct', name: 'Llama 3.3 70B' }
-    ]
+    ])
+    if (out.length > 0) this.modelCache.set(out)
+    return out
   }
 
   async sendMessage(request: AIRequest): Promise<AIResponse> {

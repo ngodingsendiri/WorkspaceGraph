@@ -25,6 +25,7 @@ import {
   finalizeToolCalls,
   MutableToolCall
 } from './openaiCompat'
+import { fetchOpenAICompatModels, mergeWithFallback, markFreeByHeuristic } from './modelDiscovery'
 
 export type GrokBackend = 'chat' | 'responses'
 
@@ -119,6 +120,7 @@ export class GrokProvider extends BaseProvider {
     if (config.apiKey !== undefined || config.baseUrl !== undefined) {
       this.client = null
     }
+    this.modelCache.clear()
   }
 
   async healthCheck(): Promise<boolean> {
@@ -126,14 +128,23 @@ export class GrokProvider extends BaseProvider {
   }
 
   async listModels(): Promise<ModelInfo[]> {
-    const cached = readGrokCliModels()
-    if (cached.length > 0) return cached
-    return [
+    const cached = this.modelCache.get()
+    if (cached) return cached
+    // Priority: (1) runtime GET /models for the configured key/base — the
+    // account's real catalog; (2) models cached by the Grok CLI (if any);
+    // (3) the static snapshot. CLI cache used to be primary; it is now just
+    // the fallback so a stale local cache can't shadow the live API.
+    const runtime = await fetchOpenAICompatModels(this.baseUrl, this.apiKey)
+    const merged = mergeWithFallback(runtime, [
+      ...readGrokCliModels(),
       { id: 'grok-4.5', name: 'Grok 4.5', contextWindow: 500000 },
       { id: 'grok-3', name: 'Grok 3', contextWindow: 131072 },
       { id: 'grok-3-mini', name: 'Grok 3 Mini', contextWindow: 131072 },
       { id: 'grok-2', name: 'Grok 2', contextWindow: 131072 }
-    ]
+    ])
+    const out = markFreeByHeuristic(merged)
+    if (out.length > 0) this.modelCache.set(out)
+    return out
   }
 
   /** Re-load CLI session + OIDC refresh if near expiry */

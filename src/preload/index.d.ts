@@ -203,6 +203,18 @@ export interface API {
 
   getAIProviders: () => Promise<any[]>
   testAIProvider: (providerId?: string) => Promise<{ ok: boolean; error?: string; sample?: string }>
+  refreshProviderModels: (providerId: string) => Promise<{
+    ok: boolean
+    models: {
+      id: string
+      name: string
+      contextWindow?: number
+      maxOutput?: number
+      free?: boolean
+      ownedBy?: string
+    }[]
+    error?: string
+  }>
   importGrokCli: () => Promise<{
     ok: boolean
     error?: string

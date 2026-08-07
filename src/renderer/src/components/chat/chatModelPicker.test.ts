@@ -4,7 +4,9 @@ import {
   isAutoModel,
   resolveAutoModel,
   autoLabel,
-  buildModelGroups
+  buildModelGroups,
+  formatContextWindow,
+  modelDetailSubtitle
 } from './chatModelPicker'
 
 const grok = {
@@ -50,5 +52,23 @@ describe('chatModelPicker (P1-3)', () => {
     expect(groups[0].providerId).toBe('grok')
     expect(groups[0].models.map((m) => m.id)).toEqual(['grok-4.5', 'grok-3.5'])
     expect(groups[1].providerId).toBe('ollama')
+  })
+
+  it('formatContextWindow compacts token counts (k / M)', () => {
+    expect(formatContextWindow(undefined)).toBe('')
+    expect(formatContextWindow(0)).toBe('')
+    expect(formatContextWindow(128000)).toBe('128k')
+    expect(formatContextWindow(1_048_576)).toBe('1M')
+    expect(formatContextWindow(2_097_152)).toBe('2.1M')
+    expect(formatContextWindow(512)).toBe('512')
+  })
+
+  it('modelDetailSubtitle joins context + owner, empty when neither', () => {
+    expect(modelDetailSubtitle({ id: 'a', name: 'A', contextWindow: 128000 })).toBe('128k context')
+    expect(
+      modelDetailSubtitle({ id: 'b', name: 'B', contextWindow: 1_048_576, ownedBy: 'openai' })
+    ).toBe('1M context · openai')
+    expect(modelDetailSubtitle({ id: 'c', name: 'C', ownedBy: 'openai' })).toBe('openai')
+    expect(modelDetailSubtitle({ id: 'd', name: 'D' })).toBe('')
   })
 })

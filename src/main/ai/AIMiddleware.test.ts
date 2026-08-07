@@ -1215,3 +1215,29 @@ describe('executeToolWithTimeout (P1-runtime)', () => {
     }
   })
 })
+
+describe('AIMiddleware.refreshProviderModels (model discovery refresh)', () => {
+  it('busts the cache and returns the fresh model list', async () => {
+    const provider = new ScriptedProvider()
+    // Spy on listModels (returns real data) + clearModelCache (order matters)
+    const models: ModelInfo[] = [{ id: 'm1', name: 'Model 1', contextWindow: 128000, free: true }]
+    const listSpy = vi.spyOn(provider, 'listModels').mockResolvedValue(models)
+    const clearSpy = vi.spyOn(provider, 'clearModelCache')
+    const mid = new AIMiddleware({ providers: { fake: provider } })
+
+    const res = await mid.refreshProviderModels('fake')
+    expect(res.ok).toBe(true)
+    expect(res.models).toEqual(models)
+    // The cache bust ran BEFORE the fetch so a fresh list is guaranteed
+    expect(clearSpy).toHaveBeenCalledOnce()
+    expect(clearSpy.mock.invocationCallOrder[0]).toBeLessThan(listSpy.mock.invocationCallOrder[0])
+  })
+
+  it('returns an error for an unknown provider', async () => {
+    const mid = new AIMiddleware({ providers: {} })
+    const res = await mid.refreshProviderModels('nope')
+    expect(res.ok).toBe(false)
+    expect(res.models).toEqual([])
+    expect(res.error).toContain('nope')
+  })
+})

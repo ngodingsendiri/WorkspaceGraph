@@ -73,6 +73,11 @@ export function registerAIHandlers(): void {
     return aiMiddleware.testProvider(providerId)
   })
 
+  /** P-model-discovery: force-refresh one provider's runtime model list. */
+  ipcMain.handle('ai:refreshProviderModels', async (_, providerId: string) => {
+    return aiMiddleware.refreshProviderModels(providerId)
+  })
+
   /** Import Grok CLI session (X account login via `grok` CLI) into WorkspaceGraph */
   ipcMain.handle('ai:importGrokCli', async () => {
     try {

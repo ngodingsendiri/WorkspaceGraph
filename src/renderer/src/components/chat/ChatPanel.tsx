@@ -15,7 +15,8 @@ import {
   isAutoModel,
   autoLabel,
   resolveAutoModel,
-  buildModelGroups
+  buildModelGroups,
+  modelDetailSubtitle
 } from './chatModelPicker'
 import {
   contextBudgetForModel,
@@ -1576,6 +1577,7 @@ export const ChatPanel: React.FC = () => {
                     !isAutoModel(selectedModelId) &&
                     selectedModelId === m.id &&
                     g.providerId === activeProviderId
+                  const subtitle = modelDetailSubtitle(m)
                   return (
                     <button
                       key={`${g.providerId}:${m.id}`}
@@ -1589,6 +1591,12 @@ export const ChatPanel: React.FC = () => {
                         {active ? '✓' : ''}
                       </span>
                       <span className="chat-model-row-name">{m.name}</span>
+                      {subtitle && (
+                        <span className="chat-model-row-sub" title={subtitle}>
+                          {subtitle}
+                        </span>
+                      )}
+                      {m.free && <span className="chat-model-free-badge">Gratis</span>}
                     </button>
                   )
                 })}

@@ -7,6 +7,7 @@ import {
   ModelInfo,
   ProviderCapabilities
 } from './BaseProvider'
+import { fetchGeminiModels, mergeWithFallback } from './modelDiscovery'
 
 /** Local structural Part — inlineData carries the attached image (vision P-A2). */
 type GeminiPart = { text?: string; inlineData?: { mimeType: string; data: string } }
@@ -44,6 +45,7 @@ export class GeminiProvider extends BaseProvider {
     if (config.apiKey) {
       this.ai = new GoogleGenAI({ apiKey: config.apiKey })
     }
+    this.modelCache.clear()
   }
 
   /** Don't burn tokens — configured key = "connected" for UI */
@@ -52,14 +54,26 @@ export class GeminiProvider extends BaseProvider {
   }
 
   async listModels(): Promise<ModelInfo[]> {
-    // Flash first — Pro free-tier often returns quota limit:0
-    return [
-      { id: 'gemini-2.0-flash', name: 'Gemini 2.0 Flash (recommended)', contextWindow: 1048576 },
-      { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', contextWindow: 1048576 },
-      { id: 'gemini-1.5-flash', name: 'Gemini 1.5 Flash', contextWindow: 1048576 },
+    const cached = this.modelCache.get()
+    if (cached) return cached
+    // Runtime: the account's ACTUAL available models from the Gemini API. The
+    // `free` flag comes from the flash/nano/lite naming heuristic (Google's
+    // API exposes no pricing, but free tier applies to those families).
+    const runtime = await fetchGeminiModels(this.apiKey)
+    const out = mergeWithFallback(runtime, [
+      {
+        id: 'gemini-2.0-flash',
+        name: 'Gemini 2.0 Flash (recommended)',
+        contextWindow: 1048576,
+        free: true
+      },
+      { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', contextWindow: 1048576, free: true },
+      { id: 'gemini-1.5-flash', name: 'Gemini 1.5 Flash', contextWindow: 1048576, free: true },
       { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro (paid/quota)', contextWindow: 2097152 },
       { id: 'gemini-1.5-pro', name: 'Gemini 1.5 Pro (paid/quota)', contextWindow: 2097152 }
-    ]
+    ])
+    if (out.length > 0) this.modelCache.set(out)
+    return out
   }
 
   /** Parse SDK errors into short actionable Indonesian/English messages */

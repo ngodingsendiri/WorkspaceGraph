@@ -21,6 +21,13 @@ export class OllamaProvider extends BaseProvider {
   protected baseUrl = 'http://localhost:11434'
   protected defaultModel = 'llama3.2'
 
+  configure(config: { apiKey?: string; baseUrl?: string; defaultModel?: string }): void {
+    super.configure(config)
+    // BUGFIX: a base URL change (e.g. switching to a remote Ollama server)
+    // must not serve the previous server's cached model list for 5 minutes.
+    this.modelCache.clear()
+  }
+
   async healthCheck(): Promise<boolean> {
     try {
       const res = await fetch(`${this.baseUrl}/api/tags`)
@@ -31,19 +38,21 @@ export class OllamaProvider extends BaseProvider {
   }
 
   async listModels(): Promise<ModelInfo[]> {
+    const cached = this.modelCache.get()
+    if (cached) return cached
     try {
       const res = await fetch(`${this.baseUrl}/api/tags`)
       if (!res.ok) return []
       const data = (await res.json()) as { models?: { name: string }[] }
-      return (data.models || []).map((m) => ({
-        id: m.name,
-        name: m.name
-      }))
+      // Local models are free by definition ($0, runs on your machine)
+      const out = (data.models || []).map((m) => ({ id: m.name, name: m.name, free: true }))
+      if (out.length > 0) this.modelCache.set(out)
+      return out
     } catch {
       return [
-        { id: 'llama3.2', name: 'Llama 3.2' },
-        { id: 'mistral', name: 'Mistral' },
-        { id: 'qwen2.5', name: 'Qwen 2.5' }
+        { id: 'llama3.2', name: 'Llama 3.2', free: true },
+        { id: 'mistral', name: 'Mistral', free: true },
+        { id: 'qwen2.5', name: 'Qwen 2.5', free: true }
       ]
     }
   }

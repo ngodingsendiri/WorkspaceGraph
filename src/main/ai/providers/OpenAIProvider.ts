@@ -15,6 +15,7 @@ import {
   finalizeToolCalls,
   MutableToolCall
 } from './openaiCompat'
+import { fetchOpenAICompatModels, mergeWithFallback, markFreeByHeuristic } from './modelDiscovery'
 
 /** tools/tool_choice pass-through (cast: ProviderTool mirrors the SDK shape). */
 function toolOptions(
@@ -61,6 +62,7 @@ export class OpenAIProvider extends BaseProvider {
         baseURL: config.baseUrl || this.baseUrl || undefined
       })
     }
+    this.modelCache.clear()
   }
 
   async healthCheck(): Promise<boolean> {
@@ -68,12 +70,23 @@ export class OpenAIProvider extends BaseProvider {
   }
 
   async listModels(): Promise<ModelInfo[]> {
-    return [
+    const cached = this.modelCache.get()
+    if (cached) return cached
+    // Runtime: the account's REAL models from GET /models (custom baseUrl
+    // supported — Azure/OpenAI-compat gateways list their own catalog).
+    const runtime = await fetchOpenAICompatModels(
+      this.baseUrl || 'https://api.openai.com/v1',
+      this.apiKey
+    )
+    const merged = mergeWithFallback(runtime, [
       { id: 'gpt-4o', name: 'GPT-4o', contextWindow: 128000 },
       { id: 'gpt-4o-mini', name: 'GPT-4o Mini', contextWindow: 128000 },
       { id: 'o1', name: 'o1', contextWindow: 200000 },
       { id: 'o3-mini', name: 'o3-mini', contextWindow: 200000 }
-    ]
+    ])
+    const out = markFreeByHeuristic(merged)
+    if (out.length > 0) this.modelCache.set(out)
+    return out
   }
 
   async sendMessage(request: AIRequest): Promise<AIResponse> {

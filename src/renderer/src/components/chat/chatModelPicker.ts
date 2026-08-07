@@ -17,6 +17,9 @@ export function isAutoModel(modelId: string | undefined | null): boolean {
 export interface ModelOption {
   id: string
   name: string
+  free?: boolean
+  contextWindow?: number
+  ownedBy?: string
 }
 
 export interface ProviderLike {
@@ -24,6 +27,27 @@ export interface ProviderLike {
   name: string
   defaultModel?: string
   models: ModelOption[]
+}
+
+/** Compact context-window label: "128k", "1M", "2.1M", "1048576". */
+export function formatContextWindow(n: number | undefined): string {
+  if (!n || n <= 0) return ''
+  if (n >= 1_000_000) {
+    // 1,048,576 → "1M" (strip a trailing .0); 2,097,152 → "2.1M"
+    const m = (n / 1_000_000).toFixed(1).replace(/\.0$/, '')
+    return `${m}M`
+  }
+  if (n >= 1000) return `${Math.round(n / 1000)}k`
+  return String(n)
+}
+
+/** Detail subtitle for a model row: "1M ctx · owned_by". */
+export function modelDetailSubtitle(model: ModelOption): string {
+  const parts: string[] = []
+  const ctx = formatContextWindow(model.contextWindow)
+  if (ctx) parts.push(`${ctx} context`)
+  if (model.ownedBy) parts.push(model.ownedBy)
+  return parts.join(' · ')
 }
 
 /** The concrete model `auto` resolves to for a provider. */

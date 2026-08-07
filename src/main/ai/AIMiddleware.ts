@@ -5,7 +5,8 @@ import {
   AIStreamChunk,
   ProviderStatus,
   AIMessage,
-  AIToolCall
+  AIToolCall,
+  ModelInfo
 } from './providers/BaseProvider'
 import { GeminiProvider } from './providers/GeminiProvider'
 import { OpenAIProvider } from './providers/OpenAIProvider'
@@ -351,41 +352,65 @@ export class AIMiddleware {
   }
 
   async getAllProvidersStatus(): Promise<ProviderStatus[]> {
-    const statuses: ProviderStatus[] = []
-    for (const provider of this.providers.values()) {
-      const configured = provider.isConfigured()
-      // Always expose model list so UI can select before/after key entry
-      const models = await provider.listModels().catch(() => [])
-      /**
-       * BUGFIX: most healthCheck() === isConfigured() (key present), which made UI
-       * claim "connected" without a live ping. Only Ollama implements a real probe.
-       * - connected: live reachability when available (Ollama /api/tags)
-       * - configured: credentials present (cloud key / ollama always true by design)
-       */
-      let connected = false
-      if (provider.id === 'ollama') {
-        connected = await provider.healthCheck().catch(() => false)
-      } else {
-        // Cloud: do not fake "connected" — use Test for live proof
-        connected = false
-      }
-      let error: string | undefined
-      if (provider.id === 'ollama') {
-        error = connected ? undefined : 'Ollama offline (localhost:11434)'
-      } else if (!configured) {
-        error = 'API key belum di-set'
-      }
-      statuses.push({
-        id: provider.id,
-        name: provider.name,
-        connected,
-        configured,
-        models,
-        defaultModel: provider.getDefaultModel(),
-        error
+    const providers = [...this.providers.values()]
+    // P-model-discovery: fetch every provider's model list IN PARALLEL — a slow
+    // /models endpoint (8s timeout each) must not serialize into ~48s of panel
+    // hang on the first load. healthCheck runs concurrently too (only Ollama
+    // does real work, but the pattern stays flat).
+    const settled = await Promise.all(
+      providers.map(async (provider) => {
+        const configured = provider.isConfigured()
+        // Always expose model list so UI can select before/after key entry
+        const models = await provider.listModels().catch(() => [])
+        /**
+         * BUGFIX: most healthCheck() === isConfigured() (key present), which made UI
+         * claim "connected" without a live ping. Only Ollama implements a real probe.
+         * - connected: live reachability when available (Ollama /api/tags)
+         * - configured: credentials present (cloud key / ollama always true by design)
+         */
+        let connected = false
+        if (provider.id === 'ollama') {
+          connected = await provider.healthCheck().catch(() => false)
+        }
+        let error: string | undefined
+        if (provider.id === 'ollama') {
+          error = connected ? undefined : 'Ollama offline (localhost:11434)'
+        } else if (!configured) {
+          error = 'API key belum di-set'
+        }
+        return {
+          id: provider.id,
+          name: provider.name,
+          connected,
+          configured,
+          models,
+          defaultModel: provider.getDefaultModel(),
+          error
+        }
       })
+    )
+    return settled
+  }
+
+  /**
+   * Force-refresh ONE provider's runtime model list (Settings → Refresh
+   * models): busts its TTL cache and hits GET /models again so a newly
+   * saved key/base URL shows its real catalog without restarting.
+   */
+  async refreshProviderModels(
+    providerId: string
+  ): Promise<{ ok: boolean; models: ModelInfo[]; error?: string }> {
+    const provider = this.providers.get(providerId)
+    if (!provider) {
+      return { ok: false, models: [], error: `Provider not found: ${providerId}` }
     }
-    return statuses
+    provider.clearModelCache()
+    try {
+      const models = await provider.listModels()
+      return { ok: true, models }
+    } catch (err) {
+      return { ok: false, models: [], error: err instanceof Error ? err.message : String(err) }
+    }
   }
 
   /** Live ping — actually calls the API once (for Settings → Test) */

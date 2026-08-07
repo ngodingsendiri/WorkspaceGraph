@@ -137,6 +137,8 @@ const api = {
   // AI
   getAIProviders: () => ipcRenderer.invoke('ai:getProviders'),
   testAIProvider: (providerId?: string) => ipcRenderer.invoke('ai:testProvider', providerId),
+  refreshProviderModels: (providerId: string) =>
+    ipcRenderer.invoke('ai:refreshProviderModels', providerId),
   importGrokCli: () => ipcRenderer.invoke('ai:importGrokCli'),
   getEmbeddingStatus: () => ipcRenderer.invoke('ai:embeddingStatus'),
   onEmbeddingProgress: (callback: (payload: unknown) => void) => {

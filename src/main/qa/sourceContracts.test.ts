@@ -1034,6 +1034,64 @@ describe('AI system contracts', () => {
       has(tools, "renderPrompt('toolsHead', { tools: lines })", "renderPrompt('toolsTail')")
     ).toBe(true)
   })
+  it('runtime model discovery: /models fetchers + free flags wired in all providers', () => {
+    const disc = read('src/main/ai/providers/modelDiscovery.ts')
+    const base = read('src/main/ai/providers/BaseProvider.ts')
+    const mid = read('src/main/ai/AIMiddleware.ts')
+    const ipc = read('src/main/ipc/handlers/ai.ts')
+    const pre = read('src/preload/index.ts')
+    // Shared discovery module: OpenAI-compat + Gemini + Anthropic + OpenRouter
+    expect(
+      has(
+        disc,
+        'export async function fetchOpenAICompatModels',
+        'export async function fetchGeminiModels',
+        'export async function fetchAnthropicModels',
+        'export async function fetchOpenRouterModels'
+      )
+    ).toBe(true)
+    // Free-model indication: exact pricing for OpenRouter, heuristic for Gemini,
+    // and the model flag itself lives on ModelInfo
+    expect(has(disc, 'Number(v) === 0', 'isGeminiFreeTier', 'markFreeByHeuristic')).toBe(true)
+    expect(has(base, 'free?: boolean', 'ownedBy?: string')).toBe(true)
+    // Every provider consumes the shared discovery + cache (no stale hardcoded
+    // list as the ONLY source — runtime always tried first). The model cache
+    // now lives in BaseProvider, so every provider inherits it; the fetchers
+    // are consumed where the API shape applies (Ollama fetches /api/tags itself
+    // but still inherits the TTL cache).
+    expect(has(base, 'protected modelCache = createModelCache()')).toBe(true)
+    for (const p of ['Grok', 'OpenAI', 'Gemini', 'Claude', 'OpenRouter', 'Ollama']) {
+      const src = read(`src/main/ai/providers/${p}Provider.ts`)
+      expect(
+        hasAny(
+          src,
+          'fetchOpenAICompatModels',
+          'fetchGeminiModels',
+          'fetchAnthropicModels',
+          'fetchOpenRouterModels',
+          'this.modelCache.get()'
+        )
+      ).toBe(true)
+    } // Renderer surfaces the free flag (picker badge + Settings model count)
+    const picker = read('src/renderer/src/components/chat/chatModelPicker.ts')
+    expect(has(picker, 'free?: boolean', 'contextWindow?: number', 'ownedBy?: string')).toBe(true)
+    expect(has(picker, 'formatContextWindow', 'modelDetailSubtitle')).toBe(true)
+    const panel = read('src/renderer/src/components/chat/ChatPanel.tsx')
+    expect(has(panel, 'm.free &&', 'chat-model-free-badge', 'Gratis', 'chat-model-row-sub')).toBe(
+      true
+    )
+    const set = read('src/renderer/src/components/settings/SettingsView.tsx')
+    expect(has(set, 'freeCount', 'model gratis')).toBe(true)
+    expect(read('src/renderer/src/styles/globals.css').includes('chat-model-free-badge')).toBe(true)
+    // Manual refresh: cache-bust + IPC + Settings button
+    expect(has(base, 'clearModelCache(): void')).toBe(true)
+    expect(
+      has(mid, 'refreshProviderModels', 'provider.clearModelCache()', 'return { ok: true, models }')
+    ).toBe(true)
+    expect(has(ipc, "'ai:refreshProviderModels'")).toBe(true)
+    expect(has(pre, 'refreshProviderModels: (providerId: string)')).toBe(true)
+    expect(has(set, 'handleRefreshModels', 'Refresh models', 'res.models.length')).toBe(true)
+  })
   it('P3 structured AI event log: JSONL under .workspacegraph/logs + rotation + read IPC', () => {
     const log = read('src/main/ai/AIEventLog.ts')
     const mid = read('src/main/ai/AIMiddleware.ts')

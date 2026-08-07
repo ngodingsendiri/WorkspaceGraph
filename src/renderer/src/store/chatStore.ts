@@ -83,7 +83,7 @@ export interface ProviderItem {
   configured?: boolean
   defaultModel?: string
   error?: string
-  models: { id: string; name: string }[]
+  models: { id: string; name: string; contextWindow?: number; ownedBy?: string; free?: boolean }[]
 }
 
 export type AgentRole = 'general' | 'writer' | 'researcher' | 'curator' | 'planner'
