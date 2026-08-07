@@ -1,13 +1,27 @@
-import { vi } from 'vitest'
+import { vi, afterAll } from 'vitest'
 import fs from 'fs'
 import path from 'path'
+import os from 'os'
+import { threadId } from 'worker_threads'
 import type { ParsedMarkdown } from '../main/engine/MarkdownEngine'
+
+/**
+ * Per-worker userData root. Vitest runs each test file in its own worker
+ * (forks pool → unique process.pid per file; threads pool → unique threadId
+ * per parallel thread), so the combination is unique per worker. Workers
+ * previously ALL shared test-fixtures/userData/workspacegraph/{settings,recent}.json
+ * — parallel files raced on writes (saveSettings atomic-renames but
+ * recent.json is a plain write) and produced random cross-file failures.
+ * A per-worker dir isolates every file's settings/recent completely.
+ */
+const userDataRoot = path.join(os.tmpdir(), `wg-test-userdata-${process.pid}-${threadId}`)
+fs.mkdirSync(path.join(userDataRoot, 'workspacegraph'), { recursive: true })
 
 // Mock electron modules
 vi.mock('electron', () => ({
   app: {
     getPath: vi.fn((name: string) => {
-      if (name === 'userData') return path.join(__dirname, '..', '..', 'test-fixtures', 'userData')
+      if (name === 'userData') return userDataRoot
       return '/mock/path'
     })
   },
@@ -110,3 +124,13 @@ export function cleanupTempDir(dir: string): void {
 
 // Global test timeout
 vi.setConfig({ testTimeout: 30000 })
+
+// Clean up this worker's private userData dir once its files finish running
+// (hooks registered here apply to every test file executed by this worker).
+afterAll(() => {
+  try {
+    fs.rmSync(userDataRoot, { recursive: true, force: true })
+  } catch {
+    /* tmp cleanup is best-effort */
+  }
+})

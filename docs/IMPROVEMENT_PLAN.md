@@ -215,12 +215,22 @@ Search box filter judul (case-insensitive) di drawer riwayat; daftar tidak lagi 
 - Wire ke `streamMessage` + tiap stage `runPipelineInner`
 **Kriteria (terpenuhi):** 15 unit (klasifikasi, urutan, ollama/unconfigured exclude, order invalid) + 5 integrasi (A 429→B sukses + nota + log + restore; A&B gagal → error B; 400 tidak failover; tanpa kandidat; cancel tak pernah failover) + QA contract. Test: 20 baru, total suite 869/869 hijau, tsc + lint + build bersih.
 
-### R1-3. Sub-agent / plan mode — P1
-**File:** `src/main/ai/AIMiddleware.ts` (perluas `streamPipeline`)
+### R1-3. Sub-agent / plan mode — P1 ✅ (selesai)
+**File:** `src/main/ai/AgentTools.ts` (`delegate_subagent` + `create_plan` + `PLAN_TOOLS` + `buildAllowedTools`), `AIMiddleware.ts` (`runSubAgent` + interception loop + `planMode`), `chatStore.ts` + `ChatPanel.tsx` (toggle Plan + /plan) + `handlers/ai.ts` + preload (`planMode`)
 **Scope:**
-- Pipeline dinamis (bukan cuma preset Research→Writer): model bisa minta sub-task terdelegasi
-- **Plan mode**: alur analisis → daftar langkah → proposal, tanpa eksekusi tool tulis
-**Kriteria:** test pipeline 3 stage; plan mode tidak pernah memanggil write tool.
+- **Pipeline dinamis**: tool `delegate_subagent {role, task}` — model mendelegasikan sub-task ke sub-agent dengan role-nya sendiri (nested stream; per-role tool gate berlaku pada advertisement DAN eksekusi). Output sub-agent kembali sebagai tool result; proposal + citation yang dibuat sub-agent naik ke parent stream (dock + grounding tetap lengkap). Rekursi dicegah: nested stream selalu `excludeDelegate` → tool delegate tidak pernah diiklankan ke sub-agent
+- **Plan mode**: toggle **Plan** di komposer (atau `/plan`). Write tool vault + MCP diblokir di advertisement DAN gate eksekusi; model hanya: (1) analisis, (2) daftar langkah bernomor, (3) panggil `create_plan {title, goal, steps, notes?}` → proposal `Planning/<title>.md` (dock + diff + Apply normal). Kontrak PLAN MODE ada di system prompt round-0 DAN lean prompt (round 1+ tetap plan)
+- **Anti-drift**: `buildAllowedTools(role, {planMode, excludeDelegate})` dipakai bersama oleh schema builder, fence builder, DAN executor gate — apa yang model lihat == apa yang boleh dieksekusi
+**Kriteria (terpenuhi):** 7 unit AgentTools (toolset plan, anti-rekursi, create_plan proposal + validasi, deny write plan mode, create_plan di luar plan mode ditolak, delegate ke executor statis gagal) + 5 integrasi middleware (filter tools plan, create_plan proposal + stream stop, fence write denial, delegate nested stream dengan role + anti-rekursi, bad role tanpa nested) + QA contract. File terpengaruh: 102/102 test hijau, tsc node+web bersih.
+
+### R1-4. Stabilkan suite paralel — shared fixture + MCP stdio — ✅ FIXED
+**File:** `src/test/setup.ts` (userData per-worker)
+**Akar masalah:** Semua worker vitest memakai SATU `userData` (mock electron → `test-fixtures/userData`) → `settings.json` + `recent.json` di-tulis paralel oleh beberapa test file → race baca/tulis acak (test berbeda gagal tiap run, lolos saat isolasi). Flake yang tampak "MCP stdio" (McpClientManager + AIMiddleware) sebenarnya dari race yang sama: AIMiddleware membaca `settings.json` via `workspaceEngine` saat file itu sedang ditulis worker lain — bukan dari singleton (vitest mengisolasi module registry per test file, jadi `mcpManager` tidak pernah di-share antar file).
+**Fix:**
+- `app.getPath('userData')` → `os.tmpdir()/wg-test-userdata-<pid>-<threadId>` — unik per worker (forks pool → pid unik per file; threads pool → threadId unik per worker thread). Setiap test file punya settings/recent sendiri — nol race, nol kebocoran antar file
+- Cleanup `afterAll` per worker (tmpdir best-effort)
+- MCP stdio memang sudah terisolasi per file (mkdtemp per file + disconnectAll di afterEach/finally) — tidak ada perubahan kode MCP yang dibutuhkan
+**Kriteria (terpenuhi):** full suite `893/893` hijau **3× berturut-turut** (sebelumnya: test berbeda gagal tiap run paralel), MCP 73/73 stabil 3×, tsc node+web bersih, lint 0/0. `test-fixtures/userData` tidak lagi dimodifikasi oleh test.
 
 ---
 
