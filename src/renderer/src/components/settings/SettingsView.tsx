@@ -1,5 +1,6 @@
-import React, { useEffect, useState } from 'react'
+import React, { useEffect, useRef, useState } from 'react'
 import { applyTheme, getCachedThemePref, type ThemePreference } from '../../utils/theme'
+import { buildFailoverCandidates, moveInOrder } from './failoverOrder'
 
 type Section =
   'ai' | 'appearance' | 'index' | 'security' | 'automation' | 'plugins' | 'mcp' | 'logs' | 'about'
@@ -209,6 +210,12 @@ export const SettingsView: React.FC = () => {
   const [mcpDraft, setMcpDraft] = useState<McpServerCfg>(newMcpDraft)
   const [showMcpAdd, setShowMcpAdd] = useState(false)
   const [mcpBusy, setMcpBusy] = useState<Record<string, boolean>>({})
+  /** R1-2 failover order: saved aiFailoverOrder (provider ids, first = top pick). */
+  const [failoverOrder, setFailoverOrder] = useState<string[]>([])
+  const [activeProviderId, setActiveProviderId] = useState('grok')
+  /** Drag-reorder bookkeeping — a ref survives the re-renders mid-drag. */
+  const dragIdxRef = useRef<number | null>(null)
+  const [dragIdx, setDragIdx] = useState<number | null>(null)
 
   const flash = (msg: string): void => {
     setSavedStatus(msg)
@@ -297,6 +304,8 @@ export const SettingsView: React.FC = () => {
         semanticContext?: boolean
         trashEnabled?: boolean
         aiEventRetentionDays?: number
+        activeProvider?: string
+        aiFailoverOrder?: unknown
       }
       if (settings?.ai) {
         const urls: Record<string, string> = {}
@@ -318,6 +327,14 @@ export const SettingsView: React.FC = () => {
       setSemanticContext(settings?.semanticContext !== false)
       setTrashEnabled(settings?.trashEnabled !== false)
       setRetentionDays(Number(settings?.aiEventRetentionDays) || 0)
+      if (typeof settings?.activeProvider === 'string') {
+        setActiveProviderId(settings.activeProvider)
+      }
+      if (Array.isArray(settings?.aiFailoverOrder)) {
+        setFailoverOrder(settings.aiFailoverOrder.filter((x): x is string => typeof x === 'string'))
+      } else {
+        setFailoverOrder([])
+      }
       setIndexStats(await window.api.getSearchStats())
       setEmbeddingStatus(await window.api.getEmbeddingStatus())
       setSecStatus(await window.api.getSecurityStatus())
@@ -486,6 +503,32 @@ export const SettingsView: React.FC = () => {
         delete next[providerId]
         return next
       })
+    }
+  }
+
+  /** R1-2: persist the ordered failover chain to settings. */
+  const saveFailoverOrder = async (next: string[]): Promise<void> => {
+    setFailoverOrder(next)
+    try {
+      const settings = ((await window.api.getSettings()) as Record<string, unknown>) || {}
+      settings.aiFailoverOrder = next
+      await window.api.saveSettings(settings)
+      flash('Urutan failover disimpan — dipakai saat provider aktif gagal terminal')
+    } catch (e) {
+      flash(e instanceof Error ? e.message : 'Failover order save failed')
+    }
+  }
+
+  /** R1-2: drop the setting → main falls back to registration order. */
+  const resetFailoverOrder = async (): Promise<void> => {
+    try {
+      const settings = ((await window.api.getSettings()) as Record<string, unknown>) || {}
+      delete settings.aiFailoverOrder
+      await window.api.saveSettings(settings)
+      setFailoverOrder([])
+      flash('Urutan failover reset — pakai urutan registrasi default')
+    } catch (e) {
+      flash(e instanceof Error ? e.message : 'Failover order reset failed')
     }
   }
 
@@ -667,6 +710,13 @@ export const SettingsView: React.FC = () => {
       flash(e instanceof Error ? e.message : 'Clear failed')
     }
   }
+
+  // R1-2 failover order — derived candidate list for the AI section: every
+  // non-active cloud provider, honoring the saved aiFailoverOrder for the head.
+  const failoverCandidates = buildFailoverCandidates(providers, failoverOrder, activeProviderId)
+  const activeProviderName =
+    providers.find((p) => p.id === activeProviderId)?.name || activeProviderId
+  const ollamaRow = providers.find((p) => p.id === 'ollama')
 
   const nav: { id: Section; label: string }[] = [
     { id: 'ai', label: 'AI Providers' },
@@ -886,6 +936,164 @@ export const SettingsView: React.FC = () => {
                 </div>
               )
             })}
+            {/* R1-2 failover order — drag-reorder the backup provider chain */}
+            <div
+              style={{
+                background: 'var(--bg-surface)',
+                borderRadius: 8,
+                padding: 14,
+                marginTop: 16,
+                border: '1px solid var(--border-subtle)'
+              }}
+            >
+              <div style={{ fontWeight: 600, fontSize: 'var(--text-sm)', marginBottom: 6 }}>
+                Failover order
+              </div>
+              <p
+                style={{
+                  fontSize: 12,
+                  color: 'var(--text-muted)',
+                  marginBottom: 10,
+                  lineHeight: 1.45
+                }}
+              >
+                Saat provider aktif gagal terminal (401/403/429/5xx), stream otomatis pindah ke
+                kandidat di bawah sesuai urutan ini. Seret untuk mengurutkan, atau pakai ▲▼. Ollama
+                (lokal) tidak pernah jadi kandidat failover.
+              </p>
+              <div className="failover-list">
+                <div className="failover-row failover-row--active">
+                  <span className="failover-handle" aria-hidden>
+                    ★
+                  </span>
+                  <span className="truncate">{activeProviderName}</span>
+                  <span className="badge badge-primary">aktif saat ini</span>
+                </div>
+                {failoverCandidates.map((p, i) => (
+                  <div
+                    key={p.id}
+                    className={`failover-row${dragIdx === i ? ' dragging' : ''}`}
+                    draggable
+                    onDragStart={(e) => {
+                      dragIdxRef.current = i
+                      setDragIdx(i)
+                      e.dataTransfer.effectAllowed = 'move'
+                      e.dataTransfer.setData('text/plain', String(i))
+                    }}
+                    onDragOver={(e) => e.preventDefault()}
+                    onDrop={(e) => {
+                      e.preventDefault()
+                      const from = dragIdxRef.current
+                      dragIdxRef.current = null
+                      setDragIdx(null)
+                      if (from === null || from === i) return
+                      void saveFailoverOrder(
+                        moveInOrder(
+                          failoverCandidates.map((c) => c.id),
+                          from,
+                          i
+                        )
+                      )
+                    }}
+                    onDragEnd={() => {
+                      dragIdxRef.current = null
+                      setDragIdx(null)
+                    }}
+                  >
+                    <span className="failover-handle" aria-hidden>
+                      ⠿
+                    </span>
+                    <span className="truncate">{p.name}</span>
+                    {p.id === 'ollama'
+                      ? null
+                      : !p.configured && (
+                          <span
+                            style={{ fontSize: 11, color: 'var(--text-muted)' }}
+                            title="Belum dikonfigurasi — main-side melewati provider ini saat failover"
+                          >
+                            belum dikonfigurasi
+                          </span>
+                        )}
+                    <div style={{ display: 'flex', gap: 4, marginLeft: 'auto' }}>
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-sm"
+                        style={{ fontSize: 10, padding: '0 6px' }}
+                        aria-label={`Naikkan ${p.name} dalam urutan failover`}
+                        disabled={i === 0}
+                        onClick={() =>
+                          void saveFailoverOrder(
+                            moveInOrder(
+                              failoverCandidates.map((c) => c.id),
+                              i,
+                              i - 1
+                            )
+                          )
+                        }
+                      >
+                        ▲
+                      </button>
+                      <button
+                        type="button"
+                        className="btn btn-ghost btn-sm"
+                        style={{ fontSize: 10, padding: '0 6px' }}
+                        aria-label={`Turunkan ${p.name} dalam urutan failover`}
+                        disabled={i === failoverCandidates.length - 1}
+                        onClick={() =>
+                          void saveFailoverOrder(
+                            moveInOrder(
+                              failoverCandidates.map((c) => c.id),
+                              i,
+                              i + 1
+                            )
+                          )
+                        }
+                      >
+                        ▼
+                      </button>
+                    </div>
+                  </div>
+                ))}
+                {failoverCandidates.length === 0 && (
+                  <div style={{ fontSize: 12, color: 'var(--text-muted)', padding: '6px 2px' }}>
+                    Tidak ada kandidat cadangan — konfigurasi provider cloud lain untuk mengisi
+                    daftar failover.
+                  </div>
+                )}
+                {ollamaRow && ollamaRow.id !== activeProviderId && (
+                  <div
+                    className="failover-row failover-row--disabled"
+                    title="Ollama lokal tidak pernah jadi kandidat failover"
+                  >
+                    <span className="failover-handle" aria-hidden>
+                      ⠿
+                    </span>
+                    <span className="truncate">{ollamaRow.name}</span>
+                    <span style={{ fontSize: 11, color: 'var(--text-muted)', marginLeft: 'auto' }}>
+                      lokal — bukan kandidat
+                    </span>
+                  </div>
+                )}
+              </div>
+              <div style={{ display: 'flex', gap: 6, marginTop: 10, justifyContent: 'flex-end' }}>
+                <button
+                  type="button"
+                  className="btn btn-ghost btn-sm"
+                  disabled={failoverOrder.length === 0}
+                  onClick={() => void resetFailoverOrder()}
+                  title="Hapus pengaturan — main memakai urutan registrasi default"
+                >
+                  Reset ke urutan default
+                </button>
+                <button
+                  type="button"
+                  className="btn btn-primary btn-sm"
+                  onClick={() => void saveFailoverOrder(failoverCandidates.map((c) => c.id))}
+                >
+                  Simpan urutan
+                </button>
+              </div>
+            </div>
             <p style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 12, lineHeight: 1.5 }}>
               Alur: isi key → <b>Save</b> (simpan saja) → <b>Test</b> (ping API) → di Chat pilih
               provider, atau <b>Set default</b>. Save tidak lagi mengganti provider aktif chat.

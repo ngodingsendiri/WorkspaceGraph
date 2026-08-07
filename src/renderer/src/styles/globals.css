@@ -3862,6 +3862,58 @@ html:not([data-theme]) {
   background: var(--color-success);
 }
 
+/* R1-2 failover order — drag-reorder chain of backup providers */
+.failover-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.failover-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-panel);
+  border: 1px solid var(--border-subtle);
+  cursor: grab;
+  transition: background var(--duration-fast), border-color var(--duration-fast), transform var(--duration-fast), box-shadow var(--duration-fast);
+  font-size: var(--text-xs);
+}
+
+.failover-row:hover {
+  background: var(--bg-hover);
+  border-color: var(--border-default);
+}
+
+.failover-row.dragging {
+  opacity: 0.6;
+  border-style: dashed;
+  border-color: var(--color-primary);
+  transform: scale(1.01);
+  box-shadow: 0 4px 14px rgb(0 0 0 / 0.18);
+}
+
+.failover-row--active {
+  cursor: default;
+  background: var(--color-primary-subtle);
+  border-color: color-mix(in srgb, var(--color-primary) 30%, transparent);
+}
+
+.failover-row--disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.failover-handle {
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1;
+  user-select: none;
+  flex-shrink: 0;
+}
+
 /* Misc Utility */
 .divider {
   height: 1px;
