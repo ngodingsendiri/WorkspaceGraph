@@ -11,6 +11,7 @@ import {
 import {
   buildOpenAIMessages,
   accumulateToolCallDeltas,
+  deltaReasoning,
   finalizeToolCalls,
   MutableToolCall
 } from './openaiCompat'
@@ -151,8 +152,11 @@ export class OpenRouterProvider extends BaseProvider {
       for await (const chunk of stream) {
         const delta = chunk.choices[0]?.delta
         const text = delta?.content || ''
-        if (text) {
-          onChunk({ content: text, done: false, model })
+        // P2-4: DeepSeek/xAI reasoning models stream reasoning_content before
+        // the answer — surface it as a collapsible block in the UI
+        const reasoning = deltaReasoning(delta)
+        if (text || reasoning) {
+          onChunk({ content: text, done: false, model, ...(reasoning ? { reasoning } : {}) })
         }
         if (delta?.tool_calls) {
           accumulateToolCallDeltas(acc, delta.tool_calls)

@@ -252,10 +252,19 @@ export interface API {
       citations?: { title: string; path: string }[]
       proposals?: WriteProposal[]
       toolStatus?: string
+      toolRun?: {
+        runId: string
+        tool: string
+        status: 'running' | 'ok' | 'error'
+        detail?: string
+        round?: number
+      }
       round?: number
       error?: string
       tokensUsed?: number
       contextTokens?: number
+      contextSavedTokens?: number
+      reasoning?: string
       verifications?: { path: string; title: string; supported: boolean; score: number }[]
     }) => void,
     activeFilePath?: string,
@@ -265,7 +274,8 @@ export interface API {
   ) => string
   cancelAIStream: (requestId: string) => Promise<boolean>
   applyWriteProposal: (
-    proposalId: string
+    proposalId: string,
+    content?: string
   ) => Promise<{ ok: boolean; path?: string; error?: string }>
   rejectWriteProposal: (proposalId: string) => Promise<{ ok: boolean }>
   listWriteProposals: () => Promise<WriteProposal[]>

@@ -53,6 +53,7 @@ export type IconName =
   | 'psychology'
   | 'info'
   | 'sync'
+  | 'refresh'
   | 'split'
   | 'command'
   | 'people'
@@ -112,7 +113,8 @@ export const MATERIAL_ICON: Record<IconName, string> = {
   fitScreen: 'fit_screen',
   psychology: 'psychology',
   info: 'info',
-  sync: 'sync'
+  sync: 'sync',
+  refresh: 'refresh'
 }
 
 export interface IconProps {

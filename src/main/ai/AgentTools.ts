@@ -605,7 +605,10 @@ export async function executeTool(action: ToolAction): Promise<ToolResult> {
  * Apply a confirmed write proposal to disk.
  * Caller should re-sync graph/search after this.
  */
-export function applyProposal(id: string): { ok: boolean; path?: string; error?: string } {
+export function applyProposal(
+  id: string,
+  contentOverride?: string
+): { ok: boolean; path?: string; error?: string } {
   ensureProposalsLoaded()
   const p = proposals.get(id)
   if (!p) return { ok: false, error: 'Proposal not found' }
@@ -614,6 +617,15 @@ export function applyProposal(id: string): { ok: boolean; path?: string; error?:
   try {
     const root = workspaceEngine.getState().rootPath
     if (!root) return { ok: false, error: 'No workspace open' }
+
+    // P2-6: the diff preview dialog lets the user edit before applying — the
+    // edited content replaces the stored proposal content (still validated).
+    let content = p.content
+    if (contentOverride !== undefined) {
+      const v = validateMarkdownContent(contentOverride)
+      if (!v.ok) return { ok: false, error: v.error }
+      content = contentOverride
+    }
 
     const abs = path.resolve(p.absolutePath)
     // Same sandbox as resolvePath — reject sibling prefixes e.g. vault "Obs\Obs-evil"
@@ -627,7 +639,7 @@ export function applyProposal(id: string): { ok: boolean; path?: string; error?:
 
     const dir = path.dirname(abs)
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
-    workspaceEngine.writeFile(abs, p.content)
+    workspaceEngine.writeFile(abs, content)
     p.status = 'applied'
     // Applied is terminal — remove the persisted pending proposal so a restart
     // cannot resurrect it into the dock. Order matters: the note is written

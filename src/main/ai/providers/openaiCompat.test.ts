@@ -3,6 +3,7 @@ import type { AIRequest, AIMessage } from './BaseProvider'
 import {
   buildOpenAIMessages,
   accumulateToolCallDeltas,
+  deltaReasoning,
   finalizeToolCalls,
   MutableToolCall
 } from './openaiCompat'
@@ -106,6 +107,28 @@ describe('buildOpenAIMessages', () => {
     const msgs = buildOpenAIMessages(req)
     const parts = msgs[0].content as { type: string }[]
     expect(parts.map((p) => p.type)).toEqual(['image_url', 'image_url', 'text'])
+  })
+})
+
+describe('deltaReasoning (P2-4)', () => {
+  it('reads reasoning_content (xAI / DeepSeek compat)', () => {
+    expect(deltaReasoning({ reasoning_content: 'berpikir dulu' })).toBe('berpikir dulu')
+  })
+
+  it('reads the OpenAI o-series `reasoning` field', () => {
+    expect(deltaReasoning({ reasoning: 'think step by step' })).toBe('think step by step')
+  })
+
+  it('prefers reasoning_content over reasoning when both are present', () => {
+    expect(deltaReasoning({ reasoning_content: 'a', reasoning: 'b' })).toBe('a')
+  })
+
+  it('tolerates nulls and non-objects', () => {
+    expect(deltaReasoning({ reasoning_content: null })).toBe('')
+    expect(deltaReasoning({ reasoning: null })).toBe('')
+    expect(deltaReasoning(null)).toBe('')
+    expect(deltaReasoning(undefined)).toBe('')
+    expect(deltaReasoning('nope')).toBe('')
   })
 })
 

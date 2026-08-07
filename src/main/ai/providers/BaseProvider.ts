@@ -71,6 +71,9 @@ export interface AIStreamChunk {
   tokensUsed?: number
   /** Completed native tool calls (accumulated from stream deltas, final chunk). */
   toolCalls?: AIToolCall[]
+  /** Streaming chain-of-thought delta (P2-4): xAI/DeepSeek `reasoning_content`,
+   * OpenAI o-series `reasoning`. Rendered as a collapsible block in the UI. */
+  reasoning?: string
 }
 
 export interface ProviderCapabilities {

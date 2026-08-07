@@ -35,18 +35,107 @@ import {
 import { KERNEL_SYSTEM_PROMPT } from './WorkspaceMemory'
 import { verifyCitations, type CitationVerification } from './CitationVerifier'
 
+/**
+ * Structured per-tool lifecycle event (P1-1). One runId spans the whole
+ * invocation: a `running` event opens the run, then `ok` / `error` closes it.
+ * `detail` carries the result preview for the expandable pill in the chat UI.
+ */
+export interface ToolRunEvent {
+  /** Stable id for the invocation — the renderer matches updates on this. */
+  runId: string
+  tool: string
+  status: 'running' | 'ok' | 'error'
+  /** Short result preview (ok) or failure reason (error); absent while running. */
+  detail?: string
+  round?: number
+}
+
 export type StreamEvent = AIStreamChunk & {
   citations?: { title: string; path: string }[]
   proposals?: WriteProposal[]
   toolStatus?: string
+  /** Structured per-tool event for the collapsible tool-run trail (P1-1). */
+  toolRun?: ToolRunEvent
   round?: number
   /** Estimated tokens injected as workspace context (from ContextEngine). */
   contextTokens?: number
+  /** P1-4: tokens saved by sending the workspace context only in round 0 of a
+   * multi-round tool loop (context estimate × rounds beyond the first). */
+  contextSavedTokens?: number
   /** Post-generation grounding check: which citations the answer actually draws on. */
   verifications?: CitationVerification[]
 }
 
 const MAX_TOOL_ROUNDS = 4
+
+/** Hard per-invocation tool timeout — a stuck fs/search call must not freeze
+ * the whole tool loop (the round watchdog only guards BETWEEN rounds). */
+export const EXECUTE_TOOL_TIMEOUT_MS = 30_000
+
+/**
+ * Run one tool with a bounded lifetime. A hung tool resolves to an error
+ * result after EXECUTE_TOOL_TIMEOUT_MS so the loop continues with a visible
+ * failure instead of stalling forever.
+ */
+export async function executeToolWithTimeout(action: ToolAction): Promise<ToolResult> {
+  return new Promise<ToolResult>((resolve) => {
+    let settled = false
+    const timer = setTimeout(() => {
+      if (settled) return
+      settled = true
+      resolve({
+        ok: false,
+        tool: action.tool,
+        error: `Tool timeout (${EXECUTE_TOOL_TIMEOUT_MS / 1000}s)`
+      })
+    }, EXECUTE_TOOL_TIMEOUT_MS)
+    executeTool(action).then(
+      (r) => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        resolve(r)
+      },
+      (err: unknown) => {
+        if (settled) return
+        settled = true
+        clearTimeout(timer)
+        resolve({
+          ok: false,
+          tool: action.tool,
+          error: err instanceof Error ? err.message : String(err)
+        })
+      }
+    )
+  })
+}
+
+/** Monotonic run-id generator — each tool invocation gets a stable identity so
+ * the renderer can update a run in place instead of appending duplicates. */
+let toolRunSeq = 0
+function nextToolRunId(): string {
+  toolRunSeq += 1
+  return `tr${toolRunSeq}`
+}
+
+/** Truncate a tool result into a one-line preview for the expandable pill. */
+function toolResultDetail(r: ToolResult, max = 400): string | undefined {
+  if (!r.ok) return r.error || undefined
+  if (r.result === undefined || r.result === null) return undefined
+  let text: string
+  if (typeof r.result === 'string') {
+    text = r.result
+  } else {
+    try {
+      text = JSON.stringify(r.result)
+    } catch {
+      text = String(r.result)
+    }
+  }
+  text = text.trim().replace(/\s+/g, ' ')
+  if (!text) return undefined
+  return text.length > max ? `${text.slice(0, max)}…` : text
+}
 
 export class AIMiddleware {
   private providers: Map<string, BaseProvider> = new Map()
@@ -254,6 +343,9 @@ export class AIMiddleware {
     toolMode: 'native' | 'fence' | 'off'
   ): Promise<{
     systemPrompt: string
+    /** Round-0 system prompt WITHOUT the workspace context block — tool-loop
+     * rounds 1+ reuse this lean prompt (P1-4). */
+    leanSystemPrompt: string
     citations: { title: string; path: string }[]
     contextTokens?: number
   }> {
@@ -298,7 +390,18 @@ export class AIMiddleware {
       systemPrompt += '\n\n' + TOOLS_SYSTEM_PROMPT
     }
 
-    return { systemPrompt, citations, contextTokens }
+    // P1-4: lean variant for tool-loop rounds 1+ — kernel + overrides + fence
+    // protocol, WITHOUT the (large) workspace context block. The tool results
+    // already sitting in `messages` carry the material those rounds need, so
+    // re-sending ~3.5–4.6k tokens of context per round is wasted billing.
+    // Tradeoff: vault rules / AI-memory snippets are dropped too — acceptable
+    // because the model can re-read them via tools (read_note/search) if a
+    // later-round answer needs them.
+    let leanSystemPrompt = KERNEL_SYSTEM_PROMPT
+    if (request.systemPrompt) leanSystemPrompt += '\n\n' + request.systemPrompt
+    if (toolMode === 'fence') leanSystemPrompt += '\n\n' + TOOLS_SYSTEM_PROMPT
+
+    return { systemPrompt, leanSystemPrompt, citations, contextTokens }
   }
 
   /** @deprecated Use buildSystemPromptAsync in streaming path */
@@ -463,13 +566,8 @@ export class AIMiddleware {
       // Don't force-switch (user may have paid tier) — just note in first chunk if fails
     }
 
-    const { systemPrompt, citations, contextTokens } = await this.buildSystemPromptAsync(
-      request,
-      activeFilePath,
-      useContext,
-      agentRole,
-      toolMode
-    )
+    const { systemPrompt, leanSystemPrompt, citations, contextTokens } =
+      await this.buildSystemPromptAsync(request, activeFilePath, useContext, agentRole, toolMode)
 
     let messages: AIMessage[] = [...request.messages]
     if (messages.length === 0) {
@@ -514,6 +612,24 @@ export class AIMiddleware {
     const started = Date.now()
     const TIMEOUT_MS = 180_000
 
+    // P1-runtime token accounting: OpenAI-compat providers (Grok/OpenAI/OpenRouter)
+    // report usage.total_tokens on their final chunk; Claude/Gemini/Ollama report
+    // nothing, so estimate from streamed chars (~4 chars/token) and attach the
+    // estimate to the terminal done chunk — the UI budget bar is never stuck at 0.
+    // NOTE: the estimate covers provider OUTPUT only (middleware-injected text
+    // like proposal notices is intentionally excluded) — don't "fix" that into
+    // double counting when a provider starts reporting real usage.
+    let reportedTokens = false
+    let estimatedTokens = 0
+
+    // P1-4: count provider calls actually made so the terminal chunk can report
+    // how much context billing was avoided (context estimate × rounds − 1).
+    let sentRounds = 0
+    const savedContextTokens = (): number | undefined =>
+      contextTokens !== undefined && sentRounds > 1
+        ? Math.round(contextTokens * (sentRounds - 1))
+        : undefined
+
     for (let round = 0; round < (enableTools ? MAX_TOOL_ROUNDS : 1); round++) {
       if (requestId && this.isCancelled(requestId)) {
         onChunk({
@@ -541,7 +657,10 @@ export class AIMiddleware {
       const req: AIRequest = {
         ...request,
         messages,
-        systemPrompt,
+        // P1-4: workspace context only in round 0 — rounds 1+ reuse the lean
+        // prompt (tool results carry the material; the full context would be
+        // re-billed on every continuation of a multi-round stream).
+        systemPrompt: round === 0 ? systemPrompt : leanSystemPrompt,
         stream: true
       }
       if (nativeTools) {
@@ -581,10 +700,13 @@ export class AIMiddleware {
           resolve()
         }, remainingMs)
       })
+      sentRounds++
       const streamPromise = provider.streamMessage(
         req,
         (chunk) => {
           if (timedOut || (requestId && this.isCancelled(requestId))) return
+          if (chunk.tokensUsed !== undefined && chunk.tokensUsed > 0) reportedTokens = true
+          if (chunk.content) estimatedTokens += Math.ceil(chunk.content.length / 4)
           if (chunk.error) streamError = chunk.error
           fullText += chunk.content || ''
           lastFullText += chunk.content || ''
@@ -607,7 +729,10 @@ export class AIMiddleware {
             round,
             // Surface context token estimate once per stream (first chunk).
             contextTokens: contextMetaSent ? undefined : contextTokens,
-            tokensUsed: chunk.tokensUsed
+            tokensUsed: chunk.tokensUsed,
+            // P2-4: reasoning deltas ride through untouched (never appended to
+            // the answer text / citation check — it's chain-of-thought, not output).
+            reasoning: chunk.reasoning
           })
           contextMetaSent = true
         },
@@ -640,7 +765,9 @@ export class AIMiddleware {
           done: true,
           error: streamError,
           citations: lastCitations,
-          proposals: allProposals
+          proposals: allProposals,
+          tokensUsed: reportedTokens ? undefined : estimatedTokens,
+          contextSavedTokens: savedContextTokens()
         })
         return
       }
@@ -651,7 +778,9 @@ export class AIMiddleware {
           done: true,
           citations: lastCitations,
           proposals: allProposals,
-          verifications: getVerifications()
+          verifications: getVerifications(),
+          tokensUsed: reportedTokens ? undefined : estimatedTokens,
+          contextSavedTokens: savedContextTokens()
         })
         return
       }
@@ -667,7 +796,9 @@ export class AIMiddleware {
           done: true,
           citations: lastCitations,
           proposals: allProposals,
-          verifications: getVerifications()
+          verifications: getVerifications(),
+          tokensUsed: reportedTokens ? undefined : estimatedTokens,
+          contextSavedTokens: savedContextTokens()
         })
         return
       }
@@ -681,7 +812,13 @@ export class AIMiddleware {
           content: `\n\n*(unknown tools skipped: ${unknown.map((u) => u.action.tool).join(', ')})*\n`,
           done: false,
           toolStatus: `Skipped ${unknown.length} unknown tool(s)`,
-          round
+          toolRun: {
+            runId: nextToolRunId(),
+            tool: `? ${unknown.map((u) => u.action.tool).join(', ')}`,
+            status: 'error',
+            detail: 'Tool tidak dikenal — dilewati.',
+            round
+          }
         })
       }
       if (known.length === 0) {
@@ -690,7 +827,9 @@ export class AIMiddleware {
           done: true,
           citations: lastCitations,
           proposals: allProposals,
-          verifications: getVerifications()
+          verifications: getVerifications(),
+          tokensUsed: reportedTokens ? undefined : estimatedTokens,
+          contextSavedTokens: savedContextTokens()
         })
         return
       }
@@ -703,13 +842,15 @@ export class AIMiddleware {
 
       // Reads first (gather facts), then write proposals
       for (const p of readPending) {
+        const runId = nextToolRunId()
         onChunk({
           content: '',
           done: false,
           toolStatus: `▸ ${p.action.tool}`,
+          toolRun: { runId, tool: p.action.tool, status: 'running', round },
           round
         })
-        const r = await executeTool(p.action)
+        const r = await executeToolWithTimeout(p.action)
         results.push(r)
         if (p.callId) resultByCall.set(p.callId, r)
         if (!r.ok) {
@@ -717,6 +858,20 @@ export class AIMiddleware {
             content: `\n\n*(tool ${p.action.tool} failed: ${r.error})*\n`,
             done: false,
             toolStatus: `✗ ${p.action.tool}`,
+            toolRun: { runId, tool: p.action.tool, status: 'error', detail: r.error, round },
+            round
+          })
+        } else {
+          onChunk({
+            content: '',
+            done: false,
+            toolRun: {
+              runId,
+              tool: p.action.tool,
+              status: 'ok',
+              detail: toolResultDetail(r),
+              round
+            },
             round
           })
         }
@@ -738,13 +893,15 @@ export class AIMiddleware {
       }
 
       for (const p of writePending) {
+        const runId = nextToolRunId()
         onChunk({
           content: '',
           done: false,
           toolStatus: `▸ propose ${p.action.tool}`,
+          toolRun: { runId, tool: p.action.tool, status: 'running', round },
           round
         })
-        const r = await executeTool(p.action)
+        const r = await executeToolWithTimeout(p.action)
         results.push(r)
         if (p.callId) resultByCall.set(p.callId, r)
         if (r.proposalId) {
@@ -756,6 +913,13 @@ export class AIMiddleware {
               done: false,
               proposals: [prop],
               toolStatus: `proposal ${prop.relativePath}`,
+              toolRun: {
+                runId,
+                tool: p.action.tool,
+                status: 'ok',
+                detail: `Proposal ${prop.mode} → ${prop.relativePath} — Apply di panel.`,
+                round
+              },
               round
             })
           }
@@ -764,6 +928,13 @@ export class AIMiddleware {
             content: `\n\n*(write tool failed: ${r.error})*\n`,
             done: false,
             toolStatus: `✗ ${p.action.tool}`,
+            toolRun: {
+              runId,
+              tool: p.action.tool,
+              status: 'error',
+              detail: r.error,
+              round
+            },
             round
           })
         }
@@ -776,7 +947,9 @@ export class AIMiddleware {
           done: true,
           citations: lastCitations,
           proposals: allProposals,
-          verifications: getVerifications()
+          verifications: getVerifications(),
+          tokensUsed: reportedTokens ? undefined : estimatedTokens,
+          contextSavedTokens: savedContextTokens()
         })
         return
       }
@@ -824,12 +997,22 @@ export class AIMiddleware {
       })
     }
 
+    // P1-4: report the measured context savings for the whole stream (debug
+    // builds can confirm the lean-prompt win without reading chunk fields).
+    const savedContext = savedContextTokens()
+    if (process.env.WG_DEBUG_CONTEXT === '1' && savedContext !== undefined) {
+      console.log(
+        `[AI context] P1-4: context ~${contextTokens} tok × ${sentRounds} rounds → lean prompt saves ~${savedContext} tok`
+      )
+    }
     onChunk({
       content: '\n\n*(max tool rounds reached)*\n',
       done: true,
       citations: lastCitations,
       proposals: allProposals,
-      verifications: getVerifications()
+      verifications: getVerifications(),
+      tokensUsed: reportedTokens ? undefined : estimatedTokens,
+      contextSavedTokens: savedContextTokens()
     })
   }
 }

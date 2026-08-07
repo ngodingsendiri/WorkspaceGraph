@@ -5,6 +5,7 @@
  */
 import React, { useEffect, useMemo, useRef, useState } from 'react'
 import { useWorkspaceStore } from '../../store/workspaceStore'
+import { SLASH_COMMANDS, requestComposerCommand } from '../chat/chatSlashCommands'
 import { Icon, type IconName } from './Icons'
 import { toast } from './Toast'
 
@@ -150,6 +151,26 @@ const VIEW_ACTIONS: PaletteAction[] = [
   }
 ]
 
+/** P2-5: chat slash commands surfaced in the global palette. Selecting one
+ * opens the AI panel (it unmounts while hidden — the bridge stashes the
+ * request so the composer still fills once the panel mounts) and hands the
+ * command's prompt template to the composer. */
+const CHAT_ACTIONS: PaletteAction[] = SLASH_COMMANDS.map((c) => ({
+  id: `chat-${c.name.slice(1)}`,
+  group: 'Chat',
+  title: `${c.name} — ${c.label}`,
+  keywords: `chat ai kernel perintah prompt ${c.name.slice(1)}`,
+  icon: 'command',
+  run: () => {
+    const st = useWorkspaceStore.getState()
+    // No vault → the chat panel can't mount, so a stashed request would linger
+    // and fill the composer later, long after the user forgot about it.
+    if (!st.isOpen) return
+    if (!st.showAIChat) st.toggleAIChat()
+    requestComposerCommand(c.name)
+  }
+}))
+
 const SHORTCUT_ROWS: { group: string; rows: [string, string][] }[] = [
   {
     group: 'Umum',
@@ -240,7 +261,10 @@ export const CommandPalette: React.FC<{
     return () => window.clearTimeout(t)
   }, [isOpen, initialMode])
 
-  const actions = useMemo(() => [...VIEW_ACTIONS, ...pluginActions], [pluginActions])
+  const actions = useMemo(
+    () => [...VIEW_ACTIONS, ...CHAT_ACTIONS, ...pluginActions],
+    [pluginActions]
+  )
 
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()

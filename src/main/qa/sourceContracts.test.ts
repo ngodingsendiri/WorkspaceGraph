@@ -287,6 +287,147 @@ describe('Renderer wiring', () => {
     expect(hasAny(panel, 'cancelStream', 'Cancel')).toBe(true)
     expect(has(panel, 'Pelajari workspace', 'chat-panel--kernel', 'learnWorkspace')).toBe(true)
   })
+  it('P1-1 per-tool streaming trail wired end-to-end', () => {
+    const mid = read('src/main/ai/AIMiddleware.ts')
+    expect(has(mid, 'ToolRunEvent', 'nextToolRunId', "status: 'running'")).toBe(true)
+    const store = read('src/renderer/src/store/chatStore.ts')
+    expect(has(store, 'toolRuns', 'runId', 'interrupted')).toBe(true)
+    const panel = read('src/renderer/src/components/chat/ChatPanel.tsx')
+    expect(has(panel, 'ToolRunList', 'chat-toolrun')).toBe(true)
+    expect(read('src/renderer/src/styles/globals.css').includes('chat-toolruns')).toBe(true)
+  })
+  it('P1-2 cite-on-hover preview wired end-to-end', () => {
+    const tip = read('src/renderer/src/components/chat/chatCitationTip.ts')
+    expect(has(tip, 'makeCitePreviewCache', 'TooltipPreviewCache', 'citeTipPos')).toBe(true)
+    const panel = read('src/renderer/src/components/chat/ChatPanel.tsx')
+    expect(has(panel, 'showCiteTip', 'chat-cite-tooltip', 'createPortal')).toBe(true)
+    expect(read('src/renderer/src/styles/globals.css').includes('chat-cite-tooltip')).toBe(true)
+  })
+  it('P1-3 inline model picker wired end-to-end', () => {
+    const picker = read('src/renderer/src/components/chat/chatModelPicker.ts')
+    expect(has(picker, 'AUTO_MODEL', 'resolveAutoModel', 'buildModelGroups')).toBe(true)
+    const store = read('src/renderer/src/store/chatStore.ts')
+    expect(has(store, "selectedModelId: 'auto'", 'isAutoModel')).toBe(true)
+    const panel = read('src/renderer/src/components/chat/ChatPanel.tsx')
+    expect(has(panel, 'chat-model-chip', 'chat-model-picker', 'pickAuto')).toBe(true)
+    expect(read('src/renderer/src/styles/globals.css').includes('chat-model-chip')).toBe(true)
+  })
+  it('P2-1 token budget bar wired end-to-end', () => {
+    const budget = read('src/renderer/src/components/chat/chatTokenBudget.ts')
+    expect(has(budget, 'contextBudgetForModel', 'sessionTokenStats', 'formatK')).toBe(true)
+    const panel = read('src/renderer/src/components/chat/ChatPanel.tsx')
+    expect(has(panel, 'chat-budget', 'outputTokens', 'budgetFraction')).toBe(true)
+    expect(read('src/renderer/src/styles/globals.css').includes('chat-budget-fill')).toBe(true)
+  })
+  it('P2-2 tool summary in the status line wired', () => {
+    const sum = read('src/renderer/src/components/chat/chatToolSummary.ts')
+    expect(has(sum, 'summarizeToolRuns', 'toolSummaryLabel', 'tools:')).toBe(true)
+    const panel = read('src/renderer/src/components/chat/ChatPanel.tsx')
+    expect(has(panel, 'toolSummaryLabel', 'toolSummaryText')).toBe(true)
+  })
+  it('P2-3 composer slash commands wired', () => {
+    const cmds = read('src/renderer/src/components/chat/chatSlashCommands.ts')
+    expect(has(cmds, 'SLASH_COMMANDS', 'filterSlashCommands', "'/compact'", "'/plan'")).toBe(true)
+    const panel = read('src/renderer/src/components/chat/ChatPanel.tsx')
+    expect(has(panel, 'slashOpen', 'chat-slash-picker', 'selectSlash')).toBe(true)
+    expect(read('src/renderer/src/styles/globals.css').includes('chat-slash-picker')).toBe(true)
+  })
+  it('P2-6 proposal diff preview reuses MergeDialog + apply content override', () => {
+    const dialog = read('src/renderer/src/components/editor/MergeDialog.tsx')
+    // MergeDialog gained the proposal variant (Disk/Proposal/Diff tabs)
+    expect(has(dialog, "variant?: 'conflict' | 'proposal'", 'diffLines', 'diffStats')).toBe(true)
+    expect(has(dialog, 'Proposal (baru)', 'Sekarang (disk)', 'Terapkan proposal')).toBe(true)
+    const panel = read('src/renderer/src/components/chat/ChatPanel.tsx')
+    expect(has(panel, "from '../editor/MergeDialog'", 'diffTarget', 'openDiff')).toBe(true)
+    expect(has(panel, 'variant="proposal"', 'Diff')).toBe(true)
+    const store = read('src/renderer/src/store/chatStore.ts')
+    expect(
+      has(store, 'applyProposal: (', 'content?: string)', 'applyWriteProposal(id, content)')
+    ).toBe(true)
+    // Content override travels main → disk (edited proposal applies as-is)
+    const tools = read('src/main/ai/AgentTools.ts')
+    expect(has(tools, 'contentOverride?: string', 'content = contentOverride')).toBe(true)
+    const ipc = read('src/main/ipc/handlers/ai.ts')
+    expect(has(ipc, '(_, proposalId: string, content?: string)')).toBe(true)
+    expect(read('src/preload/index.ts').includes('proposalId, content')).toBe(true)
+    expect(read('src/renderer/src/styles/globals.css').includes('merge-diff')).toBe(true)
+  })
+  it('P3-1 follow-up composer mode wired end-to-end', () => {
+    const helper = read('src/renderer/src/components/chat/chatFollowUp.ts')
+    expect(has(helper, 'followUpPreamble', 'followUpChipLabel', 'Konteks follow-up')).toBe(true)
+    const store = read('src/renderer/src/store/chatStore.ts')
+    expect(has(store, 'followUpMessageId', 'setFollowUp', 'followUpPreamble(src?.proposals)')).toBe(
+      true
+    )
+    expect(has(store, 'followUpMessageId: null')).toBe(true)
+    const panel = read('src/renderer/src/components/chat/ChatPanel.tsx')
+    expect(
+      has(panel, 'startFollowUp', 'Follow-up', 'chat-followup-chip', 'followUpChipLabel')
+    ).toBe(true)
+    expect(read('src/renderer/src/styles/globals.css').includes('chat-followup-chip')).toBe(true)
+  })
+  it('P3-2 regenerate re-arms follow-up context from the stamped message', () => {
+    const store = read('src/renderer/src/store/chatStore.ts')
+    // User messages stamp the follow-up source on send
+    expect(has(store, 'followUpFrom?: string', 'followUpFrom: followUpMessageId')).toBe(true)
+    // Retry/Regenerate re-arms from the stamped source before re-sending
+    expect(has(store, 'followUpMessageId: lastUser.followUpFrom ?? null')).toBe(true)
+    // Persisted so a loaded session still regenerates with context — proposals
+    // included, since the preamble + Follow-up button read them off the message
+    expect(has(store, 'followUpFrom: m.followUpFrom', 'proposals: m.proposals')).toBe(true)
+  })
+  it('P2-4 reasoning streaming wired end-to-end', () => {
+    const compat = read('src/main/ai/providers/openaiCompat.ts')
+    // Shared delta extractor — both field names, no per-provider drift
+    expect(has(compat, 'export function deltaReasoning', 'reasoning_content')).toBe(true)
+    const base = read('src/main/ai/providers/BaseProvider.ts')
+    expect(has(base, 'reasoning?: string')).toBe(true)
+    // All three OpenAI-compat providers capture it (never just one)
+    for (const p of ['Grok', 'OpenAI', 'OpenRouter']) {
+      expect(read(`src/main/ai/providers/${p}Provider.ts`).includes('deltaReasoning(delta)')).toBe(
+        true
+      )
+    }
+    // Middleware passes it through untouched; store accumulates + persists
+    expect(read('src/main/ai/AIMiddleware.ts').includes('reasoning: chunk.reasoning')).toBe(true)
+    const store = read('src/renderer/src/store/chatStore.ts')
+    expect(
+      has(store, "(m.reasoning || '') + (chunk.reasoning || '')", 'reasoning: m.reasoning')
+    ).toBe(true)
+    // Renderer: collapsible block before the answer + CSS
+    const panel = read('src/renderer/src/components/chat/ChatPanel.tsx')
+    expect(has(panel, 'ReasoningBlock', 'chat-reasoning', 'Berpikir')).toBe(true)
+    expect(read('src/renderer/src/styles/globals.css').includes('chat-reasoning')).toBe(true)
+  })
+  it('P2-7 proposal dock syncs to the loaded chat + vault reopen', () => {
+    const store = read('src/renderer/src/store/chatStore.ts')
+    // loadChat drops the old session's dock, then restores from loaded messages
+    // merged with disk-pending (applied/rejected filtered out)
+    expect(has(store, 'pendingProposals: []', 'await get().refreshProposals()')).toBe(true)
+    expect(has(store, 'flatMap((m) => m.proposals || [])')).toBe(true)
+    expect(has(store, "p.status === 'pending' || !p.status")).toBe(true)
+    // ChatPanel re-hydrates the dock whenever the vault changes (restart flow)
+    const panel = read('src/renderer/src/components/chat/ChatPanel.tsx')
+    expect(has(panel, 's.rootPath', 'void refreshProposals()')).toBe(true)
+  })
+  it('P2-5 slash commands surface in the global CommandPalette', () => {
+    const cmds = read('src/renderer/src/components/chat/chatSlashCommands.ts')
+    expect(
+      has(
+        cmds,
+        'requestComposerCommand',
+        'consumeComposerCommand',
+        'findSlashCommand',
+        "'wg:composer-command'"
+      )
+    ).toBe(true)
+    const palette = read('src/renderer/src/components/ui/CommandPalette.tsx')
+    expect(
+      has(palette, "from '../chat/chatSlashCommands'", 'requestComposerCommand', "group: 'Chat'")
+    ).toBe(true)
+    const panel = read('src/renderer/src/components/chat/ChatPanel.tsx')
+    expect(has(panel, 'wg:composer-command', 'consumeComposerCommand', 'fillComposer')).toBe(true)
+  })
   it('kernel status CSS + store learnWorkspace', () => {
     const css = read('src/renderer/src/styles/globals.css')
     expect(css.includes('chat-kernel-status')).toBe(true)
@@ -896,6 +1037,37 @@ describe('AI system contracts', () => {
     expect(hasAny(gem, 'gemini-2.0-flash', 'flash')).toBe(true)
     expect(hasAny(gem, '429', 'RESOURCE_EXHAUSTED')).toBe(true)
   })
+  it('P1-runtime: Gemini abort signal + per-tool timeout + token fallback', () => {
+    const gem = read('src/main/ai/providers/GeminiProvider.ts')
+    // Cancel/watchdog must reach the SDK — abortSignal rides in the config
+    expect(has(gem, 'abortSignal: signal', 'generateContentStream')).toBe(true)
+    const mid = read('src/main/ai/AIMiddleware.ts')
+    // Per-invocation tool timeout guards the loop (watchdog only runs BETWEEN rounds)
+    expect(has(mid, 'EXECUTE_TOOL_TIMEOUT_MS', 'executeToolWithTimeout')).toBe(true)
+    expect(has(mid, 'await executeToolWithTimeout(p.action)')).toBe(true)
+    // Claude/Gemini/Ollama don't report usage → char-based estimate on terminal chunk
+    expect(has(mid, 'reportedTokens', 'estimatedTokens')).toBe(true)
+    expect(has(mid, 'tokensUsed: reportedTokens ? undefined : estimatedTokens')).toBe(true)
+  })
+  it('P1-4: workspace context only in round 0 + measured savings end-to-end', () => {
+    const mid = read('src/main/ai/AIMiddleware.ts')
+    // Lean prompt for rounds 1+ (kernel/fence kept, context block dropped)
+    expect(
+      has(mid, 'leanSystemPrompt', 'systemPrompt: round === 0 ? systemPrompt : leanSystemPrompt')
+    ).toBe(true)
+    // Provider-call counter + savings reporter on every terminal chunk
+    expect(
+      has(mid, 'sentRounds', 'savedContextTokens', 'contextSavedTokens: savedContextTokens()')
+    ).toBe(true)
+    // The measurement travels: chunk → store message → chat UI
+    const store = read('src/renderer/src/store/chatStore.ts')
+    expect(has(store, 'contextSavedTokens')).toBe(true)
+    const panel = read('src/renderer/src/components/chat/ChatPanel.tsx')
+    expect(has(panel, 'hemat ~', 'savedTokens')).toBe(true)
+    expect(
+      read('src/renderer/src/components/chat/chatTokenBudget.ts').includes('savedTokens')
+    ).toBe(true)
+  })
   it('Ollama localhost + no key', () => {
     const ollama = read('src/main/ai/providers/OllamaProvider.ts')
     expect(ollama.includes('11434')).toBe(true)
@@ -966,6 +1138,19 @@ describe('AI system contracts', () => {
     // Store: sendMessage accepts images and persists them with the chat
     expect(has(store, 'sendMessage: (text: string, activeFilePath?: string, images?:')).toBe(true)
     expect(has(store, 'images: m.images')).toBe(true)
+  })
+  it('P-C1 regenerate/rephrase per message wired in chat UI', () => {
+    const store = read('src/renderer/src/store/chatStore.ts')
+    const panel = read('src/renderer/src/components/chat/ChatPanel.tsx')
+    // Store: rephrase truncates at the target assistant message then re-sends
+    expect(has(store, 'rephraseMessage: async (msgId: string, activeFilePath?: string)')).toBe(true)
+    expect(
+      has(store, "m.id === msgId && m.role === 'assistant'", 'messages: msgs.slice(0, idx)')
+    ).toBe(true)
+    // Panel: Regenerate on the last assistant message, Rephrase on any assistant msg
+    expect(has(panel, 'handleRetry', 'retryLastMessage(activeTab?.path)')).toBe(true)
+    expect(has(panel, 'handleRephrase', 'rephraseMessage(msg.id, activeTab?.path)')).toBe(true)
+    expect(has(panel, 'Regenerate', 'Rephrase', 'refresh')).toBe(true)
   })
   it('AgentTools fences + tools + AI Memory mention', () => {
     const tools = read('src/main/ai/AgentTools.ts')

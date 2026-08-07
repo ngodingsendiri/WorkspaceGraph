@@ -169,10 +169,13 @@ export class GeminiProvider extends BaseProvider {
     if (request.maxTokens) config.maxOutputTokens = request.maxTokens
 
     const runStream = async (useModel: string): Promise<void> => {
+      // P1-runtime: forward the middleware AbortSignal into the SDK call so a
+      // Cancel / watchdog actually kills the HTTP request instead of leaking it
+      // until the OS timeout (SDK: GenerateContentConfig.abortSignal).
       const responseStream = await client.models.generateContentStream({
         model: useModel,
         contents,
-        config
+        config: signal ? { ...config, abortSignal: signal } : config
       })
       for await (const chunk of responseStream) {
         if (signal?.aborted) break

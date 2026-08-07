@@ -220,8 +220,9 @@ export function registerAIHandlers(): void {
     return true
   })
 
-  ipcMain.handle('ai:applyProposal', async (_, proposalId: string) => {
-    const result = applyProposal(proposalId)
+  ipcMain.handle('ai:applyProposal', async (_, proposalId: string, content?: string) => {
+    // P2-6: optional edited content from the diff preview dialog
+    const result = applyProposal(proposalId, content)
     if (result.ok && result.path) {
       const state = workspaceEngine.getState()
       if (state.rootPath) {

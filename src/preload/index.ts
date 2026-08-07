@@ -13,6 +13,13 @@ type AiStreamChunkPayload = {
   citations?: { title: string; path: string }[]
   proposals?: unknown[]
   toolStatus?: string
+  toolRun?: {
+    runId: string
+    tool: string
+    status: 'running' | 'ok' | 'error'
+    detail?: string
+    round?: number
+  }
   round?: number
   error?: string
   tokensUsed?: number
@@ -196,7 +203,8 @@ const api = {
     cleanupStream(requestId)
     return ipcRenderer.invoke('ai:cancelStream', requestId)
   },
-  applyWriteProposal: (proposalId: string) => ipcRenderer.invoke('ai:applyProposal', proposalId),
+  applyWriteProposal: (proposalId: string, content?: string) =>
+    ipcRenderer.invoke('ai:applyProposal', proposalId, content),
   rejectWriteProposal: (proposalId: string) => ipcRenderer.invoke('ai:rejectProposal', proposalId),
   listWriteProposals: () => ipcRenderer.invoke('ai:listProposals'),
   getWriteProposal: (proposalId: string) => ipcRenderer.invoke('ai:getProposal', proposalId),

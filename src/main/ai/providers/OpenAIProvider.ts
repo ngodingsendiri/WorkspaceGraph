@@ -11,6 +11,7 @@ import {
 import {
   buildOpenAIMessages,
   accumulateToolCallDeltas,
+  deltaReasoning,
   finalizeToolCalls,
   MutableToolCall
 } from './openaiCompat'
@@ -138,8 +139,11 @@ export class OpenAIProvider extends BaseProvider {
       for await (const chunk of stream) {
         const delta = chunk.choices[0]?.delta
         const text = delta?.content || ''
-        if (text) {
-          onChunk({ content: text, done: false, model })
+        // P2-4: o-series reasoning rides `delta.reasoning` (reasoning_content on
+        // some compat servers) — surface it before the content arrives
+        const reasoning = deltaReasoning(delta)
+        if (text || reasoning) {
+          onChunk({ content: text, done: false, model, ...(reasoning ? { reasoning } : {}) })
         }
         if (delta?.tool_calls) {
           accumulateToolCallDeltas(acc, delta.tool_calls)

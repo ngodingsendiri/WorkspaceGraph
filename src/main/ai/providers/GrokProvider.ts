@@ -19,7 +19,12 @@ import {
   ModelInfo,
   ProviderCapabilities
 } from './BaseProvider'
-import { accumulateToolCallDeltas, finalizeToolCalls, MutableToolCall } from './openaiCompat'
+import {
+  accumulateToolCallDeltas,
+  deltaReasoning,
+  finalizeToolCalls,
+  MutableToolCall
+} from './openaiCompat'
 
 export type GrokBackend = 'chat' | 'responses'
 
@@ -335,7 +340,11 @@ export class GrokProvider extends BaseProvider {
         if (signal?.aborted) return
         const delta = chunk.choices[0]?.delta
         const text = delta?.content || ''
-        if (text) onChunk({ content: text, done: false, model })
+        // P2-4: Grok 3 reasoning emits reasoning_content deltas before content
+        const reasoning = deltaReasoning(delta)
+        if (text || reasoning) {
+          onChunk({ content: text, done: false, model, ...(reasoning ? { reasoning } : {}) })
+        }
         if (delta?.tool_calls) {
           accumulateToolCallDeltas(acc, delta.tool_calls)
         }

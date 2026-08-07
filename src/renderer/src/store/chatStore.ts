@@ -1,4 +1,6 @@
 import { create } from 'zustand'
+import { AUTO_MODEL, isAutoModel } from '../components/chat/chatModelPicker'
+import { followUpPreamble } from '../components/chat/chatFollowUp'
 
 export interface CitationItem {
   title: string
@@ -32,6 +34,20 @@ export interface WriteProposalItem {
   createdAt: string
 }
 
+/**
+ * One tool invocation in the assistant message's tool trail (P1-1).
+ * `running` opens the run; `ok` / `error` closes it. `detail` is the result
+ * preview shown when the pill is expanded. A run stuck on `running` when the
+ * stream ends (abort/timeout) is closed as `error` with detail 'interrupted'.
+ */
+export interface ToolRun {
+  runId: string
+  tool: string
+  status: 'running' | 'ok' | 'error'
+  detail?: string
+  round?: number
+}
+
 export interface ChatMessage {
   id: string
   role: 'user' | 'assistant' | 'system'
@@ -41,12 +57,23 @@ export interface ChatMessage {
   proposals?: WriteProposalItem[]
   images?: ImageAttachment[]
   toolStatus?: string
+  /** Structured per-tool trail — collapsible pills in the bubble (P1-1). */
+  toolRuns?: ToolRun[]
   /** Total tokens used by this completion (provider-reported, streaming). */
   tokensUsed?: number
   /** Estimated tokens injected as workspace context for this reply. */
   contextTokens?: number
+  /** P1-4: tokens saved by sending the workspace context only in round 0 of a
+   * multi-round tool loop (context estimate × rounds beyond the first). */
+  contextSavedTokens?: number
+  /** P2-4: streaming chain-of-thought from reasoning models, shown as a
+   * collapsible "Berpikir" block (never part of the answer content). */
+  reasoning?: string
   /** Per-citation grounding check emitted with the final done chunk. */
   verifications?: CitationVerification[]
+  /** P3-2: this user message was a follow-up — id of the assistant message
+   * whose proposals seeded its prompt (persisted so Regenerate re-arms). */
+  followUpFrom?: string
 }
 
 export interface ProviderItem {
@@ -74,6 +101,9 @@ export interface ChatStore {
   conversationId: string | null
   activeStreamId: string | null
   lastToolStatus: string
+  /** P3-1: follow-up mode — source assistant message whose proposals should
+   * seed the next prompt (consumed by sendMessage, cleared on session reset). */
+  followUpMessageId: string | null
 
   fetchProviders: () => Promise<void>
   setActiveProvider: (providerId: string) => Promise<void>
@@ -86,14 +116,21 @@ export interface ChatStore {
   clearHistory: () => void
   /** Hydrate the proposal dock from persisted pending proposals (restart-safe). */
   refreshProposals: () => Promise<void>
-  applyProposal: (id: string) => Promise<{ ok: boolean; error?: string; path?: string }>
+  applyProposal: (
+    id: string,
+    content?: string
+  ) => Promise<{ ok: boolean; error?: string; path?: string }>
   rejectProposal: (id: string) => Promise<void>
   saveCurrentChat: () => Promise<void>
   loadChat: (id: string) => Promise<void>
   /** Delete a saved conversation file (keeps current session untouched unless same id). */
   deleteChat: (id: string) => Promise<{ ok: boolean; error?: string }>
+  /** P3-1: arm (or cancel) composer follow-up mode for an assistant message. */
+  setFollowUp: (messageId: string | null) => void
   /** Re-send the last user message after an error (retry). */
   retryLastMessage: (activeFilePath?: string) => Promise<void>
+  /** Rewrite a completed assistant message in place (regenerate-style). */
+  rephraseMessage: (msgId: string, activeFilePath?: string) => Promise<void>
   ensureConversationId: () => Promise<string>
   /** Scaffold AI Memory/ then run bootstrap agent prompt */
   learnWorkspace: (
@@ -110,6 +147,17 @@ function mergeProposals(
   for (const p of existing || []) map.set(p.id, p)
   for (const p of incoming || []) map.set(p.id, p)
   return Array.from(map.values())
+}
+
+/**
+ * P1-1: a stream that ends (done chunk / user cancel) must never leave a tool
+ * pill stuck on the live spinner — close any run still `running` as interrupted.
+ */
+function closeOutRunningRuns(toolRuns: ToolRun[] | undefined): ToolRun[] | undefined {
+  if (!toolRuns?.some((r) => r.status === 'running')) return toolRuns
+  return toolRuns.map((r) =>
+    r.status === 'running' ? { ...r, status: 'error', detail: r.detail || 'interrupted' } : r
+  )
 }
 
 /**
@@ -156,7 +204,9 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   messages: [],
   providers: [],
   activeProviderId: 'grok',
-  selectedModelId: 'grok-4.5',
+  // P1-3: 'auto' = follow the active provider's default model. sendMessage
+  // resolves it to undefined so the middleware picks the provider default.
+  selectedModelId: 'auto',
   agentRole: 'general',
   isGenerating: false,
   useContext: true,
@@ -166,6 +216,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   activeStreamId: null,
   lastToolStatus: '',
   lastKernelStatus: '',
+  followUpMessageId: null,
 
   fetchProviders: async () => {
     try {
@@ -184,7 +235,9 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       const found = providers.find((p) => p.id === activeProviderId)
       if (found?.models?.length) {
         const ok = found.models.some((m) => m.id === selectedModelId)
-        if (!ok) {
+        // P1-3: 'auto' is a valid persistent choice — never clobber it with a
+        // concrete model during the providers sync.
+        if (!ok && !isAutoModel(selectedModelId)) {
           selectedModelId = found.defaultModel || found.models[0].id
         }
       }
@@ -195,17 +248,29 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   },
 
   setActiveProvider: async (providerId: string) => {
-    await window.api.setActiveAIProvider(providerId)
+    // IPC failure must not abort the local switch — the stream call re-aligns
+    // the main process anyway (sendMessage re-sets active provider).
+    try {
+      await window.api.setActiveAIProvider(providerId)
+    } catch {
+      /* keep local state authoritative */
+    }
     const { providers } = get()
     const found = providers.find((p) => p.id === providerId)
     const firstModel = found?.defaultModel || found?.models[0]?.id || ''
-    set({ activeProviderId: providerId, selectedModelId: firstModel })
+    // P1-3: Auto stays Auto across provider switches (the model follows the
+    // new provider's default); a concrete pick keeps that concrete model.
+    set({
+      activeProviderId: providerId,
+      selectedModelId: isAutoModel(get().selectedModelId) ? AUTO_MODEL : firstModel
+    })
   },
 
   setSelectedModel: (modelId: string) => set({ selectedModelId: modelId }),
   setAgentRole: (role: AgentRole) => set({ agentRole: role }),
   setUseContext: (use: boolean) => set({ useContext: use }),
   setEnableTools: (use: boolean) => set({ enableTools: use }),
+  setFollowUp: (messageId: string | null) => set({ followUpMessageId: messageId }),
 
   ensureConversationId: async () => {
     let id = get().conversationId
@@ -221,12 +286,17 @@ export const useChatStore = create<ChatStore>((set, get) => ({
 
     await get().ensureConversationId()
 
+    // P3-2: read BEFORE building the user message so the transcript can stamp
+    // the follow-up source — Regenerate (retryLastMessage) re-arms from it.
+    const followUpMessageId = get().followUpMessageId
+
     const userMsg: ChatMessage = {
       id: Math.random().toString(36).slice(2),
       role: 'user',
       content: text,
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      ...(images?.length ? { images } : {})
+      ...(images?.length ? { images } : {}),
+      ...(followUpMessageId ? { followUpFrom: followUpMessageId } : {})
     }
 
     const assistantMsgId = Math.random().toString(36).slice(2)
@@ -236,7 +306,8 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       content: '',
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
       citations: [],
-      proposals: []
+      proposals: [],
+      toolRuns: []
     }
 
     const prior = get().messages
@@ -247,13 +318,25 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     })
 
     const { selectedModelId, activeProviderId, useContext, agentRole, enableTools } = get()
+    // P3-1: follow-up mode — attach the source message's proposal list to the
+    // API prompt (transcript keeps the user's clean text). Consumed here, so a
+    // second send without re-arming is a plain question again.
+    let apiText = text
+    if (followUpMessageId) {
+      set({ followUpMessageId: null })
+      const src = prior.find((m) => m.id === followUpMessageId)
+      const preamble = followUpPreamble(src?.proposals)
+      if (preamble) apiText = `${preamble}\n\n${text}`
+    }
+
     const historyForApi = buildHistoryWindow(prior, {
       role: 'user',
-      content: text
+      content: apiText
     })
 
     const requestPayload = {
-      model: selectedModelId,
+      // P1-3: 'auto' → undefined so the middleware fills the provider default
+      model: isAutoModel(selectedModelId) ? undefined : selectedModelId,
       messages: historyForApi,
       // Vision (P-A2): only the CURRENT prompt carries images — re-sending
       // history images every turn would burn tokens for no context gain.
@@ -291,12 +374,27 @@ export const useChatStore = create<ChatStore>((set, get) => ({
                     content = content.trim() ? `${content}\n\n${errLine}` : errLine
                   }
                 }
+                // P1-1: accumulate per-tool lifecycle events into the trail —
+                // updates match by runId (running → ok/error), new runs append.
+                let toolRuns = m.toolRuns
+                const incoming = chunk.toolRun as ToolRun | undefined
+                if (incoming) {
+                  const idx = (toolRuns || []).findIndex((r) => r.runId === incoming.runId)
+                  toolRuns =
+                    idx >= 0
+                      ? toolRuns!.map((r, i) => (i === idx ? { ...r, ...incoming } : r))
+                      : [...(toolRuns || []), incoming]
+                }
+                // A done chunk (abort/timeout/error) may close a run that never
+                // got its ok/error event — never leave a stuck spinner pill.
+                if (chunk.done) toolRuns = closeOutRunningRuns(toolRuns)
                 return {
                   ...m,
                   content,
                   citations: chunk.citations || m.citations,
                   proposals: mergeProposals(m.proposals, chunk.proposals as WriteProposalItem[]),
                   toolStatus: chunk.toolStatus || m.toolStatus,
+                  toolRuns,
                   // Tool loops are separate completions — accumulate so the shown
                   // count is the total, not just the last round.
                   tokensUsed:
@@ -304,6 +402,9 @@ export const useChatStore = create<ChatStore>((set, get) => ({
                       ? m.tokensUsed + chunk.tokensUsed
                       : (chunk.tokensUsed ?? m.tokensUsed),
                   contextTokens: chunk.contextTokens ?? m.contextTokens,
+                  contextSavedTokens: chunk.contextSavedTokens ?? m.contextSavedTokens,
+                  // P2-4: reasoning arrives as incremental deltas — append
+                  reasoning: (m.reasoning || '') + (chunk.reasoning || ''),
                   verifications: (chunk.verifications as CitationVerification[]) || m.verifications
                 }
               }),
@@ -341,7 +442,18 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     const id = get().activeStreamId
     if (id) {
       await window.api.cancelAIStream(id)
-      set({ isGenerating: false, activeStreamId: null, lastToolStatus: 'Cancelled' })
+      set((state) => ({
+        isGenerating: false,
+        activeStreamId: null,
+        lastToolStatus: 'Cancelled',
+        // P1-1: cancel drops the renderer listener, so no done chunk arrives to
+        // close out running tool pills — mark them interrupted here.
+        messages: state.messages.map((m) =>
+          m.toolRuns?.some((r) => r.status === 'running')
+            ? { ...m, toolRuns: closeOutRunningRuns(m.toolRuns) }
+            : m
+        )
+      }))
       // cancelAIStream drops the renderer listener immediately, so the main
       // process's trailing `*(cancelled)*` done chunk never reaches us — save the
       // partial transcript here so cancelled chats are still persisted.
@@ -356,6 +468,7 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       conversationId: null,
       lastToolStatus: '',
       lastKernelStatus: '',
+      followUpMessageId: null,
       // A stream could still be running (programmatic clear) — drop its state so
       // the UI doesn't stay "generating" and Cancel doesn't target a dead id.
       isGenerating: false,
@@ -380,9 +493,10 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     }
   },
 
-  applyProposal: async (id: string) => {
+  applyProposal: async (id: string, content?: string) => {
     try {
-      const res = await window.api.applyWriteProposal(id)
+      // P2-6: diff dialog may pass edited content to apply as-is
+      const res = await window.api.applyWriteProposal(id, content)
       if (res.ok) {
         set((state) => ({
           pendingProposals: state.pendingProposals.map((p) =>
@@ -484,7 +598,19 @@ Mulai: list_dir "" lalu read_note "AI Memory/00 Index.md".`
           timestamp: m.timestamp,
           citations: m.citations,
           verifications: m.verifications,
-          images: m.images
+          images: m.images,
+          toolRuns: m.toolRuns,
+          // P2-1: persist token stats so a restored session keeps its budget bar
+          tokensUsed: m.tokensUsed,
+          contextTokens: m.contextTokens,
+          contextSavedTokens: m.contextSavedTokens,
+          reasoning: m.reasoning,
+          // P3-2: keep the follow-up source so Regenerate on a restored session
+          // still re-arms the proposal context
+          followUpFrom: m.followUpFrom,
+          // P3-2: proposals must survive save/load — the Follow-up button and
+          // the regenerate preamble both read them off the message
+          proposals: m.proposals
         }))
       })
       set({ conversationId: id })
@@ -496,14 +622,27 @@ Mulai: list_dir "" lalu read_note "AI Memory/00 Index.md".`
   loadChat: async (id: string) => {
     const conv = await window.api.loadChat(id)
     if (!conv) return
+    const msgs = (conv.messages || []).map((m: ChatMessage) => ({ ...m }))
     set({
       conversationId: conv.id,
-      messages: (conv.messages || []).map((m: ChatMessage) => ({
-        ...m,
-        proposals: []
-      })),
-      agentRole: (conv.agentRole as AgentRole) || get().agentRole
+      followUpMessageId: null,
+      messages: msgs,
+      agentRole: (conv.agentRole as AgentRole) || get().agentRole,
+      // P2-7: the loaded chat owns the dock — drop the previous session's
+      // proposals, then re-derive below from this chat's messages + disk.
+      pendingProposals: []
     })
+    // P2-7: restore the proposal dock. Disk (P-B2) is the fresher truth for
+    // what is still pending; proposals carried in the loaded chat's messages
+    // fill in the rest so a restored session shows its own dock. Applied /
+    // rejected statuses never re-enter (filtered below).
+    await get().refreshProposals()
+    const fromMessages = msgs.flatMap((m) => m.proposals || [])
+    set((state) => ({
+      pendingProposals: mergeProposals(fromMessages, state.pendingProposals).filter(
+        (p) => p.status === 'pending' || !p.status
+      )
+    }))
   },
 
   deleteChat: async (id: string) => {
@@ -536,8 +675,40 @@ Mulai: list_dir "" lalu read_note "AI Memory/00 Index.md".`
     // occurrence, not the first.
     const msgs = get().messages
     const idx = msgs.map((m) => m.id).lastIndexOf(lastUser.id)
-    if (idx >= 0) set({ messages: msgs.slice(0, idx + 1) })
+    if (idx >= 0) {
+      // P3-2: the retried user message may have been a follow-up (its prompt
+      // was seeded from an earlier assistant message's proposals, flag consumed
+      // on send). Re-arm so the regenerated answer keeps that context.
+      set({
+        messages: msgs.slice(0, idx + 1),
+        followUpMessageId: lastUser.followUpFrom ?? null
+      })
+    }
     // P-A2: re-send with the original images — a retry must not drop attachments
     await get().sendMessage(lastUser.content, activeFilePath, lastUser.images)
+  },
+
+  rephraseMessage: async (msgId: string, activeFilePath?: string) => {
+    if (get().isGenerating) return
+    const msgs = get().messages
+    const idx = msgs.findIndex((m) => m.id === msgId && m.role === 'assistant')
+    if (idx < 0) return
+    // Cap the quoted original so rephrasing a huge answer can't blow the token
+    // budget (a long multi-tool answer would otherwise be re-billed in full).
+    const raw = (msgs[idx].content || '').trim()
+    if (!raw) return
+    const MAX_QUOTE = 8000
+    const content = raw.length > MAX_QUOTE ? `${raw.slice(0, MAX_QUOTE)}\n…[terpotong]` : raw
+    // Truncate everything from the target assistant message onward — the rewrite
+    // replaces the original answer in place (messages before it stay intact).
+    set({ messages: msgs.slice(0, idx), followUpMessageId: null })
+    const prompt = [
+      'Tulis ulang jawaban berikut dengan gaya berbeda (lebih ringkas, lebih detail, atau nada lain) tanpa mengubah fakta atau isi:',
+      '',
+      '> ' + content.replace(/\n/g, '\n> '),
+      '',
+      'Balas hanya dengan hasil tulis ulangnya.'
+    ].join('\n')
+    await get().sendMessage(prompt, activeFilePath)
   }
 }))

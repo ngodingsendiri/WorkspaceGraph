@@ -55,6 +55,19 @@ export function buildOpenAIMessages(request: AIRequest): OpenAI.ChatCompletionMe
 }
 
 /**
+ * Extract the streaming reasoning delta from a chat.completions delta.
+ * Reasoning models emit their chain-of-thought under two names: xAI / DeepSeek
+ * / OpenRouter compat send `reasoning_content`, OpenAI o-series sends
+ * `reasoning`. Capturing both keeps the collapsible "Berpikir" block (P2-4)
+ * working across every OpenAI-compat provider without per-provider drift.
+ */
+export function deltaReasoning(delta: unknown): string {
+  if (!delta || typeof delta !== 'object') return ''
+  const d = delta as { reasoning_content?: string | null; reasoning?: string | null }
+  return d.reasoning_content || d.reasoning || ''
+}
+
+/**
  * One `delta.tool_calls` element as it arrives in a stream chunk. Widened with
  * `null` to structurally accept the OpenAI SDK's DeltaToolCall type.
  */

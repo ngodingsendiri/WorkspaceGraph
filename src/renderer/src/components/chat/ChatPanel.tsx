@@ -1,7 +1,40 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react'
-import { useChatStore, WriteProposalItem, ImageAttachment } from '../../store/chatStore'
+import { createPortal } from 'react-dom'
+import {
+  useChatStore,
+  WriteProposalItem,
+  ImageAttachment,
+  ChatMessage,
+  ToolRun,
+  CitationItem
+} from '../../store/chatStore'
+import { TooltipPreviewCache } from '../graph/graphTooltipPreview'
+import { makeCitePreviewCache, citeNode, citeTipPos } from './chatCitationTip'
+import {
+  AUTO_MODEL,
+  isAutoModel,
+  autoLabel,
+  resolveAutoModel,
+  buildModelGroups
+} from './chatModelPicker'
+import {
+  contextBudgetForModel,
+  sessionTokenStats,
+  formatK,
+  budgetFraction
+} from './chatTokenBudget'
+import { summarizeToolRuns, toolSummaryLabel } from './chatToolSummary'
+import { followUpChipLabel } from './chatFollowUp'
+import {
+  SLASH_COMMANDS,
+  filterSlashCommands,
+  findSlashCommand,
+  consumeComposerCommand,
+  type SlashCommand
+} from './chatSlashCommands'
 import { useEditorStore } from '../../store/editorStore'
 import { useWorkspaceStore } from '../../store/workspaceStore'
+import { MergeDialog } from '../editor/MergeDialog'
 import { Icon } from '../ui/Icons'
 import { confirmDialog } from '../ui/Dialog'
 import { usePanelWidth } from '../../hooks/usePanelWidth'
@@ -37,6 +70,100 @@ function mdCacheSet(key: string, value: string): void {
     if (oldest !== undefined) mdCache.delete(oldest)
   }
 }
+/**
+ * Collapsible per-tool trail (P1-1): each invocation renders as a pill with a
+ * live spinner while running, then ✓/✗ once done. Clicking a pill with a
+ * detail expands the result preview — the Cursor-style visibility layer.
+ */
+function ToolRunList({
+  runs,
+  streaming
+}: {
+  runs: ToolRun[]
+  streaming: boolean
+}): React.ReactElement {
+  const [expanded, setExpanded] = useState<Set<string>>(new Set())
+  const toggle = (runId: string): void => {
+    setExpanded((prev) => {
+      const next = new Set(prev)
+      if (next.has(runId)) next.delete(runId)
+      else next.add(runId)
+      return next
+    })
+  }
+  return (
+    <div className="chat-toolruns">
+      {runs.map((r) => {
+        const isOpen = expanded.has(r.runId)
+        const live = r.status === 'running' && streaming
+        return (
+          <div key={r.runId} className={`chat-toolrun is-${r.status}`}>
+            <button
+              type="button"
+              className="chat-toolrun-head"
+              onClick={() => toggle(r.runId)}
+              disabled={!r.detail}
+              title={r.detail ? (isOpen ? 'Tutup detail' : 'Lihat detail') : undefined}
+            >
+              <span className="chat-toolrun-icon" aria-hidden>
+                {live ? <span className="chat-spinner" /> : r.status === 'ok' ? '✓' : '✗'}
+              </span>
+              <span className="chat-toolrun-name">{r.tool}</span>
+              <span className={`chat-toolrun-tag${r.status === 'error' ? ' is-err' : ''}`}>
+                {live ? '…' : r.status === 'ok' ? 'ok' : 'gagal'}
+              </span>
+              {r.detail && (
+                <span className={`chat-toolrun-chev${isOpen ? ' open' : ''}`} aria-hidden>
+                  ▸
+                </span>
+              )}
+            </button>
+            {isOpen && r.detail && <div className="chat-toolrun-detail">{r.detail}</div>}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+/**
+ * P2-4: collapsible streaming chain-of-thought ("Berpikir") block. Opens live
+ * while the reply streams so the model's reasoning is visible as it happens;
+ * once done the head becomes a plain toggle (collapsed only by user choice).
+ */
+function ReasoningBlock({
+  text,
+  streaming
+}: {
+  text: string
+  streaming: boolean
+}): React.ReactElement {
+  const [open, setOpen] = useState(streaming)
+  return (
+    <div className={`chat-reasoning${open ? ' is-open' : ''}`}>
+      <button
+        type="button"
+        className="chat-reasoning-head"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+        title={open ? 'Sembunyikan proses berpikir' : 'Lihat proses berpikir'}
+      >
+        <span className="chat-reasoning-chev" aria-hidden>
+          {open ? '▾' : '▸'}
+        </span>
+        <span className="chat-reasoning-label">{streaming ? 'Berpikir…' : 'Berpikir'}</span>
+        {!streaming && <span className="chat-reasoning-chars">{text.length} ch</span>}
+      </button>
+      {open && (
+        <div className="chat-reasoning-body">
+          {text}
+          {streaming && <span className="chat-spinner" />}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function ChatMessageBody({
   content,
   streaming
@@ -125,7 +252,10 @@ export const ChatPanel: React.FC = () => {
     loadChat,
     deleteChat,
     retryLastMessage,
-    learnWorkspace
+    rephraseMessage,
+    learnWorkspace,
+    followUpMessageId,
+    setFollowUp
   } = useChatStore()
 
   const getActiveTab = useEditorStore((s) => s.getActiveTab)
@@ -155,18 +285,64 @@ export const ChatPanel: React.FC = () => {
   const [copyFlash, setCopyFlash] = useState<string | null>(null)
   // P-A2: images queued in the composer (paste / drag) before sending
   const [attachments, setAttachments] = useState<ImageAttachment[]>([])
+  /** P1-3: inline model picker — chip + portaled dropdown (opens upward) */
+  const [modelOpen, setModelOpen] = useState(false)
+  const [modelPos, setModelPos] = useState<{ left: number; bottom: number } | null>(null)
+  const modelChipRef = useRef<HTMLButtonElement | null>(null)
+  const modelPickerRef = useRef<HTMLDivElement | null>(null)
+  /** P2-6: proposal diff preview — the MergeDialog shell with Disk/Proposal/Diff tabs */
+  const [diffTarget, setDiffTarget] = useState<{
+    p: WriteProposalItem
+    theirs: string
+  } | null>(null)
+  /** P2-3: composer slash commands — mini palette over the textarea */
+  const [slashOpen, setSlashOpen] = useState(false)
+  const [slashQuery, setSlashQuery] = useState('')
+  const [slashActive, setSlashActive] = useState(0)
+  const [slashPos, setSlashPos] = useState<{ left: number; bottom: number } | null>(null)
 
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const messagesBoxRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
   const stickToBottom = useRef(true)
+  /** P1-2: cite-on-hover tooltip — portal to body so the scrolling messages
+   * box can never clip it. Cache + fetch are shared with the graph's preview. */
+  const [citeTip, setCiteTip] = useState<{
+    x: number
+    y: number
+    path: string
+    title: string
+    weak: boolean
+    /** true once the preview promise settled — distinguishes 'memuat…' from
+     * a resolved-null (missing note / no vault) that must NOT spin forever */
+    loaded: boolean
+    text: string | null
+  } | null>(null)
+  const citeCacheRef = useRef<TooltipPreviewCache | null>(null)
+  const citeHoverTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  /** P1-2: monotonic guard — a slow read must never paint into a stale/closed tooltip */
+  const citeSeqRef = useRef(0)
+  const citeCache = (): TooltipPreviewCache => {
+    if (!citeCacheRef.current) {
+      citeCacheRef.current = makeCitePreviewCache(async (p) => {
+        const res = await window.api.readFile(p)
+        return res ? { content: res.content ?? '' } : null
+      })
+    }
+    return citeCacheRef.current
+  }
 
   useEffect(() => {
     fetchProviders()
-    // P-B2: hydrate the proposal dock with pending proposals persisted on disk
-    // (a stream's live chunks only cover THIS session, not a previous one).
+  }, [fetchProviders])
+
+  // P2-7: hydrate/re-hydrate the proposal dock whenever the vault changes — on
+  // mount AND when a workspace opens later (restart flow). A stream's live
+  // chunks only cover this session; disk holds pending proposals from before.
+  const rootPath = useWorkspaceStore((s) => s.rootPath)
+  useEffect(() => {
     void refreshProposals()
-  }, [fetchProviders, refreshProposals])
+  }, [rootPath, refreshProposals])
 
   const refreshHistory = useCallback(async () => {
     try {
@@ -190,6 +366,10 @@ export const ChatPanel: React.FC = () => {
     const onScroll = (): void => {
       const gap = el.scrollHeight - el.scrollTop - el.clientHeight
       stickToBottom.current = gap < 80
+      // P1-2: a scroll moves the chips — dismiss a floating cite tooltip so it
+      // never hangs over the wrong spot (fixed coords would go stale)
+      citeSeqRef.current++
+      setCiteTip(null)
     }
     el.addEventListener('scroll', onScroll, { passive: true })
     return () => el.removeEventListener('scroll', onScroll)
@@ -210,9 +390,70 @@ export const ChatPanel: React.FC = () => {
 
   const activeProvider = providers.find((p) => p.id === activeProviderId)
   const modelOptions = activeProvider?.models || []
-  const modelValue = modelOptions.some((m) => m.id === selectedModelId)
-    ? selectedModelId
-    : modelOptions[0]?.id || ''
+  // P1-3: the composer chip label — 'auto' shows as Auto, otherwise the name
+  // of the concrete model (falls back to the raw id for stale picks).
+  const modelName = isAutoModel(selectedModelId)
+    ? 'Auto'
+    : modelOptions.find((m) => m.id === selectedModelId)?.name || selectedModelId
+  const modelGroups = buildModelGroups(providers)
+  // P2-1: per-session token budget — chunk data already carries both numbers
+  const { outputTokens, contextTokens, savedTokens } = sessionTokenStats(messages)
+  const budgetModel = isAutoModel(selectedModelId)
+    ? resolveAutoModel(activeProvider)
+    : selectedModelId
+  const budget = contextBudgetForModel(budgetModel)
+  const budgetPct = budgetFraction(outputTokens, budget)
+
+  const openModelPicker = (): void => {
+    const el = modelChipRef.current
+    if (!el) return
+    const rect = el.getBoundingClientRect()
+    // Composer sits at the panel bottom — anchor the dropdown's BOTTOM edge
+    // above the chip and clamp so it never overflows the right viewport edge.
+    const width = 250
+    const left = Math.min(rect.left, Math.max(0, window.innerWidth - width - 8))
+    setModelPos({ left, bottom: window.innerHeight - rect.top + 6 })
+    setModelOpen(true)
+  }
+  const closeModelPicker = (): void => {
+    setModelOpen(false)
+    setModelPos(null)
+  }
+
+  // P1-3: dismiss the picker on outside mousedown or Escape
+  useEffect(() => {
+    if (!modelOpen) return
+    const onDown = (e: MouseEvent): void => {
+      const t = e.target as Node
+      if (modelPickerRef.current?.contains(t)) return
+      if (modelChipRef.current?.contains(t)) return
+      setModelOpen(false)
+      setModelPos(null)
+    }
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') {
+        setModelOpen(false)
+        setModelPos(null)
+      }
+    }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [modelOpen])
+
+  const pickModel = async (providerId: string, modelId: string): Promise<void> => {
+    closeModelPicker()
+    // Switching provider resets the model to its default — re-apply the pick
+    if (providerId !== activeProviderId) await setActiveProvider(providerId)
+    setSelectedModel(modelId)
+  }
+  const pickAuto = (): void => {
+    closeModelPicker()
+    setSelectedModel(AUTO_MODEL)
+  }
 
   const imgDataUrl = (a: ImageAttachment): string => `data:${a.mimeType};base64,${a.dataBase64}`
 
@@ -278,10 +519,111 @@ export const ChatPanel: React.FC = () => {
     sendMessage(inputText, activeTab?.path, attachments.length ? attachments : undefined)
     setInputText('')
     setAttachments([])
+    closeSlash()
     requestAnimationFrame(() => inputRef.current?.focus())
   }
 
+  // P2-3: anchor the slash popover above the textarea (bottom of the panel)
+  const updateSlashPos = (): void => {
+    const el = inputRef.current
+    if (!el) return
+    const rect = el.getBoundingClientRect()
+    const width = 280
+    const left = Math.min(rect.left, Math.max(0, window.innerWidth - width - 8))
+    setSlashPos({ left, bottom: window.innerHeight - rect.top + 6 })
+  }
+
+  const closeSlash = useCallback((): void => {
+    setSlashOpen(false)
+    setSlashPos(null)
+  }, [])
+
+  /** Shared fill path for BOTH the composer popover (P2-3) and the global
+   * CommandPalette bridge (P2-5): template in, caret to the end, focus. */
+  const fillComposer = useCallback(
+    (cmd: SlashCommand): void => {
+      setInputText(cmd.template)
+      closeSlash()
+      // Move the caret to the end so typing continues after the template
+      requestAnimationFrame(() => {
+        const ta = inputRef.current
+        if (ta) {
+          ta.focus()
+          ta.setSelectionRange(ta.value.length, ta.value.length)
+        }
+      })
+    },
+    [closeSlash]
+  )
+
+  const selectSlash = (cmd: SlashCommand): void => {
+    fillComposer(cmd)
+  }
+
+  // P2-5: global CommandPalette (Ctrl+P) slash commands → composer. The panel
+  // unmounts while hidden, so the palette's request is stashed in the bridge
+  // and consumed here — either by this listener (panel already mounted) or by
+  // the mount catch-up below (panel was hidden when the palette fired).
+  useEffect(() => {
+    const applyGlobal = (name: string): void => {
+      consumeComposerCommand()
+      const cmd = findSlashCommand(name)
+      if (cmd) fillComposer(cmd)
+    }
+    const onCmd = (e: Event): void => {
+      applyGlobal(String((e as CustomEvent<string>).detail ?? ''))
+    }
+    window.addEventListener('wg:composer-command', onCmd)
+    // Already consumed here — hand the command straight to the shared fill path.
+    // One-shot mount catch-up from the bridge stash (same pattern as the
+    // fetch-on-toggle hydration above), not an event-driven setState.
+    const pending = consumeComposerCommand()
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (pending) fillComposer(pending)
+    return () => window.removeEventListener('wg:composer-command', onCmd)
+  }, [fillComposer])
+
+  const handleInputChange = (e: React.ChangeEvent<HTMLTextAreaElement>): void => {
+    const v = e.target.value
+    setInputText(v)
+    const trimmed = v.replace(/^\s+/, '')
+    // Open while the input starts with '/command' and no space follows yet
+    if (trimmed.startsWith('/') && !/^\S+\s/.test(trimmed)) {
+      setSlashQuery(trimmed.split(/\s+/)[0] || '/')
+      setSlashActive(0)
+      setSlashOpen(true)
+      updateSlashPos()
+    } else {
+      closeSlash()
+    }
+  }
+
+  const slashFiltered = slashOpen ? filterSlashCommands(SLASH_COMMANDS, slashQuery) : []
+
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>): void => {
+    if (slashOpen && slashFiltered.length > 0) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault()
+        setSlashActive((i) => (i + 1) % slashFiltered.length)
+        return
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault()
+        setSlashActive((i) => (i - 1 + slashFiltered.length) % slashFiltered.length)
+        return
+      }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        e.preventDefault()
+        const cmd = slashFiltered[slashActive]
+        if (cmd) selectSlash(cmd)
+        return
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault()
+        closeSlash()
+        return
+      }
+    }
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       handleSend()
@@ -308,12 +650,69 @@ export const ChatPanel: React.FC = () => {
   }
 
   const openCitation = async (path: string): Promise<void> => {
+    hideCiteTip()
     await openTab(path)
     setActiveView('editor')
   }
 
-  const handleApply = async (p: WriteProposalItem): Promise<void> => {
-    const res = await applyProposal(p.id)
+  /** P1-2: dismiss the cite tooltip (also cancels the pending hover timer). */
+  const hideCiteTip = useCallback((): void => {
+    if (citeHoverTimerRef.current) {
+      clearTimeout(citeHoverTimerRef.current)
+      citeHoverTimerRef.current = null
+    }
+    citeSeqRef.current++
+    setCiteTip(null)
+  }, [])
+
+  /** P1-2: show the cite tooltip after a short rest (no flicker on chip sweeps). */
+  const showCiteTip = useCallback((c: CitationItem, el: HTMLButtonElement, weak: boolean): void => {
+    if (citeHoverTimerRef.current) clearTimeout(citeHoverTimerRef.current)
+    citeHoverTimerRef.current = setTimeout(() => {
+      citeHoverTimerRef.current = null
+      const rect = el.getBoundingClientRect()
+      const pos = citeTipPos(rect, { width: window.innerWidth, height: window.innerHeight })
+      const seq = ++citeSeqRef.current
+      setCiteTip({
+        x: pos.x,
+        y: pos.y,
+        path: c.path,
+        title: c.title,
+        weak,
+        loaded: false,
+        text: null
+      })
+      void citeCache()
+        .get(citeNode(c.path))
+        .then((text) => {
+          // A newer hover/leave bumped the seq — never overwrite a fresh tooltip
+          if (seq !== citeSeqRef.current) return
+          setCiteTip((cur) => (cur && cur.path === c.path ? { ...cur, loaded: true, text } : cur))
+        })
+    }, 180)
+  }, [])
+
+  // Cleanup the hover timer if the panel unmounts mid-delay
+  useEffect(() => {
+    return () => {
+      if (citeHoverTimerRef.current) clearTimeout(citeHoverTimerRef.current)
+    }
+  }, [])
+
+  const openDiff = async (p: WriteProposalItem): Promise<void> => {
+    // Read the current disk content for the diff — create proposals have none
+    let theirs = ''
+    try {
+      const res = await window.api.readFile(p.absolutePath)
+      theirs = res?.content ?? ''
+    } catch {
+      /* create mode / file missing — diff vs empty */
+    }
+    setDiffTarget({ p, theirs })
+  }
+
+  const handleApply = async (p: WriteProposalItem, content?: string): Promise<void> => {
+    const res = await applyProposal(p.id, content)
     if (res.ok) {
       setApplyOk(true)
       setApplyMsg(`Diterapkan · graph/search ter-update · ${p.relativePath}`)
@@ -409,6 +808,25 @@ export const ChatPanel: React.FC = () => {
     void retryLastMessage(activeTab?.path)
   }
 
+  const handleRephrase = (msg: ChatMessage): void => {
+    if (isGenerating) return
+    stickToBottom.current = true
+    void rephraseMessage(msg.id, activeTab?.path)
+  }
+
+  /** P3-1: arm composer follow-up mode for a proposal-bearing message. */
+  const startFollowUp = (msg: ChatMessage): void => {
+    setFollowUp(msg.id)
+    inputRef.current?.focus()
+  }
+
+  // P3-1: composer chip source — the message must still exist (rephrase/clear
+  // removes it); sendMessage also tolerates a missing source (plain send).
+  const followUpMsg = followUpMessageId
+    ? messages.find((m) => m.id === followUpMessageId)
+    : undefined
+  const followUpChip = followUpMsg ? followUpChipLabel(followUpMsg.proposals) : ''
+
   const openProposals = pendingProposals.filter(
     (p) => p.status === 'pending' || p.status === undefined
   )
@@ -424,8 +842,15 @@ export const ChatPanel: React.FC = () => {
     return `${p.name} · setup`
   }
 
-  const statusLine =
-    lastToolStatus || lastKernelStatus || (isGenerating ? 'kernel: running…' : 'kernel: idle')
+  // P2-2: after the stream settles, the status line reports what the agent did
+  // (from the LAST assistant message's tool trail) instead of a bare 'idle'.
+  const lastAssistant = [...messages].reverse().find((m) => m.role === 'assistant')
+  const toolSummaryText = isGenerating
+    ? ''
+    : toolSummaryLabel(summarizeToolRuns(lastAssistant?.toolRuns))
+  const statusLine = isGenerating
+    ? lastToolStatus || lastKernelStatus || 'kernel: running…'
+    : toolSummaryText || lastKernelStatus || lastToolStatus || 'kernel: idle'
 
   return (
     <aside
@@ -520,24 +945,6 @@ export const ChatPanel: React.FC = () => {
               {providers.map((p) => (
                 <option key={p.id} value={p.id}>
                   {providerLabel(p)}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <label className="chat-field">
-            <span className="chat-field-label">Model</span>
-            <select
-              className="chat-select"
-              value={modelValue}
-              onChange={(e) => setSelectedModel(e.target.value)}
-              aria-label="Model"
-              disabled={modelOptions.length === 0}
-            >
-              {modelOptions.length === 0 && <option value="">—</option>}
-              {modelOptions.map((m) => (
-                <option key={m.id} value={m.id}>
-                  {m.name}
                 </option>
               ))}
             </select>
@@ -668,6 +1075,14 @@ export const ChatPanel: React.FC = () => {
               <div className="chat-proposal-actions">
                 <button
                   type="button"
+                  className="btn btn-ghost btn-sm"
+                  onClick={() => void openDiff(p)}
+                  title="Lihat diff disk vs proposal sebelum terapkan"
+                >
+                  Diff
+                </button>
+                <button
+                  type="button"
                   className="btn btn-primary btn-sm"
                   onClick={() => void handleApply(p)}
                 >
@@ -745,17 +1160,30 @@ export const ChatPanel: React.FC = () => {
                   {msg.role === 'user' ? 'you' : 'kernel'} · {msg.timestamp}
                   {msg.tokensUsed ? ` · ${msg.tokensUsed} tok` : ''}
                   {msg.contextTokens ? ` · ctx ~${msg.contextTokens}` : ''}
-                  {msg.toolStatus ? ` · ${msg.toolStatus}` : ''}
+                  {/* P1-4: measured context savings from the round-0-only prompt */}
+                  {msg.contextSavedTokens ? ` · hemat ~${formatK(msg.contextSavedTokens)}` : ''}
+                  {/* Old saved chats carry toolStatus without the structured trail */}
+                  {!msg.toolRuns?.length && msg.toolStatus ? ` · ${msg.toolStatus}` : ''}
                 </div>
                 <div className={`message-bubble ${isErr ? 'is-error' : ''}`}>
+                  {/* P2-4: chain-of-thought renders BEFORE the answer */}
+                  {msg.role === 'assistant' && msg.reasoning && (
+                    <ReasoningBlock text={msg.reasoning} streaming={streamingThis} />
+                  )}
                   {msg.content ? (
                     <ChatMessageBody content={msg.content} streaming={streamingThis} />
-                  ) : streamingThis ? (
+                  ) : streamingThis && !msg.reasoning ? (
+                    // The live ReasoningBlock already carries its own spinner —
+                    // don't show a second "working…" indicator underneath it
                     <span className="chat-thinking">
                       <span className="chat-spinner" /> working…
                     </span>
                   ) : (
                     ''
+                  )}
+
+                  {msg.role === 'assistant' && msg.toolRuns && msg.toolRuns.length > 0 && (
+                    <ToolRunList runs={msg.toolRuns} streaming={streamingThis} />
                   )}
 
                   {msg.images && msg.images.length > 0 && (
@@ -784,11 +1212,12 @@ export const ChatPanel: React.FC = () => {
                             type="button"
                             className={`chat-citation-chip${weak ? ' is-weak' : ''}`}
                             onClick={() => void openCitation(c.path)}
-                            title={
-                              weak
-                                ? `${c.path}\n⚠ klaim jawaban lemah terhadap isi catatan ini`
-                                : c.path
-                            }
+                            onMouseEnter={(e) => showCiteTip(c, e.currentTarget, weak)}
+                            onMouseLeave={hideCiteTip}
+                            // Custom tooltip already shows path + weak warning — the
+                            // native title would double-tooltip; keep aria-label for
+                            // keyboard a11y (the portaled tooltip is pointer-none)
+                            aria-label={`${c.path}${weak ? ' (verifikasi lemah)' : ''}`}
                           >
                             [[{c.title}]]{weak ? ' ⚠' : ''}
                           </button>
@@ -814,7 +1243,7 @@ export const ChatPanel: React.FC = () => {
                       >
                         {copyFlash === msg.id ? 'Copied' : 'Copy'}
                       </button>
-                      {isErr && (
+                      {isErr ? (
                         <button
                           type="button"
                           className="btn btn-surface btn-sm"
@@ -822,6 +1251,27 @@ export const ChatPanel: React.FC = () => {
                           title="Kirim ulang pertanyaan terakhir"
                         >
                           <Icon name="sync" size={12} /> Retry
+                        </button>
+                      ) : (
+                        msg.id === messages[messages.length - 1]?.id && (
+                          <button
+                            type="button"
+                            className="btn btn-ghost btn-sm"
+                            onClick={handleRetry}
+                            title="Buat ulang jawaban ini (jalankan ulang prompt terakhir)"
+                          >
+                            <Icon name="sync" size={12} /> Regenerate
+                          </button>
+                        )
+                      )}
+                      {!isErr && (
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-sm"
+                          onClick={() => handleRephrase(msg)}
+                          title="Minta model menulis ulang jawaban ini dengan gaya berbeda (percakapan setelah pesan ini dihapus)"
+                        >
+                          <Icon name="refresh" size={12} /> Rephrase
                         </button>
                       )}
                       {activeTab && (
@@ -833,6 +1283,16 @@ export const ChatPanel: React.FC = () => {
                           Append
                         </button>
                       )}
+                      {msg.proposals && msg.proposals.length > 0 && (
+                        <button
+                          type="button"
+                          className="btn btn-ghost btn-sm"
+                          onClick={() => startFollowUp(msg)}
+                          title="Lanjutkan dari proposal pesan ini — konteksnya ikut pada pertanyaan berikutnya"
+                        >
+                          Follow-up
+                        </button>
+                      )}
                     </div>
                   )}
                 </div>
@@ -842,8 +1302,66 @@ export const ChatPanel: React.FC = () => {
         )}
         <div ref={messagesEndRef} />
       </div>
+      {/* P1-2: cite-on-hover preview — portaled to body, never clipped by the scroll box */}
+      {citeTip &&
+        createPortal(
+          <div className="chat-cite-tooltip" style={{ left: citeTip.x, top: citeTip.y }}>
+            <div className="cct-title">[[{citeTip.title}]]</div>
+            <div className="cct-path">{citeTip.path}</div>
+            {citeTip.loaded ? (
+              citeTip.text ? (
+                <div className="cct-preview">{citeTip.text}</div>
+              ) : null
+            ) : (
+              <div className="cct-preview cct-loading">memuat…</div>
+            )}
+            {citeTip.weak && <div className="cct-weak">⚠ klaim jawaban lemah — cek manual</div>}
+          </div>,
+          document.body
+        )}
+      {/* P2-1: per-session token budget bar — hidden until there is usage to show.
+          The budget is a rough model-family estimate, so the label marks it with
+          ~ and only genuinely near-limit usage turns critical (red). */}
+      {outputTokens > 0 && (
+        <div
+          className={`chat-budget${budgetPct >= 0.95 ? ' is-critical' : budgetPct >= 0.6 ? ' is-warn' : ''}`}
+          title={`Model ${budgetModel || 'auto'} · budget ~${formatK(budget)} token · output sesi ${formatK(outputTokens)}${contextTokens ? ` · ctx terakhir ~${formatK(contextTokens)}` : ''}${savedTokens ? ` · hemat ~${formatK(savedTokens)}` : ''}`}
+          role="progressbar"
+          aria-valuenow={Math.round(budgetPct * 100)}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-label={`Output sesi ${formatK(outputTokens)} dari ~${formatK(budget)} token`}
+        >
+          <div className="chat-budget-track" aria-hidden>
+            <div className="chat-budget-fill" style={{ width: `${budgetPct * 100}%` }} />
+          </div>
+          <span className="chat-budget-label">
+            out {formatK(outputTokens)}/~{formatK(budget)}
+            {contextTokens ? ` · ctx ~${formatK(contextTokens)}` : ''}
+            {savedTokens ? ` · −${formatK(savedTokens)}` : ''}
+          </span>
+        </div>
+      )}
       {/* Composer */}
       <div className="chat-input-area">
+        {/* P3-1: follow-up mode chip — shows the armed source, dismissible */}
+        {followUpMsg && followUpChip && (
+          <div
+            className="chat-followup-chip"
+            title="Proposal pesan ini akan jadi konteks pertanyaan berikutnya"
+          >
+            <Icon name="command" size={11} />
+            <span className="truncate">{followUpChip}</span>
+            <button
+              type="button"
+              className="chat-followup-clear"
+              aria-label="Batal follow-up"
+              onClick={() => setFollowUp(null)}
+            >
+              <Icon name="close" size={10} />
+            </button>
+          </div>
+        )}
         {attachments.length > 0 && (
           <div className="chat-attach-strip">
             {attachments.map((a, i) => (
@@ -865,41 +1383,94 @@ export const ChatPanel: React.FC = () => {
         <textarea
           ref={inputRef}
           className="chat-input"
-          placeholder="perintah / tanya kernel… (Enter kirim · Shift+Enter baris baru · paste/drag gambar)"
+          placeholder="perintah / tanya kernel… (ketik / untuk perintah · Enter kirim · paste/drag gambar)"
           value={inputText}
-          onChange={(e) => setInputText(e.target.value)}
+          onChange={handleInputChange}
           onKeyDown={handleKeyDown}
+          onBlur={closeSlash}
           onPaste={handlePaste}
           onDrop={handleDrop}
           disabled={isGenerating}
           aria-label="Chat message"
           rows={2}
         />
+        {/* P2-3: slash command popover — portaled so .chat-panel clipping never hits it */}
+        {slashOpen &&
+          slashPos &&
+          slashFiltered.length > 0 &&
+          createPortal(
+            <div
+              className="chat-slash-picker"
+              style={{ left: slashPos.left, bottom: slashPos.bottom }}
+              role="listbox"
+              aria-label="Perintah chat"
+            >
+              {slashFiltered.map((cmd, i) => (
+                <button
+                  key={cmd.name}
+                  type="button"
+                  className={`chat-slash-row${i === slashActive ? ' active' : ''}`}
+                  onMouseDown={(e) => {
+                    // mousedown fires before blur — select without losing focus
+                    e.preventDefault()
+                    selectSlash(cmd)
+                  }}
+                  onMouseEnter={() => setSlashActive(i)}
+                  role="option"
+                  aria-selected={i === slashActive}
+                >
+                  <span className="chat-slash-name">{cmd.name}</span>
+                  <span className="chat-slash-label">{cmd.label}</span>
+                </button>
+              ))}
+            </div>,
+            document.body
+          )}
 
         <div className="chat-input-footer">
-          <div className="chat-toggles">
-            <label
-              className={`chat-toggle ${useContext ? 'on' : ''}`}
-              title="Inject vault context + AI Memory"
+          <div className="chat-composer-left">
+            <button
+              ref={modelChipRef}
+              type="button"
+              className={`chat-model-chip${modelOpen ? ' open' : ''}`}
+              onClick={() => (modelOpen ? closeModelPicker() : openModelPicker())}
+              title={
+                isAutoModel(selectedModelId)
+                  ? `Model default provider (${resolveAutoModel(activeProvider) || 'belum tersedia'})`
+                  : `Model: ${modelName}`
+              }
+              aria-haspopup="listbox"
+              aria-expanded={modelOpen}
             >
-              <input
-                type="checkbox"
-                checked={useContext}
-                onChange={(e) => setUseContext(e.target.checked)}
-              />
-              Context
-            </label>
-            <label
-              className={`chat-toggle ${enableTools ? 'on' : ''}`}
-              title="Tools: search / read / write proposals"
-            >
-              <input
-                type="checkbox"
-                checked={enableTools}
-                onChange={(e) => setEnableTools(e.target.checked)}
-              />
-              Tools
-            </label>
+              <span className="chat-model-chip-name">{modelName}</span>
+              <span className="chat-model-chip-chev" aria-hidden>
+                ▾
+              </span>
+            </button>
+            <div className="chat-toggles">
+              <label
+                className={`chat-toggle ${useContext ? 'on' : ''}`}
+                title="Inject vault context + AI Memory"
+              >
+                <input
+                  type="checkbox"
+                  checked={useContext}
+                  onChange={(e) => setUseContext(e.target.checked)}
+                />
+                Context
+              </label>
+              <label
+                className={`chat-toggle ${enableTools ? 'on' : ''}`}
+                title="Tools: search / read / write proposals"
+              >
+                <input
+                  type="checkbox"
+                  checked={enableTools}
+                  onChange={(e) => setEnableTools(e.target.checked)}
+                />
+                Tools
+              </label>
+            </div>
           </div>
 
           {isGenerating ? (
@@ -922,6 +1493,77 @@ export const ChatPanel: React.FC = () => {
           )}
         </div>
       </div>
+      {/* P2-6: proposal diff preview — reuses the MergeDialog shell (portaled) */}
+      {diffTarget && (
+        <MergeDialog
+          isOpen={true}
+          onClose={() => setDiffTarget(null)}
+          onResolve={(resolved) => {
+            const t = diffTarget
+            setDiffTarget(null)
+            void handleApply(t.p, resolved)
+          }}
+          variant="proposal"
+          mode={diffTarget.p.mode}
+          filePath={diffTarget.p.relativePath}
+          theirs={diffTarget.theirs}
+          yours={diffTarget.p.content}
+        />
+      )}
+      {/* P1-3: inline model picker — portaled so .chat-panel's overflow:hidden
+          never clips the upward dropdown */}
+      {modelOpen &&
+        modelPos &&
+        createPortal(
+          <div
+            ref={modelPickerRef}
+            className="chat-model-picker"
+            style={{ left: modelPos.left, bottom: modelPos.bottom }}
+            role="listbox"
+            aria-label="Pilih model"
+          >
+            <button
+              type="button"
+              className={`chat-model-row chat-model-row--auto${isAutoModel(selectedModelId) ? ' active' : ''}`}
+              onClick={() => void pickAuto()}
+              role="option"
+              aria-selected={isAutoModel(selectedModelId)}
+              title="Ikuti model default provider yang aktif"
+            >
+              <span className="chat-model-row-check" aria-hidden>
+                {isAutoModel(selectedModelId) ? '✓' : ''}
+              </span>
+              <span className="chat-model-row-name">{autoLabel(activeProvider)}</span>
+            </button>
+            {modelGroups.map((g) => (
+              <div key={g.providerId} className="chat-model-group">
+                <div className="chat-model-group-title">{g.providerName}</div>
+                {g.models.map((m) => {
+                  const active =
+                    !isAutoModel(selectedModelId) &&
+                    selectedModelId === m.id &&
+                    g.providerId === activeProviderId
+                  return (
+                    <button
+                      key={`${g.providerId}:${m.id}`}
+                      type="button"
+                      className={`chat-model-row${active ? ' active' : ''}`}
+                      onClick={() => void pickModel(g.providerId, m.id)}
+                      role="option"
+                      aria-selected={active}
+                    >
+                      <span className="chat-model-row-check" aria-hidden>
+                        {active ? '✓' : ''}
+                      </span>
+                      <span className="chat-model-row-name">{m.name}</span>
+                    </button>
+                  )
+                })}
+              </div>
+            ))}
+          </div>,
+          document.body
+        )}
     </aside>
   )
 }
