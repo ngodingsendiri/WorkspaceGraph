@@ -2203,10 +2203,10 @@ html:not([data-theme]) {
   flex-shrink: 0;
   border-bottom: 1px solid var(--border-subtle);
   background: var(--bg-surface);
-  padding: 8px 10px 10px;
+  padding: 8px 10px 9px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 6px;
 }
 
 .chat-toolbar-top {
@@ -2249,15 +2249,16 @@ html:not([data-theme]) {
 .chat-kernel-status {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
+  flex: 1 1 auto;
+  min-width: 0;
   font-family: ui-monospace, Consolas, 'Segoe UI Mono', monospace;
   font-size: 10px;
   color: var(--text-muted);
-  padding: 4px 8px;
-  border-radius: 6px;
-  background: color-mix(in srgb, var(--bg-app) 70%, transparent);
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--bg-app) 60%, transparent);
   border: 1px solid var(--border-subtle);
-  min-width: 0;
 }
 .chat-kernel-prompt {
   color: var(--color-primary);
@@ -2274,14 +2275,6 @@ html:not([data-theme]) {
   content: '›';
   margin-left: 2px;
   opacity: 0.75;
-}
-.chat-kernel-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-.chat-kernel-chip {
-  font-size: 11px !important;
 }
 .chat-empty--kernel {
   text-align: left;
@@ -2337,28 +2330,6 @@ html:not([data-theme]) {
   opacity: 1;
 }
 
-.chat-toolbar-selects {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 6px;
-}
-.chat-toolbar-selects .chat-field:last-child {
-  grid-column: 1 / -1;
-}
-
-.chat-field {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
-.chat-field-label {
-  font-size: 9px;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--text-muted);
-  font-weight: 600;
-}
 
 .chat-select,
 .chat-provider-select {
@@ -3090,26 +3061,41 @@ html:not([data-theme]) {
   opacity: 1;
 }
 
+/* Composer: single rounded box — textarea + one-row controls (model chip,
+   toggles, send) inside, Claude/antigravity-style */
+.chat-composer {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: var(--bg-input);
+  border: 1px solid var(--border-subtle);
+  border-radius: 12px;
+  padding: 8px 10px 6px;
+  transition: border-color var(--duration-fast), box-shadow var(--duration-fast);
+}
+.chat-composer:focus-within {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px var(--color-primary-subtle);
+}
 .chat-input {
   width: 100%;
-  min-height: 56px;
+  min-height: 44px;
   max-height: 160px;
   resize: none;
   overflow-y: auto;
-  background: var(--bg-input);
-  border: 1px solid var(--border-subtle);
-  border-radius: 10px;
+  background: transparent;
+  border: none;
+  border-radius: 0;
   color: var(--text-primary);
   font-family: var(--font-sans);
   font-size: 13px;
-  padding: 10px 12px;
-  transition: border-color var(--duration-fast), box-shadow var(--duration-fast);
+  padding: 4px 4px 2px;
   line-height: 1.45;
 }
 .chat-input:focus {
   outline: none;
-  border-color: var(--color-primary);
-  box-shadow: 0 0 0 3px var(--color-primary-subtle);
+  border: none;
+  box-shadow: none;
 }
 .chat-input:disabled {
   opacity: 0.65;
@@ -3122,14 +3108,40 @@ html:not([data-theme]) {
   justify-content: space-between;
   gap: 8px;
   flex-wrap: wrap;
+  min-width: 0;
 }
 
-.chat-toggles {
-  display: flex;
+/* Round primary send button — the single action in the composer row */
+.chat-send-btn {
+  display: inline-flex;
   align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-  min-width: 0;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  flex-shrink: 0;
+  border: none;
+  border-radius: 50%;
+  background: var(--color-primary);
+  color: #fff;
+  cursor: pointer;
+  transition:
+    background var(--duration-fast),
+    transform var(--duration-fast),
+    opacity var(--duration-fast);
+}
+.chat-send-btn:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--color-primary) 85%, #000);
+  transform: translateY(-1px);
+}
+.chat-send-btn:disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
+}
+.chat-cancel-btn {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }
 
 /* P2-3: composer slash-command popover */
@@ -3176,20 +3188,15 @@ html:not([data-theme]) {
 }
 
 /* P1-3: inline model picker — chip + portaled dropdown */
-.chat-composer-left {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-  min-width: 0;
-}
 .chat-model-chip {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  max-width: 150px;
-  font-size: 10.5px;
-  padding: 2px 8px;
+  max-width: 160px;
+  min-width: 0;
+  flex: 0 1 auto;
+  font-size: 11px;
+  padding: 3px 10px;
   border-radius: 999px;
   border: 1px solid var(--border-subtle);
   background: var(--bg-hover);
@@ -3301,38 +3308,101 @@ html:not([data-theme]) {
   margin-bottom: 2px;
   padding-bottom: 6px;
 }
-.chat-toggle {
+
+/* Session controls inside the picker — Mode toggles + Role select */
+.chat-picker-section {
+  border-top: 1px solid var(--border-subtle);
+  margin-top: 6px;
+  padding-top: 6px;
+}
+.chat-picker-section-title {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+  font-weight: 600;
+  padding: 2px 8px 4px;
+}
+.chat-picker-role {
+  width: 100%;
+  font-size: 11px;
+  padding: 4px 8px;
+}
+/* Mode toggles inside the picker — labeled pills (icon + text) so the composer
+   itself stays one clean row: model chip + send. */
+.chat-picker-toggles {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+.chat-picker-toggle {
+  all: unset;
+  box-sizing: border-box;
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  font-size: 11px;
-  color: var(--text-muted);
-  cursor: pointer;
-  user-select: none;
+  gap: 4px;
   padding: 3px 8px;
   border-radius: 999px;
-  border: 1px solid var(--border-subtle);
+  font-size: 10.5px;
+  color: var(--text-muted);
   background: var(--bg-panel);
-  transition: color var(--duration-fast), border-color var(--duration-fast), background var(--duration-fast);
+  border: 1px solid var(--border-subtle);
+  cursor: pointer;
+  transition: color var(--duration-fast), background var(--duration-fast), border-color var(--duration-fast);
 }
-.chat-toggle.on {
+.chat-picker-toggle:hover {
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+.chat-picker-toggle.on {
   color: var(--color-primary);
-  border-color: color-mix(in srgb, var(--color-primary) 35%, transparent);
   background: var(--color-primary-subtle);
+  border-color: color-mix(in srgb, var(--color-primary) 35%, transparent);
 }
-.chat-toggle input {
-  margin: 0;
-  accent-color: var(--color-primary);
-}
-
-/* R1-3: plan-mode toggle — distinct violet accent so "Plan" reads as a mode,
-   not another data toggle. Mirrors the primary-on styling but in plan color. */
-.chat-toggle--plan.on {
+/* R1-3: plan-mode toggle — distinct violet accent so "Plan" reads as a mode. */
+.chat-picker-toggle--plan.on {
   color: var(--color-violet, var(--color-primary));
   border-color: color-mix(in srgb, var(--color-violet, var(--color-primary)) 40%, transparent);
   background: color-mix(in srgb, var(--color-violet, var(--color-primary)) 14%, transparent);
 }
 
+/* ⋮ menu — secondary chat actions behind one header icon */
+.chat-menu {
+  position: fixed;
+  min-width: 190px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-default);
+  border-radius: 8px;
+  box-shadow: var(--shadow-lg);
+  padding: 4px;
+  z-index: var(--z-tooltip);
+  animation: cite-tip-in 0.12s ease;
+}
+.chat-menu-item {
+  all: unset;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 9px;
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--text-primary);
+  cursor: pointer;
+}
+.chat-menu-item:hover:not(:disabled) {
+  background: var(--bg-hover);
+}
+.chat-menu-item:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.chat-menu-sep {
+  border-top: 1px solid var(--border-subtle);
+  margin: 4px 6px;
+}
 /* Legacy alias used by graph filters */
 .chat-header {
   display: flex;
@@ -4150,10 +4220,14 @@ html:not([data-theme]) {
 }
 [data-theme='light'] select,
 [data-theme='light'] .chat-provider-select,
-[data-theme='light'] .input,
-[data-theme='light'] .chat-input {
+[data-theme='light'] .input {
   background: var(--bg-input);
   border-color: var(--border-default);
+  color: var(--text-primary);
+}
+[data-theme='light'] .chat-input {
+  background: transparent;
+  border-color: transparent;
   color: var(--text-primary);
 }
 [data-theme='light'] .md-content code {

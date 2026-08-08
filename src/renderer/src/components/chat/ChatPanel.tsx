@@ -298,6 +298,12 @@ export const ChatPanel: React.FC = () => {
   const [modelPos, setModelPos] = useState<{ left: number; bottom: number } | null>(null)
   const modelChipRef = useRef<HTMLButtonElement | null>(null)
   const modelPickerRef = useRef<HTMLDivElement | null>(null)
+  /** Minimal chrome: secondary actions (history/save/clear/learn/memori) live
+   * in a small portaled ⋮ menu so the header stays a single clean row. */
+  const [menuOpen, setMenuOpen] = useState(false)
+  const [menuPos, setMenuPos] = useState<{ top: number; right: number } | null>(null)
+  const menuBtnRef = useRef<HTMLButtonElement | null>(null)
+  const menuRef = useRef<HTMLDivElement | null>(null)
   /** P2-6: proposal diff preview — the MergeDialog shell with Disk/Proposal/Diff tabs */
   const [diffTarget, setDiffTarget] = useState<{
     p: WriteProposalItem
@@ -471,6 +477,39 @@ export const ChatPanel: React.FC = () => {
     closeModelPicker()
     setSelectedModel(AUTO_MODEL)
   }
+
+  const openMenu = (): void => {
+    const el = menuBtnRef.current
+    if (!el) return
+    const rect = el.getBoundingClientRect()
+    // Anchor below the button, right-aligned so it never overflows the left edge
+    setMenuPos({ top: rect.bottom + 4, right: window.innerWidth - rect.right })
+    setMenuOpen(true)
+  }
+  const closeMenu = (): void => {
+    setMenuOpen(false)
+    setMenuPos(null)
+  }
+
+  // ⋮ menu: dismiss on outside mousedown or Escape (same pattern as the picker)
+  useEffect(() => {
+    if (!menuOpen) return
+    const onDown = (e: MouseEvent): void => {
+      const t = e.target as Node
+      if (menuRef.current?.contains(t)) return
+      if (menuBtnRef.current?.contains(t)) return
+      closeMenu()
+    }
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') closeMenu()
+    }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [menuOpen])
 
   const imgDataUrl = (a: ImageAttachment): string => `data:${a.mimeType};base64,${a.dataBase64}`
 
@@ -890,18 +929,6 @@ export const ChatPanel: React.FC = () => {
   const openProposals = pendingProposals.filter(
     (p) => p.status === 'pending' || p.status === undefined
   )
-  const providerLabel = (p: {
-    id: string
-    name: string
-    connected?: boolean
-    configured?: boolean
-  }): string => {
-    // Ollama: live probe. Cloud: key saved (not same as live Test).
-    if (p.id === 'ollama') return p.connected ? p.name : `${p.name} · offline`
-    if (p.configured) return p.name
-    return `${p.name} · setup`
-  }
-
   // P2-2: after the stream settles, the status line reports what the agent did
   // (from the LAST assistant message's tool trail) instead of a bare 'idle'.
   const lastAssistant = [...messages].reverse().find((m) => m.role === 'assistant')
@@ -927,7 +954,8 @@ export const ChatPanel: React.FC = () => {
         aria-orientation="vertical"
         aria-label="Ubah lebar panel AI"
       />
-      {/* ── Kernel chrome ── */}
+      {/* ── Kernel chrome — single clean row: title + (live status only while
+          working) + three icons. Secondary actions live in the ⋮ menu. ── */}
       <div className="chat-toolbar">
         <div className="chat-toolbar-top">
           <div className="chat-toolbar-title">
@@ -936,6 +964,13 @@ export const ChatPanel: React.FC = () => {
             </span>
             <span>AI Kernel</span>
             {isGenerating && <span className="chat-live-dot" title="Generating" />}
+            {(isGenerating || toolSummaryText) && (
+              <span className="chat-kernel-status" title={statusLine + costSuffix}>
+                <span className="chat-kernel-prompt">wg</span>
+                <span className="truncate">{statusLine}</span>
+                {costSuffix && <span className="chat-cost-chip">{costSuffix}</span>}
+              </span>
+            )}
           </div>
           <div className="chat-toolbar-icons">
             <button
@@ -950,32 +985,15 @@ export const ChatPanel: React.FC = () => {
             </button>
             <button
               type="button"
-              className={`btn btn-ghost btn-sm btn-icon ${showHistory ? 'active' : ''}`}
-              onClick={() => setShowHistory((v) => !v)}
-              data-tooltip="History"
-              aria-label="Chat history"
+              ref={menuBtnRef}
+              className={`btn btn-ghost btn-sm btn-icon${menuOpen ? ' active' : ''}`}
+              onClick={() => (menuOpen ? closeMenu() : openMenu())}
+              data-tooltip="Opsi chat"
+              aria-label="Opsi chat"
+              aria-haspopup="menu"
+              aria-expanded={menuOpen}
             >
-              <Icon name="file" size={14} />
-            </button>
-            <button
-              type="button"
-              className="btn btn-ghost btn-sm btn-icon"
-              onClick={() => void saveCurrentChat()}
-              data-tooltip="Save session"
-              aria-label="Save chat"
-              disabled={messages.length === 0}
-            >
-              <Icon name="save" size={14} />
-            </button>
-            <button
-              type="button"
-              className="btn btn-ghost btn-sm btn-icon"
-              onClick={handleClear}
-              data-tooltip="Clear"
-              aria-label="Clear chat"
-              disabled={messages.length === 0 || isGenerating}
-            >
-              <Icon name="trash" size={14} />
+              <Icon name="more" size={14} />
             </button>
             <button
               type="button"
@@ -988,68 +1006,6 @@ export const ChatPanel: React.FC = () => {
             </button>
           </div>
         </div>
-
-        <div className="chat-kernel-status" title={statusLine + costSuffix}>
-          <span className="chat-kernel-prompt">wg</span>
-          <span className="truncate">{statusLine}</span>
-          {costSuffix && <span className="chat-cost-chip">{costSuffix}</span>}
-        </div>
-
-        <div className="chat-toolbar-selects">
-          <label className="chat-field">
-            <span className="chat-field-label">Provider</span>
-            <select
-              className="chat-select"
-              value={activeProviderId}
-              onChange={(e) => void setActiveProvider(e.target.value)}
-              aria-label="AI provider"
-            >
-              {providers.length === 0 && <option value={activeProviderId}>Loading…</option>}
-              {providers.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {providerLabel(p)}
-                </option>
-              ))}
-            </select>
-          </label>
-
-          <label className="chat-field">
-            <span className="chat-field-label">Role</span>
-            <select
-              className="chat-select"
-              value={agentRole}
-              onChange={(e) => setAgentRole(e.target.value as never)}
-              aria-label="Agent role"
-            >
-              <option value="general">General</option>
-              <option value="writer">Writer</option>
-              <option value="researcher">Researcher</option>
-              <option value="curator">Curator</option>
-              <option value="planner">Planner</option>
-            </select>
-          </label>
-        </div>
-
-        <div className="chat-kernel-actions">
-          <button
-            type="button"
-            className="local-graph-chip chat-kernel-chip"
-            onClick={() => void handleLearn()}
-            disabled={isGenerating}
-            title="Scan vault → proposal isi AI Memory + wikilink (graph tumbuh)"
-          >
-            Pelajari workspace
-          </button>
-          <button
-            type="button"
-            className="local-graph-chip chat-kernel-chip"
-            onClick={() => void openMemoryIndex()}
-            title="Buka AI Memory/00 Index.md"
-          >
-            Memori
-          </button>
-        </div>
-
         {activeTab && (
           <div className="chat-context-chip" title={activeTab.path}>
             <Icon name="file" size={11} />
@@ -1467,55 +1423,55 @@ export const ChatPanel: React.FC = () => {
             ))}
           </div>
         )}
-        <textarea
-          ref={inputRef}
-          className="chat-input"
-          placeholder="perintah / tanya kernel… (ketik / untuk perintah · Enter kirim · paste/drag gambar)"
-          value={inputText}
-          onChange={handleInputChange}
-          onKeyDown={handleKeyDown}
-          onBlur={closeSlash}
-          onPaste={handlePaste}
-          onDrop={handleDrop}
-          disabled={isGenerating}
-          aria-label="Chat message"
-          rows={2}
-        />
-        {/* P2-3: slash command popover — portaled so .chat-panel clipping never hits it */}
-        {slashOpen &&
-          slashPos &&
-          slashFiltered.length > 0 &&
-          createPortal(
-            <div
-              className="chat-slash-picker"
-              style={{ left: slashPos.left, bottom: slashPos.bottom }}
-              role="listbox"
-              aria-label="Perintah chat"
-            >
-              {slashFiltered.map((cmd, i) => (
-                <button
-                  key={cmd.name}
-                  type="button"
-                  className={`chat-slash-row${i === slashActive ? ' active' : ''}`}
-                  onMouseDown={(e) => {
-                    // mousedown fires before blur — select without losing focus
-                    e.preventDefault()
-                    selectSlash(cmd)
-                  }}
-                  onMouseEnter={() => setSlashActive(i)}
-                  role="option"
-                  aria-selected={i === slashActive}
-                >
-                  <span className="chat-slash-name">{cmd.name}</span>
-                  <span className="chat-slash-label">{cmd.label}</span>
-                </button>
-              ))}
-            </div>,
-            document.body
-          )}
+        <div className="chat-composer">
+          <textarea
+            ref={inputRef}
+            className="chat-input"
+            placeholder="perintah / tanya kernel… (ketik / untuk perintah · Enter kirim · paste/drag gambar)"
+            value={inputText}
+            onChange={handleInputChange}
+            onKeyDown={handleKeyDown}
+            onBlur={closeSlash}
+            onPaste={handlePaste}
+            onDrop={handleDrop}
+            disabled={isGenerating}
+            aria-label="Chat message"
+            rows={2}
+          />
+          {/* P2-3: slash command popover — portaled so .chat-panel clipping never hits it */}
+          {slashOpen &&
+            slashPos &&
+            slashFiltered.length > 0 &&
+            createPortal(
+              <div
+                className="chat-slash-picker"
+                style={{ left: slashPos.left, bottom: slashPos.bottom }}
+                role="listbox"
+                aria-label="Perintah chat"
+              >
+                {slashFiltered.map((cmd, i) => (
+                  <button
+                    key={cmd.name}
+                    type="button"
+                    className={`chat-slash-row${i === slashActive ? ' active' : ''}`}
+                    onMouseDown={(e) => {
+                      // mousedown fires before blur — select without losing focus
+                      e.preventDefault()
+                      selectSlash(cmd)
+                    }}
+                    onMouseEnter={() => setSlashActive(i)}
+                    role="option"
+                    aria-selected={i === slashActive}
+                  >
+                    <span className="chat-slash-name">{cmd.name}</span>
+                    <span className="chat-slash-label">{cmd.label}</span>
+                  </button>
+                ))}
+              </div>,
+              document.body
+            )}
 
-        <div className="chat-input-footer">
-          <div className="chat-composer-left">
+          <div className="chat-input-footer">
             <button
               ref={modelChipRef}
               type="button"
@@ -1534,61 +1490,29 @@ export const ChatPanel: React.FC = () => {
                 ▾
               </span>
             </button>
-            <div className="chat-toggles">
-              <label
-                className={`chat-toggle ${useContext ? 'on' : ''}`}
-                title="Inject vault context + AI Memory"
-              >
-                <input
-                  type="checkbox"
-                  checked={useContext}
-                  onChange={(e) => setUseContext(e.target.checked)}
-                />
-                Context
-              </label>
-              <label
-                className={`chat-toggle ${enableTools ? 'on' : ''}`}
-                title="Tools: search / read / write proposals"
-              >
-                <input
-                  type="checkbox"
-                  checked={enableTools}
-                  onChange={(e) => setEnableTools(e.target.checked)}
-                />
-                Tools
-              </label>
-              <label
-                className={`chat-toggle chat-toggle--plan ${planMode ? 'on' : ''}`}
-                title="Plan mode (R1-3): write tools diblokir — model hanya menganalisis, menyusun langkah, lalu create_plan jadi proposal yang bisa ditinjau"
-              >
-                <input
-                  type="checkbox"
-                  checked={planMode}
-                  onChange={(e) => setPlanMode(e.target.checked)}
-                />
-                Plan
-              </label>
-            </div>
-          </div>
 
-          {isGenerating ? (
-            <button
-              type="button"
-              className="btn btn-surface btn-sm"
-              onClick={() => void cancelStream()}
-            >
-              Cancel
-            </button>
-          ) : (
-            <button
-              type="button"
-              className="btn btn-primary btn-sm"
-              onClick={handleSend}
-              disabled={!inputText.trim() && attachments.length === 0}
-            >
-              Run
-            </button>
-          )}
+            {isGenerating ? (
+              <button
+                type="button"
+                className="btn btn-surface btn-sm chat-cancel-btn"
+                onClick={() => void cancelStream()}
+              >
+                <Icon name="cancel" size={12} />
+                Cancel
+              </button>
+            ) : (
+              <button
+                type="button"
+                className="chat-send-btn"
+                onClick={handleSend}
+                disabled={!inputText.trim() && attachments.length === 0}
+                aria-label="Kirim pesan"
+                title="Kirim (Enter)"
+              >
+                <Icon name="send" size={16} />
+              </button>
+            )}
+          </div>
         </div>
       </div>
       {/* P2-6: proposal diff preview — reuses the MergeDialog shell (portaled) */}
@@ -1666,6 +1590,151 @@ export const ChatPanel: React.FC = () => {
                 })}
               </div>
             ))}
+            {/* Mode + Role: session controls live with the model list so the
+                composer stays a single clean row (model chip + send). */}
+            <div className="chat-picker-section">
+              <div className="chat-picker-section-title">Mode</div>
+              <div className="chat-picker-toggles">
+                <button
+                  type="button"
+                  className={`chat-picker-toggle${useContext ? ' on' : ''}`}
+                  title="Context: inject vault context + AI Memory"
+                  aria-pressed={useContext}
+                  onClick={() => setUseContext(!useContext)}
+                >
+                  <Icon name="psychology" size={13} />
+                  Context
+                </button>
+                <button
+                  type="button"
+                  className={`chat-picker-toggle${enableTools ? ' on' : ''}`}
+                  title="Tools: search / read / write proposals"
+                  aria-pressed={enableTools}
+                  onClick={() => setEnableTools(!enableTools)}
+                >
+                  <Icon name="construction" size={13} />
+                  Tools
+                </button>
+                <button
+                  type="button"
+                  className={`chat-picker-toggle chat-picker-toggle--plan${planMode ? ' on' : ''}`}
+                  title="Plan mode (R1-3): write tools diblokir — model hanya menganalisis, menyusun langkah, lalu create_plan jadi proposal yang bisa ditinjau"
+                  aria-pressed={planMode}
+                  onClick={() => setPlanMode(!planMode)}
+                >
+                  <Icon name="planner" size={13} />
+                  Plan
+                </button>
+              </div>
+            </div>
+            <div className="chat-picker-section">
+              <div className="chat-picker-section-title">Role</div>
+              <select
+                className="chat-select chat-picker-role"
+                value={agentRole}
+                onChange={(e) => setAgentRole(e.target.value as never)}
+                aria-label="Agent role"
+              >
+                <option value="general">General</option>
+                <option value="writer">Writer</option>
+                <option value="researcher">Researcher</option>
+                <option value="curator">Curator</option>
+                <option value="planner">Planner</option>
+              </select>
+            </div>
+          </div>,
+          document.body
+        )}
+      {/* ⋮ menu — portaled under the header button */}
+      {menuOpen &&
+        menuPos &&
+        createPortal(
+          <div
+            ref={menuRef}
+            className="chat-menu"
+            style={{ top: menuPos.top, right: menuPos.right }}
+            role="menu"
+            aria-label="Opsi chat"
+          >
+            <button
+              type="button"
+              className="chat-menu-item"
+              onClick={() => {
+                closeMenu()
+                handleNewChat()
+              }}
+              role="menuitem"
+              disabled={isGenerating}
+            >
+              <Icon name="plus" size={13} />
+              New chat
+            </button>
+            <button
+              type="button"
+              className="chat-menu-item"
+              onClick={() => {
+                closeMenu()
+                setShowHistory((v) => !v)
+              }}
+              role="menuitem"
+            >
+              <Icon name="file" size={13} />
+              History
+            </button>
+            <button
+              type="button"
+              className="chat-menu-item"
+              onClick={() => {
+                closeMenu()
+                void saveCurrentChat()
+              }}
+              role="menuitem"
+              disabled={messages.length === 0}
+            >
+              <Icon name="save" size={13} />
+              Save session
+            </button>
+            <button
+              type="button"
+              className="chat-menu-item"
+              onClick={() => {
+                closeMenu()
+                handleClear()
+              }}
+              role="menuitem"
+              disabled={messages.length === 0 || isGenerating}
+            >
+              <Icon name="trash" size={13} />
+              Clear chat
+            </button>
+            <div className="chat-menu-sep" role="separator" />
+            <button
+              type="button"
+              className="chat-menu-item"
+              onClick={() => {
+                closeMenu()
+                void handleLearn()
+              }}
+              role="menuitem"
+              disabled={isGenerating}
+              title="Scan vault → proposal isi AI Memory + wikilink (graph tumbuh)"
+            >
+              <Icon name="psychology" size={13} />
+              Pelajari workspace
+            </button>
+            <button
+              type="button"
+              className="chat-menu-item"
+              onClick={() => {
+                closeMenu()
+                void openMemoryIndex()
+              }}
+              role="menuitem"
+              title="Buka AI Memory/00 Index.md"
+            >
+              <Icon name="note" size={13} />
+              Memori
+            </button>
           </div>,
           document.body
         )}

@@ -59,6 +59,9 @@ export type IconName =
   | 'people'
   | 'history'
   | 'play'
+  | 'send'
+  | 'construction'
+  | 'more'
 
 /**
  * App icon key → Material Symbols ligature
@@ -116,7 +119,10 @@ export const MATERIAL_ICON: Record<IconName, string> = {
   info: 'info',
   sync: 'sync',
   refresh: 'refresh',
-  play: 'play_arrow'
+  play: 'play_arrow',
+  send: 'arrow_upward',
+  construction: 'construction',
+  more: 'more_horiz'
 }
 
 export interface IconProps {
