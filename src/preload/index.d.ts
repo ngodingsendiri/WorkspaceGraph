@@ -285,7 +285,8 @@ export interface API {
     useContext?: boolean,
     agentRole?: string,
     enableTools?: boolean,
-    planMode?: boolean
+    planMode?: boolean,
+    resumeFrom?: { round: number; contextTokens?: number }
   ) => string
   streamAIPipeline: (
     request: any,
@@ -391,6 +392,27 @@ export interface API {
   loadChat: (id: string) => Promise<any | null>
   newChatId: () => Promise<string>
   deleteChat: (id: string) => Promise<{ ok: boolean; error?: string }>
+
+  // R2-2: stream resume checkpoints (.workspacegraph/checkpoints)
+  saveCheckpoint: (cp: {
+    id: string
+    conversationId: string
+    messageId: string
+    messageIndex: number
+    round: number
+    contextTokens?: number
+    model?: string
+    agentRole?: string
+    useContext?: boolean
+    enableTools?: boolean
+    planMode?: boolean
+    activeFilePath?: string
+    reason: string
+    timestamp: string
+  }) => Promise<{ ok: boolean; path?: string; error?: string }>
+  listCheckpoints: () => Promise<unknown[]>
+  loadCheckpoint: (id: string) => Promise<unknown | null>
+  deleteCheckpoint: (id: string) => Promise<{ ok: boolean; error?: string }>
 
   listTemplates: () => Promise<
     {

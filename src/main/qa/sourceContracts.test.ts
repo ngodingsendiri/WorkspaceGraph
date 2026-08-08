@@ -1414,6 +1414,37 @@ describe('AI system contracts', () => {
     expect(has(store, 'refreshProposals', 'listWriteProposals')).toBe(true)
     expect(has(panel, 'refreshProposals', 'void refreshProposals()')).toBe(true)
   })
+  it('R2-2 resume stream: checkpoint file + middleware round + Lanjutkan UI', () => {
+    const cpStore = read('src/main/ai/CheckpointStore.ts')
+    const mid = read('src/main/ai/AIMiddleware.ts')
+    const chat = read('src/renderer/src/store/chatStore.ts')
+    const panel = read('src/renderer/src/components/chat/ChatPanel.tsx')
+    const pre = read('src/preload/index.ts')
+    // Main-side persistence: one JSON per truncated message under checkpoints/
+    expect(
+      has(
+        cpStore,
+        "'.workspacegraph', 'checkpoints'",
+        'checkpointIdFor',
+        'saveCheckpoint',
+        'loadCheckpoint',
+        'deleteCheckpoint'
+      )
+    ).toBe(true)
+    // Middleware resumes the tool loop from the saved round, not round 0
+    expect(has(mid, 'resumeFrom', 'startRound', 'round < (enableTools ? MAX_TOOL_ROUNDS')).toBe(
+      true
+    )
+    // Renderer stamps the checkpoint on truncation, exposes resumeStream, and
+    // strips the truncation markers before continuing
+    expect(
+      has(chat, 'resumeStream:', 'checkpoint', 'makeStreamChunkHandler', 'stripTruncationMarkers')
+    ).toBe(true)
+    // UI offers Lanjutkan on truncated replies (via the resume action)
+    expect(has(panel, 'Lanjutkan', 'resumeStream')).toBe(true)
+    // IPC bridge round-trips the checkpoint
+    expect(has(pre, 'saveCheckpoint', "invoke('checkpoint:save'", 'deleteCheckpoint')).toBe(true)
+  })
   it('P2 knowledge promotion: Simpan sebagai Knowledge wired end-to-end', () => {
     const tools = read('src/main/ai/AgentTools.ts')
     // Main-side promotion: Knowledge/ proposal + automatic backlink Sumber section

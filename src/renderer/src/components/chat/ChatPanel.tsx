@@ -6,7 +6,8 @@ import {
   ImageAttachment,
   ChatMessage,
   ToolRun,
-  CitationItem
+  CitationItem,
+  stripTruncationMarkers
 } from '../../store/chatStore'
 import { TooltipPreviewCache } from '../graph/graphTooltipPreview'
 import { makeCitePreviewCache, citeNode, citeTipPos } from './chatCitationTip'
@@ -257,6 +258,7 @@ export const ChatPanel: React.FC = () => {
     deleteChat,
     retryLastMessage,
     rephraseMessage,
+    resumeStream,
     learnWorkspace,
     followUpMessageId,
     setFollowUp
@@ -838,6 +840,13 @@ export const ChatPanel: React.FC = () => {
     inputRef.current?.focus()
   }
 
+  /** R2-2: continue a truncated reply from its saved checkpoint. */
+  const handleResume = (msg: ChatMessage): void => {
+    if (isGenerating) return
+    stickToBottom.current = true
+    void resumeStream(msg.id, activeTab?.path)
+  }
+
   /** P2: promote this answer into a Knowledge/ note proposal (+ backlinks). */
   const handlePromoteKnowledge = async (msg: ChatMessage): Promise<void> => {
     if (isGenerating) return
@@ -1283,6 +1292,19 @@ export const ChatPanel: React.FC = () => {
                       >
                         {copyFlash === msg.id ? 'Copied' : 'Copy'}
                       </button>
+                      {/* R2-2: continue a truncated reply from its checkpoint —
+                          only when there is real partial content to append to
+                          (markers stripped), not an empty/error stub. */}
+                      {msg.checkpoint && stripTruncationMarkers(msg.content).length > 0 && (
+                        <button
+                          type="button"
+                          className="btn btn-surface btn-sm chat-resume-btn"
+                          onClick={() => handleResume(msg)}
+                          title={`Lanjutkan dari checkpoint (round ${msg.checkpoint.round} · ${msg.checkpoint.reason}) — stream terputus, lanjut dari titik terakhir tanpa mulai ulang`}
+                        >
+                          <Icon name="play" size={12} /> Lanjutkan
+                        </button>
+                      )}
                       {isErr ? (
                         <button
                           type="button"

@@ -174,7 +174,9 @@ const api = {
     useContext?: boolean,
     agentRole?: string,
     enableTools?: boolean,
-    planMode?: boolean
+    planMode?: boolean,
+    /** R2-2: continue a truncated stream from its checkpoint round. */
+    resumeFrom?: { round: number; contextTokens?: number }
   ) => {
     const requestId = Math.random().toString(36).slice(2)
     const channel = `ai:stream:${requestId}`
@@ -195,7 +197,8 @@ const api = {
         useContext,
         agentRole,
         enableTools,
-        planMode
+        planMode,
+        resumeFrom
       })
       .catch((err: Error) => {
         onChunk({
@@ -270,6 +273,12 @@ const api = {
   loadChat: (id: string) => ipcRenderer.invoke('chat:load', id),
   deleteChat: (id: string) => ipcRenderer.invoke('chat:delete', id),
   newChatId: () => ipcRenderer.invoke('chat:newId'),
+
+  // R2-2: stream resume checkpoints (.workspacegraph/checkpoints)
+  saveCheckpoint: (cp: unknown) => ipcRenderer.invoke('checkpoint:save', cp),
+  listCheckpoints: () => ipcRenderer.invoke('checkpoint:list'),
+  loadCheckpoint: (id: string) => ipcRenderer.invoke('checkpoint:load', id),
+  deleteCheckpoint: (id: string) => ipcRenderer.invoke('checkpoint:delete', id),
 
   // Templates + domain (Phase 4)
   listTemplates: () => ipcRenderer.invoke('template:list'),

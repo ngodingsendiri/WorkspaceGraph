@@ -61,6 +61,8 @@ export interface ChatMessage {
   toolRuns?: ToolRun[]
   /** Total tokens used by this completion (provider-reported, streaming). */
   tokensUsed?: number
+  /** R2-1: estimated USD cost of this reply (context input + output). */
+  costUsd?: number
   /** Estimated tokens injected as workspace context for this reply. */
   contextTokens?: number
   /** P1-4: tokens saved by sending the workspace context only in round 0 of a
@@ -74,6 +76,26 @@ export interface ChatMessage {
   /** P3-2: this user message was a follow-up — id of the assistant message
    * whose proposals seeded its prompt (persisted so Regenerate re-arms). */
   followUpFrom?: string
+  /** R2-2: this reply was truncated (cancelled / timeout / error) — a resume
+   * checkpoint records where the stream stopped so the UI can offer
+   * "Lanjutkan" and continue from that point instead of restarting. */
+  checkpoint?: MessageCheckpoint
+}
+
+/**
+ * R2-2: where a truncated stream stopped. Mirrors the persisted checkpoint
+ * under <vault>/.workspacegraph/checkpoints/ (written via IPC on truncation,
+ * cleared once the reply completes or is retried/rephrased away).
+ */
+export interface MessageCheckpoint {
+  /** `${conversationId}_${messageId}` — same id as the on-disk file. */
+  id: string
+  /** Tool-loop round where the stream stopped (0 = before any tool round). */
+  round: number
+  /** Workspace-context token estimate at interruption time. */
+  contextTokens?: number
+  reason: 'cancelled' | 'timeout' | 'error'
+  timestamp: string
 }
 
 export interface ProviderItem {
@@ -102,6 +124,11 @@ export interface ChatStore {
   pendingProposals: WriteProposalItem[]
   conversationId: string | null
   activeStreamId: string | null
+  /** R2-2: the assistant message the in-flight stream is writing into (so a
+   * cancel can stamp its resume checkpoint even though no done chunk arrives). */
+  activeAssistantMsgId: string | null
+  /** R2-2: last tool round seen from stream chunks — the cancel-path checkpoint. */
+  activeStreamRound: number
   lastToolStatus: string
   /** P3-1: follow-up mode — source assistant message whose proposals should
    * seed the next prompt (consumed by sendMessage, cleared on session reset). */
@@ -117,6 +144,9 @@ export interface ChatStore {
   setPlanMode: (on: boolean) => void
   sendMessage: (text: string, activeFilePath?: string, images?: ImageAttachment[]) => Promise<void>
   cancelStream: () => Promise<void>
+  /** R2-2: continue a truncated assistant reply from its checkpoint — appends
+   * to the same message and resumes the tool loop from the saved round. */
+  resumeStream: (messageId: string, activeFilePath?: string) => Promise<void>
   clearHistory: () => void
   /** Hydrate the proposal dock from persisted pending proposals (restart-safe). */
   refreshProposals: () => Promise<void>
@@ -157,6 +187,227 @@ function mergeProposals(
   for (const p of existing || []) map.set(p.id, p)
   for (const p of incoming || []) map.set(p.id, p)
   return Array.from(map.values())
+}
+
+/**
+ * R2-2: checkpoint file id — `${conversationId}_${messageId}` sanitized to safe
+ * filename chars. Mirrors src/main/ai/CheckpointStore.ts (both sides construct
+ * the same id so save + delete always target the same file).
+ */
+export function checkpointIdFor(conversationId: string, messageId: string): string {
+  const raw = `${conversationId || 'anon'}_${messageId}`
+  const clean = raw.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 160)
+  return clean || 'cp'
+}
+
+/**
+ * R2-2: remove the truncation markers the middleware appends to terminal
+ * chunks (`*(cancelled)*`, `*(timeout …)*`, `**Error:** …`) so the resume
+ * prompt only carries the model's real partial answer.
+ */
+export function stripTruncationMarkers(content: string): string {
+  return (content || '')
+    .replace(/\s*\*\*Error:\*\*[\s\S]*$/, '')
+    .replace(/\s*\*\(cancelled\)\*\s*$/, '')
+    .replace(/\s*\*\(timeout[^\n]*\n?$/, '')
+    .trim()
+}
+
+/** Minimal zustand set() shape the shared stream handler needs. */
+type StoreSet = (fn: (state: ChatStore) => Partial<ChatStore>) => void
+
+/** R2-2: persist the on-disk checkpoint for a truncated assistant message. */
+function writeCheckpoint(
+  get: () => ChatStore,
+  assistantMsgId: string,
+  meta: {
+    round: number
+    contextTokens?: number
+    reason: MessageCheckpoint['reason']
+  },
+  activeFilePath?: string
+): void {
+  const state = get()
+  const idx = state.messages.findIndex((m) => m.id === assistantMsgId)
+  if (idx < 0) return
+  const msg = state.messages[idx]
+  if (msg.role !== 'assistant') return
+  void window.api
+    .saveCheckpoint({
+      id: checkpointIdFor(state.conversationId || 'anon', assistantMsgId),
+      conversationId: state.conversationId || 'anon',
+      messageId: assistantMsgId,
+      messageIndex: idx,
+      round: meta.round,
+      contextTokens: meta.contextTokens ?? msg.contextTokens,
+      model: state.selectedModelId,
+      agentRole: state.agentRole,
+      useContext: state.useContext,
+      enableTools: state.enableTools,
+      planMode: state.planMode,
+      activeFilePath,
+      reason: meta.reason,
+      timestamp: new Date().toISOString()
+    })
+    .catch(() => undefined)
+}
+
+/**
+ * R2-2: shared streaming chunk handler for BOTH sendMessage and resumeStream.
+ * Accumulates content/toolRuns/tokens/proposals into the target assistant
+ * message (sendMessage targets the fresh reply; resume targets the truncated
+ * one so the answer appends in place), tracks the live tool round, and on a
+ * terminal chunk either persists a resume checkpoint (truncated) or clears it
+ * (completed). Side effects run OUTSIDE the set() updater — it stays pure.
+ */
+function makeStreamChunkHandler(
+  get: () => ChatStore,
+  set: StoreSet,
+  assistantMsgId: string,
+  activeFilePath?: string
+): (chunk: {
+  content: string
+  done: boolean
+  error?: string
+  citations?: CitationItem[]
+  proposals?: WriteProposalItem[]
+  toolStatus?: string
+  toolRun?: ToolRun
+  round?: number
+  tokensUsed?: number
+  contextTokens?: number
+  contextSavedTokens?: number
+  reasoning?: string
+  costUsd?: number
+  verifications?: CitationVerification[]
+}) => void {
+  return (chunk) => {
+    // State BEFORE this chunk: the done set() below clears the message stamp,
+    // so the on-disk delete needs the pre-chunk checkpoint. Resumability is
+    // gated on real partial content — an error/cancel before any model output
+    // must not persist a checkpoint the UI can never surface (Retry is the
+    // action for an empty reply).
+    const priorTarget = get().messages.find((m) => m.id === assistantMsgId)
+    const priorCheckpoint = priorTarget?.checkpoint
+    const priorResumable = priorTarget
+      ? stripTruncationMarkers(priorTarget.content || '').length > 0
+      : false
+    // Truncated = done chunk that carries an error / cancel / timeout marker.
+    // These markers only ride middleware-generated terminal chunks, so model
+    // prose can never false-positive them.
+    const truncated =
+      Boolean(chunk.done) &&
+      (Boolean(chunk.error) ||
+        String(chunk.content || '').includes('*(cancelled)*') ||
+        String(chunk.content || '').includes('*(timeout'))
+    const round = typeof chunk.round === 'number' ? chunk.round : get().activeStreamRound
+    const reason: MessageCheckpoint['reason'] = String(chunk.content || '').includes('*(timeout')
+      ? 'timeout'
+      : chunk.error
+        ? 'error'
+        : 'cancelled'
+
+    set((state) => {
+      const nextPending = mergeProposals(
+        state.pendingProposals,
+        (chunk.proposals as WriteProposalItem[]) || []
+      ).filter((p) => p.status === 'pending' || !p.status)
+
+      // Compute the checkpoint BEFORE the map — the map consumes it.
+      const target = state.messages.find((m) => m.id === assistantMsgId)
+      const nextCheckpoint: MessageCheckpoint | undefined =
+        truncated && priorResumable && target
+          ? {
+              id: checkpointIdFor(state.conversationId || 'anon', assistantMsgId),
+              round,
+              contextTokens: chunk.contextTokens ?? target.contextTokens,
+              reason,
+              timestamp: new Date().toISOString()
+            }
+          : undefined
+
+      return {
+        messages: state.messages.map((m) => {
+          if (m.id !== assistantMsgId) return m
+          let content = m.content + (chunk.content || '')
+          // Avoid double "**Error:**" if middleware already injected it into content
+          if (chunk.error && chunk.done) {
+            const already =
+              content.includes(chunk.error) ||
+              content.includes('**Error:**') ||
+              content.includes('*(cancelled)*')
+            if (!already) {
+              const errLine = `**Error:** ${chunk.error}`
+              content = content.trim() ? `${content}\n\n${errLine}` : errLine
+            }
+          }
+          // P1-1: accumulate per-tool lifecycle events into the trail —
+          // updates match by runId (running → ok/error), new runs append.
+          let toolRuns = m.toolRuns
+          const incoming = chunk.toolRun as ToolRun | undefined
+          if (incoming) {
+            const idx = (toolRuns || []).findIndex((r) => r.runId === incoming.runId)
+            toolRuns =
+              idx >= 0
+                ? toolRuns!.map((r, i) => (i === idx ? { ...r, ...incoming } : r))
+                : [...(toolRuns || []), incoming]
+          }
+          // A done chunk (abort/timeout/error) may close a run that never
+          // got its ok/error event — never leave a stuck spinner pill.
+          if (chunk.done) toolRuns = closeOutRunningRuns(toolRuns)
+          return {
+            ...m,
+            content,
+            citations: chunk.citations || m.citations,
+            proposals: mergeProposals(m.proposals, chunk.proposals as WriteProposalItem[]),
+            toolStatus: chunk.toolStatus || m.toolStatus,
+            toolRuns,
+            // Tool loops are separate completions — accumulate so the shown
+            // count is the total, not just the last round.
+            tokensUsed:
+              chunk.tokensUsed !== undefined && m.tokensUsed !== undefined
+                ? m.tokensUsed + chunk.tokensUsed
+                : (chunk.tokensUsed ?? m.tokensUsed),
+            costUsd:
+              chunk.costUsd !== undefined && m.costUsd !== undefined
+                ? m.costUsd + chunk.costUsd
+                : (chunk.costUsd ?? m.costUsd),
+            contextTokens: chunk.contextTokens ?? m.contextTokens,
+            contextSavedTokens: chunk.contextSavedTokens ?? m.contextSavedTokens,
+            // P2-4: reasoning arrives as incremental deltas — append
+            reasoning: (m.reasoning || '') + (chunk.reasoning || ''),
+            verifications: (chunk.verifications as CitationVerification[]) || m.verifications,
+            // R2-2: truncated → stamp the checkpoint (Lanjutkan button);
+            // completed → clear it (nothing left to continue).
+            checkpoint: chunk.done ? (truncated ? nextCheckpoint : undefined) : m.checkpoint
+          }
+        }),
+        isGenerating: !chunk.done,
+        pendingProposals: nextPending,
+        lastToolStatus: chunk.error || chunk.toolStatus || state.lastToolStatus,
+        activeStreamId: chunk.done ? null : state.activeStreamId,
+        activeAssistantMsgId: chunk.done ? null : state.activeAssistantMsgId,
+        activeStreamRound: typeof chunk.round === 'number' ? chunk.round : state.activeStreamRound
+      }
+    })
+
+    if (chunk.done) {
+      // Side effects after the pure set() — persist the resume checkpoint on
+      // truncation, or remove it once the reply completed. The delete uses the
+      // PRE-chunk checkpoint (the done set() just cleared the message stamp).
+      if (truncated && priorResumable) {
+        writeCheckpoint(
+          get,
+          assistantMsgId,
+          { round, contextTokens: chunk.contextTokens, reason },
+          activeFilePath
+        )
+      } else if (priorCheckpoint) {
+        void window.api.deleteCheckpoint(priorCheckpoint.id).catch(() => undefined)
+      }
+      void get().saveCurrentChat()
+    }
+  }
 }
 
 /**
@@ -225,6 +476,8 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   pendingProposals: [],
   conversationId: null,
   activeStreamId: null,
+  activeAssistantMsgId: null,
+  activeStreamRound: 0,
   lastToolStatus: '',
   lastKernelStatus: '',
   followUpMessageId: null,
@@ -326,7 +579,9 @@ export const useChatStore = create<ChatStore>((set, get) => ({
     set({
       messages: [...prior, userMsg, assistantMsg],
       isGenerating: true,
-      lastToolStatus: ''
+      lastToolStatus: '',
+      activeAssistantMsgId: assistantMsgId,
+      activeStreamRound: 0
     })
 
     const { selectedModelId, activeProviderId, useContext, agentRole, enableTools, planMode } =
@@ -365,80 +620,16 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       }
       const streamId = window.api.streamAIMessage(
         requestPayload,
-        (chunk) => {
-          set((state) => {
-            const nextPending = mergeProposals(
-              state.pendingProposals,
-              (chunk.proposals as WriteProposalItem[]) || []
-            ).filter((p) => p.status === 'pending' || !p.status)
-
-            return {
-              messages: state.messages.map((m) => {
-                if (m.id !== assistantMsgId) return m
-                let content = m.content + (chunk.content || '')
-                // Avoid double "**Error:**" if middleware already injected it into content
-                if (chunk.error && chunk.done) {
-                  const already =
-                    content.includes(chunk.error) ||
-                    content.includes('**Error:**') ||
-                    content.includes('*(cancelled)*')
-                  if (!already) {
-                    const errLine = `**Error:** ${chunk.error}`
-                    content = content.trim() ? `${content}\n\n${errLine}` : errLine
-                  }
-                }
-                // P1-1: accumulate per-tool lifecycle events into the trail —
-                // updates match by runId (running → ok/error), new runs append.
-                let toolRuns = m.toolRuns
-                const incoming = chunk.toolRun as ToolRun | undefined
-                if (incoming) {
-                  const idx = (toolRuns || []).findIndex((r) => r.runId === incoming.runId)
-                  toolRuns =
-                    idx >= 0
-                      ? toolRuns!.map((r, i) => (i === idx ? { ...r, ...incoming } : r))
-                      : [...(toolRuns || []), incoming]
-                }
-                // A done chunk (abort/timeout/error) may close a run that never
-                // got its ok/error event — never leave a stuck spinner pill.
-                if (chunk.done) toolRuns = closeOutRunningRuns(toolRuns)
-                return {
-                  ...m,
-                  content,
-                  citations: chunk.citations || m.citations,
-                  proposals: mergeProposals(m.proposals, chunk.proposals as WriteProposalItem[]),
-                  toolStatus: chunk.toolStatus || m.toolStatus,
-                  toolRuns,
-                  // Tool loops are separate completions — accumulate so the shown
-                  // count is the total, not just the last round.
-                  tokensUsed:
-                    chunk.tokensUsed !== undefined && m.tokensUsed !== undefined
-                      ? m.tokensUsed + chunk.tokensUsed
-                      : (chunk.tokensUsed ?? m.tokensUsed),
-                  contextTokens: chunk.contextTokens ?? m.contextTokens,
-                  contextSavedTokens: chunk.contextSavedTokens ?? m.contextSavedTokens,
-                  // P2-4: reasoning arrives as incremental deltas — append
-                  reasoning: (m.reasoning || '') + (chunk.reasoning || ''),
-                  verifications: (chunk.verifications as CitationVerification[]) || m.verifications
-                }
-              }),
-              isGenerating: !chunk.done,
-              pendingProposals: nextPending,
-              lastToolStatus: chunk.error || chunk.toolStatus || state.lastToolStatus,
-              activeStreamId: chunk.done ? null : state.activeStreamId
-            }
-          })
-
-          if (chunk.done) {
-            void get().saveCurrentChat()
-          }
-        },
+        // R2-2: shared handler — accumulate into the fresh assistant message and
+        // write/clear the resume checkpoint on terminal chunks.
+        makeStreamChunkHandler(get, set, assistantMsgId, activeFilePath),
         activeFilePath,
         useContext,
         agentRole,
         enableTools,
         planMode
       )
-      set({ activeStreamId: streamId })
+      set({ activeStreamId: streamId, activeAssistantMsgId: assistantMsgId, activeStreamRound: 0 })
     } catch (_err) {
       set((state) => ({
         messages: state.messages.map((m) =>
@@ -447,7 +638,9 @@ export const useChatStore = create<ChatStore>((set, get) => ({
             : m
         ),
         isGenerating: false,
-        activeStreamId: null
+        activeStreamId: null,
+        activeAssistantMsgId: null,
+        activeStreamRound: 0
       }))
     }
   },
@@ -455,27 +648,60 @@ export const useChatStore = create<ChatStore>((set, get) => ({
   cancelStream: async () => {
     const id = get().activeStreamId
     if (id) {
+      const targetId = get().activeAssistantMsgId
+      // R2-2: capture the round BEFORE the reset below — the checkpoint needs it.
+      const cancelledRound = get().activeStreamRound
       await window.api.cancelAIStream(id)
+      // R2-2: only a partial reply with real content is resumable — a cancel
+      // before any model output persists no checkpoint (Retry is the action).
+      const targetMsg = targetId ? get().messages.find((m) => m.id === targetId) : undefined
+      const resumable = targetMsg
+        ? stripTruncationMarkers(targetMsg.content || '').length > 0
+        : false
       set((state) => ({
         isGenerating: false,
         activeStreamId: null,
+        activeAssistantMsgId: null,
+        activeStreamRound: 0,
         lastToolStatus: 'Cancelled',
         // P1-1: cancel drops the renderer listener, so no done chunk arrives to
-        // close out running tool pills — mark them interrupted here.
-        messages: state.messages.map((m) =>
-          m.toolRuns?.some((r) => r.status === 'running')
+        // close out running tool pills — mark them interrupted here. R2-2: stamp
+        // the resume checkpoint so "Lanjutkan" appears on the partial reply.
+        messages: state.messages.map((m) => {
+          const base = m.toolRuns?.some((r) => r.status === 'running')
             ? { ...m, toolRuns: closeOutRunningRuns(m.toolRuns) }
             : m
-        )
+          if (m.id === targetId && !base.checkpoint && resumable) {
+            return {
+              ...base,
+              checkpoint: {
+                id: checkpointIdFor(state.conversationId || 'anon', targetId),
+                round: cancelledRound,
+                contextTokens: base.contextTokens,
+                reason: 'cancelled',
+                timestamp: new Date().toISOString()
+              }
+            }
+          }
+          return base
+        })
       }))
       // cancelAIStream drops the renderer listener immediately, so the main
-      // process's trailing `*(cancelled)*` done chunk never reaches us — save the
-      // partial transcript here so cancelled chats are still persisted.
+      // process's trailing `*(cancelled)*` done chunk never reaches us — persist
+      // the checkpoint + partial transcript here so the resume survives restart.
+      if (targetId && resumable) {
+        writeCheckpoint(get, targetId, { round: cancelledRound, reason: 'cancelled' }, undefined)
+      }
       void get().saveCurrentChat()
     }
   },
 
-  clearHistory: () =>
+  clearHistory: () => {
+    // R2-2: drop the on-disk checkpoints of the messages being cleared so a
+    // stale file can never resurrect a "Lanjutkan" for a gone reply.
+    for (const m of get().messages) {
+      if (m.checkpoint) void window.api.deleteCheckpoint(m.checkpoint.id).catch(() => undefined)
+    }
     set({
       messages: [],
       pendingProposals: [],
@@ -486,8 +712,11 @@ export const useChatStore = create<ChatStore>((set, get) => ({
       // A stream could still be running (programmatic clear) — drop its state so
       // the UI doesn't stay "generating" and Cancel doesn't target a dead id.
       isGenerating: false,
-      activeStreamId: null
-    }),
+      activeStreamId: null,
+      activeAssistantMsgId: null,
+      activeStreamRound: 0
+    })
+  },
 
   refreshProposals: async () => {
     try {
@@ -648,6 +877,10 @@ Mulai: list_dir "" lalu read_note "AI Memory/00 Index.md".`
           toolRuns: m.toolRuns,
           // P2-1: persist token stats so a restored session keeps its budget bar
           tokensUsed: m.tokensUsed,
+          costUsd: m.costUsd,
+          // R2-2: persist the resume checkpoint so a restored session keeps its
+          // "Lanjutkan" button (the on-disk file survives restart too).
+          checkpoint: m.checkpoint,
           contextTokens: m.contextTokens,
           contextSavedTokens: m.contextSavedTokens,
           reasoning: m.reasoning,
@@ -725,13 +958,115 @@ Mulai: list_dir "" lalu read_note "AI Memory/00 Index.md".`
       // P3-2: the retried user message may have been a follow-up (its prompt
       // was seeded from an earlier assistant message's proposals, flag consumed
       // on send). Re-arm so the regenerated answer keeps that context.
+      // R2-2: the failed reply's checkpoint is dropped — a retry starts over.
+      for (const m of msgs.slice(idx + 1)) {
+        if (m.checkpoint) void window.api.deleteCheckpoint(m.checkpoint.id).catch(() => undefined)
+      }
       set({
         messages: msgs.slice(0, idx + 1),
-        followUpMessageId: lastUser.followUpFrom ?? null
+        followUpMessageId: lastUser.followUpFrom ?? null,
+        activeAssistantMsgId: null,
+        activeStreamRound: 0
       })
     }
     // P-A2: re-send with the original images — a retry must not drop attachments
     await get().sendMessage(lastUser.content, activeFilePath, lastUser.images)
+  },
+
+  /**
+   * R2-2: continue a truncated assistant reply from its resume checkpoint.
+   * The partial answer stays in place (the stream appends to the SAME message),
+   * anything after it is dropped (resume replaces the tail), and the request
+   * carries resumeFrom { round, contextTokens } so the middleware continues the
+   * tool loop from the saved round instead of restarting at 0. Pending write
+   * proposals from the interrupted run ride the prompt (proposal dock restore).
+   */
+  resumeStream: async (messageId: string, activeFilePath?: string) => {
+    if (get().isGenerating) return
+    await get().ensureConversationId()
+    const msgs = get().messages
+    const idx = msgs.findIndex((m) => m.id === messageId && m.role === 'assistant')
+    if (idx < 0) return
+    const target = msgs[idx]
+    const cp = target.checkpoint
+    if (!cp) return
+
+    // Resume replaces the tail — everything after the truncated answer is dropped
+    // (same semantics as rephrase) and the new stream appends to this message.
+    set({
+      messages: msgs.slice(0, idx + 1),
+      followUpMessageId: null,
+      isGenerating: true,
+      lastToolStatus: `Lanjutkan (round ${cp.round})…`,
+      activeAssistantMsgId: messageId,
+      activeStreamRound: cp.round
+    })
+
+    // Continue prompt: strip the truncation markers so the model only sees its
+    // real partial answer, and re-attach pending proposals as context (P3-1
+    // preamble) so the dock state survives the resume.
+    // The model only sees the clean partial answer — truncation markers are
+    // stripped from the history copy (the transcript keeps them for the UI).
+    const resumeContent = stripTruncationMarkers(target.content || '')
+    const history = msgs
+      .slice(0, idx + 1)
+      .map((m, i) => (i === idx && m.role === 'assistant' ? { ...m, content: resumeContent } : m))
+    const propCtx = followUpPreamble(target.proposals)
+    const resumePrompt = [
+      propCtx,
+      'Jawaban di atas terpotong karena stream terputus. Lanjutkan dari titik terakhir persis — jangan ulangi konten yang sudah ada, jangan mulai dari awal. Selesaikan hingga tuntas.'
+    ]
+      .filter(Boolean)
+      .join('\n\n')
+
+    const historyForApi = buildHistoryWindow(history, {
+      role: 'user',
+      content: resumePrompt
+    })
+
+    // P-A2: re-attach the images of the user prompt that started the truncated
+    // reply — a resume must not drop the vision context the answer depends on.
+    const lastUserMsg = msgs
+      .slice(0, idx)
+      .reverse()
+      .find((m) => m.role === 'user')
+    const requestPayload = {
+      // P1-3: 'auto' → undefined so the middleware fills the provider default
+      model: isAutoModel(get().selectedModelId) ? undefined : get().selectedModelId,
+      messages: historyForApi,
+      ...(lastUserMsg?.images?.length ? { images: lastUserMsg.images } : {})
+    }
+
+    try {
+      try {
+        await window.api.setActiveAIProvider(get().activeProviderId)
+      } catch {
+        /* continue — stream will error if provider missing */
+      }
+      const streamId = window.api.streamAIMessage(
+        requestPayload,
+        makeStreamChunkHandler(get, set, messageId, activeFilePath),
+        activeFilePath,
+        get().useContext,
+        get().agentRole,
+        get().enableTools,
+        get().planMode,
+        // R2-2: continue the tool loop from the checkpoint round.
+        { round: cp.round, contextTokens: cp.contextTokens }
+      )
+      set({ activeStreamId: streamId })
+    } catch (_err) {
+      set((state) => ({
+        messages: state.messages.map((m) =>
+          m.id === messageId
+            ? { ...m, content: `${m.content}\n\nError: Failed to connect to AI provider.` }
+            : m
+        ),
+        isGenerating: false,
+        activeStreamId: null,
+        activeAssistantMsgId: null
+      }))
+    }
   },
 
   rephraseMessage: async (msgId: string, activeFilePath?: string) => {
@@ -747,6 +1082,10 @@ Mulai: list_dir "" lalu read_note "AI Memory/00 Index.md".`
     const content = raw.length > MAX_QUOTE ? `${raw.slice(0, MAX_QUOTE)}\n…[terpotong]` : raw
     // Truncate everything from the target assistant message onward — the rewrite
     // replaces the original answer in place (messages before it stay intact).
+    // R2-2: the replaced message's checkpoint is dropped (nothing left to continue).
+    for (const m of msgs.slice(idx)) {
+      if (m.checkpoint) void window.api.deleteCheckpoint(m.checkpoint.id).catch(() => undefined)
+    }
     set({ messages: msgs.slice(0, idx), followUpMessageId: null })
     const prompt = [
       'Tulis ulang jawaban berikut dengan gaya berbeda (lebih ringkas, lebih detail, atau nada lain) tanpa mengubah fakta atau isi:',

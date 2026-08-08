@@ -78,6 +78,21 @@ export type StreamEvent = AIStreamChunk & {
 const MAX_TOOL_ROUNDS = 4
 
 /**
+ * R2-2: resume a truncated stream from its checkpoint. The renderer persists
+ * (message index + round + contextTokens) when a stream ends cancelled /
+ * timed-out / errored, then passes the round back on retry so the tool loop
+ * continues from the interruption point instead of restarting at round 0
+ * (which would re-run tools and re-bill the whole invocation).
+ */
+export interface StreamResume {
+  /** Tool-loop round to continue from (0 = fresh stream). */
+  round: number
+  /** Workspace-context token estimate captured at interruption — informational
+   * (the fresh request rebuilds its own context anyway). */
+  contextTokens?: number
+}
+
+/**
  * One stage of a sequential agent pipeline (P1 — doc 20 orchestration).
  * Each stage runs as a sub-invocation with its own AgentRole, so the
  * per-role tool permissions gate what that stage may do (e.g. a researcher
@@ -695,7 +710,8 @@ export class AIMiddleware {
     agentRole: AgentRole = 'general',
     enableTools = false,
     requestId?: string,
-    planMode = false
+    planMode = false,
+    resumeFrom?: StreamResume
   ): Promise<void> {
     if (requestId) this.clearCancel(requestId)
     const controller = requestId ? new AbortController() : undefined
@@ -735,7 +751,8 @@ export class AIMiddleware {
         requestId,
         signal,
         controller,
-        { planMode }
+        { planMode },
+        resumeFrom
       )
     } finally {
       logAIEvent({
@@ -1000,7 +1017,8 @@ export class AIMiddleware {
     requestId: string | undefined,
     signal: AbortSignal | undefined,
     controller: AbortController | undefined,
-    opts: ToolAdvertOptions = {}
+    opts: ToolAdvertOptions = {},
+    resumeFrom?: StreamResume
   ): Promise<string | undefined> {
     let activeId: string | undefined
     try {
@@ -1024,7 +1042,8 @@ export class AIMiddleware {
         requestId,
         signal,
         controller,
-        opts
+        opts,
+        resumeFrom
       )
       return activeId
     }
@@ -1089,7 +1108,8 @@ export class AIMiddleware {
           requestId,
           signal,
           controller,
-          opts
+          opts,
+          resumeFrom
         )
         servedBy = providerId
 
@@ -1236,7 +1256,8 @@ export class AIMiddleware {
     requestId: string | undefined,
     signal: AbortSignal | undefined,
     controller: AbortController | undefined,
-    opts: ToolAdvertOptions = {}
+    opts: ToolAdvertOptions = {},
+    resumeFrom?: StreamResume
   ): Promise<void> {
     let provider: BaseProvider
     try {
@@ -1385,7 +1406,14 @@ export class AIMiddleware {
         ? Math.round(contextTokens * (sentRounds - 1))
         : undefined
 
-    for (let round = 0; round < (enableTools ? MAX_TOOL_ROUNDS : 1); round++) {
+    // R2-2: a resumed stream continues from the checkpoint round — the tool
+    // rounds already spent (and billed) before the interruption are NOT re-run.
+    // Note: a cancel that lands BETWEEN rounds records the last COMPLETED round,
+    // so resume conservatively re-runs it (one extra tool round + billing) rather
+    // than orphaning tool results the model still needs in context. Total provider
+    // calls across original + resume can therefore reach MAX_TOOL_ROUNDS + 1.
+    const startRound = Math.max(0, Math.min(resumeFrom?.round ?? 0, MAX_TOOL_ROUNDS - 1))
+    for (let round = startRound; round < (enableTools ? MAX_TOOL_ROUNDS : 1); round++) {
       if (requestId && this.isCancelled(requestId)) {
         onChunk({
           content: '\n\n*(cancelled)*\n',

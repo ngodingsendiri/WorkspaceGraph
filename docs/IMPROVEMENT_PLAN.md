@@ -240,9 +240,15 @@ Search box filter judul (case-insensitive) di drawer riwayat; daftar tidak lagi 
 **File:** `src/main/ai/cost.ts` (baru) + `AIMiddleware.ts` + `chatTokenBudget.ts`
 **Scope:** utilitas harga per model (OpenRouter pricing runtime; lainnya tabel statis) → estimasi $ per stream (input/output token × harga) + akumulasi per sesi; tampil di budget bar & status line.
 
-### R2-2. Resume stream terputus — P2
-**File:** `src/main/ai/AIMiddleware.ts` + `ConversationStore.ts`
-**Scope:** checkpoint state stream (round, messages, proposals) ke `.workspacegraph/tmp/`; retry meneruskan dari checkpoint alih-alih mulai ulang.
+### R2-2. Resume stream terputus — P2 ✅ (selesai)
+**File:** `src/main/ai/CheckpointStore.ts` (baru) + `AIMiddleware.ts` + `chatStore.ts` + `ChatPanel.tsx` + `handlers/checkpoint.ts` (baru) + preload
+**Scope:**
+- Checkpoint state stream (**message index + round + contextTokens** + model/role/toggles + proposals) ke **`.workspacegraph/checkpoints/`** (satu JSON per pesan asisten yang terpotong — pola vault-cache sama seperti chats/proposals; `checkpointIdFor` = `{conversationId}_{messageId}` tersanitasi, path-traversal ditolak)
+- Ditulis saat stream berakhir **terpotong** (done chunk dgn error / marker `*(cancelled)*` / `*(timeout…)*`) DAN saat user **Cancel** (renderer listener drop → store menulis sendiri dari `activeAssistantMsgId` + `activeStreamRound`)
+- Tombol **Lanjutkan** di pesan terpotong (hanya jika ada konten parsial riil setelah marker dibuang): `resumeStream()` memotong ekor percakapan, menambahkan stream ke **pesan yang sama**, mengirim `resumeFrom { round, contextTokens }` → middleware lanjut tool loop dari round checkpoint (`startRound`) alih-alih mulai 0 (round yang sudah terpakai tidak di-billing ulang)
+- **Restore state:** toolRuns tetap di pesan (UI), proposal pending dari run yang terputus ikut di-preamble ke prompt (preamble P3-1), checkpoint di-persist via `saveCurrentChat` → tombol bertahan setelah restart
+- Checkpoint dihapus saat reply **selesai**, **retry** (mulai ulang), **rephrase** (pesan diganti), atau **clear history**
+**Kriteria (terpenuhi):** 8 unit CheckpointStore (persist/load/list/delete/overwrite/traversal/corrupt/no-vault) + 9 unit chatStore (checkpoint error/timeout/cancel, resumeStream append + resumeFrom + tail-drop + proposal preamble + guard, persist/restore, delete saat rephrase) + integrasi middleware (resumeFrom round 3 → 1 panggilan provider vs fresh 4) + e2e IPC lifecycle + kontrak QA. Suite penuh **928/928 hijau**, tsc node+web bersih.
 
 ### R2-3. Streaming diff inline di chat — P2
 **File:** `src/renderer/src/components/chat/ChatPanel.tsx` + `MergeDialog.tsx`

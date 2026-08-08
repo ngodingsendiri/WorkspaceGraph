@@ -189,7 +189,8 @@ export function registerAIHandlers(): void {
         useContext,
         agentRole,
         enableTools,
-        planMode
+        planMode,
+        resumeFrom
       }: {
         requestId: string
         request: unknown
@@ -198,6 +199,8 @@ export function registerAIHandlers(): void {
         agentRole?: string
         enableTools?: boolean
         planMode?: boolean
+        /** R2-2: resume a truncated stream from its checkpoint round. */
+        resumeFrom?: { round: number; contextTokens?: number }
       }
     ) => {
       const perms = readPermissions(workspaceEngine.getSettings())
@@ -227,7 +230,8 @@ export function registerAIHandlers(): void {
           (agentRole as never) || 'general',
           toolsAllowed,
           requestId,
-          Boolean(planMode)
+          Boolean(planMode),
+          resumeFrom
         )
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err)

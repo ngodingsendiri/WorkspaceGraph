@@ -289,6 +289,73 @@ describe('AIMiddleware.runStreamInner (P-B1)', () => {
     expect(done?.done).toBe(true)
   })
 
+  it('R2-2 resumeFrom: continues the tool loop from the checkpoint round, not round 0', async () => {
+    const provider = new ScriptedProvider(true)
+    const mid = makeMid(provider)
+    // The script is consumed per PROVIDER CALL (script[callIndex]), not per
+    // round — every entry emits a read tool call so each executed round runs
+    // tools and continues. Without resume this loops MAX_TOOL_ROUNDS (4) times.
+    for (let i = 0; i < 4; i++) {
+      provider.script.push((_req, onChunk) => {
+        onChunk({ content: `attempt ${i} working.`, done: false, model: 'fake' })
+        onChunk({
+          content: '',
+          done: true,
+          model: 'fake',
+          toolCalls: [{ id: `call_${i}`, name: 'list_dir', arguments: '{}' }]
+        })
+      })
+    }
+
+    // Resume from round 3 (the last allowed round) → exactly ONE round executes
+    // (the loop ends when round hits MAX_TOOL_ROUNDS) — the rounds already spent
+    // before the interruption are NOT re-run.
+    const chunks: StreamEvent[] = []
+    await mid.streamMessage(
+      { messages: [{ role: 'user', content: 'continue' }], model: 'fake' },
+      (c) => chunks.push(c),
+      undefined,
+      false, // useContext off
+      'general',
+      true,
+      'req-resume-round',
+      false,
+      { round: 3 }
+    )
+
+    expect(provider.calls).toHaveLength(1)
+    expect(chunks.filter((c) => c.content.includes('working.')).length).toBe(1)
+    expect(chunks.filter((c) => c.toolStatus?.includes('▸ list_dir')).length).toBe(1)
+    const done = chunks.filter((c) => c.done).pop()
+    expect(done?.done).toBe(true)
+
+    // A fresh stream (no resumeFrom) still runs the full 4-round budget
+    provider.script = []
+    for (let i = 0; i < 4; i++) {
+      provider.script.push((_req, onChunk) => {
+        onChunk({ content: `attempt ${i} working.`, done: false, model: 'fake' })
+        onChunk({
+          content: '',
+          done: true,
+          model: 'fake',
+          toolCalls: [{ id: `call_${i}`, name: 'list_dir', arguments: '{}' }]
+        })
+      })
+    }
+    const chunks2: StreamEvent[] = []
+    await mid.streamMessage(
+      { messages: [{ role: 'user', content: 'fresh' }], model: 'fake' },
+      (c) => chunks2.push(c),
+      undefined,
+      false,
+      'general',
+      true,
+      'req-fresh-round'
+    )
+    expect(provider.calls).toHaveLength(5) // 1 resume + 4 fresh
+    expect(chunks2.filter((c) => c.content.includes('working.')).length).toBe(4)
+  })
+
   it('abort mid-stream: text before cancel is kept, chunks after are dropped, loop ends with cancelled', async () => {
     const provider = new ScriptedProvider(true)
     const mid = makeMid(provider)

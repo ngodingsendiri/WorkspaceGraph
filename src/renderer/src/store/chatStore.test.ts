@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { useChatStore, ToolRun, WriteProposalItem } from './chatStore'
+import { useChatStore, ToolRun, WriteProposalItem, stripTruncationMarkers } from './chatStore'
 
 /** Minimal window.api surface used by chatStore actions. */
 type MockFn = ReturnType<typeof vi.fn>
@@ -19,7 +19,12 @@ function mockWindowApi(): Record<string, MockFn> {
     listWriteProposals: vi.fn().mockResolvedValue([]),
     promoteToKnowledge: vi.fn().mockResolvedValue({ ok: true, proposal: null }),
     ensureAiMemory: vi.fn().mockResolvedValue({ ok: true, created: [] }),
-    listAiMemory: vi.fn().mockResolvedValue({ files: [], core: [] })
+    listAiMemory: vi.fn().mockResolvedValue({ files: [], core: [] }),
+    // R2-2: stream resume checkpoints
+    saveCheckpoint: vi.fn().mockResolvedValue({ ok: true }),
+    listCheckpoints: vi.fn().mockResolvedValue([]),
+    loadCheckpoint: vi.fn().mockResolvedValue(null),
+    deleteCheckpoint: vi.fn().mockResolvedValue({ ok: true })
   }
   ;(globalThis as unknown as { window: unknown }).window = { api }
   return api
@@ -39,6 +44,8 @@ beforeEach(() => {
     conversationId: null,
     isGenerating: false,
     activeStreamId: null,
+    activeAssistantMsgId: null,
+    activeStreamRound: 0,
     pendingProposals: [],
     lastToolStatus: '',
     lastKernelStatus: '',
@@ -766,6 +773,343 @@ describe('chatStore proposal dock sync (P2-7)', () => {
       .pendingProposals.map((p) => p.id)
       .sort()
     expect(ids).toEqual(['p-both', 'p-msg'])
+  })
+})
+
+describe('chatStore resume checkpoint (R2-2)', () => {
+  const cp = (
+    id: string,
+    round = 1
+  ): {
+    id: string
+    round: number
+    contextTokens?: number
+    reason: 'cancelled' | 'timeout' | 'error'
+    timestamp: string
+  } => ({
+    id,
+    round,
+    contextTokens: 300,
+    reason: 'cancelled',
+    timestamp: '2026-08-07T00:00:00.000Z'
+  })
+
+  it('stripTruncationMarkers removes only the truncation markers', () => {
+    expect(stripTruncationMarkers('parsial\n\n*(cancelled)*')).toBe('parsial')
+    expect(stripTruncationMarkers('parsial\n\n**Error:** boom')).toBe('parsial')
+    expect(stripTruncationMarkers('parsial\n\n*(timeout — stream stalled)*\n')).toBe('parsial')
+    expect(stripTruncationMarkers('normal answer')).toBe('normal answer')
+    expect(stripTruncationMarkers('')).toBe('')
+  })
+
+  it('error done chunk persists a checkpoint + stamps the message', async () => {
+    const api = mockWindowApi()
+    api.streamAIMessage.mockImplementation(
+      (_payload: unknown, cb: (c: Record<string, unknown>) => void) => {
+        cb({ content: 'parsial', done: false, round: 1, contextTokens: 500 })
+        cb({ content: '', done: true, error: 'boom', round: 1 })
+        return 'stream-1'
+      }
+    )
+
+    await useChatStore.getState().sendMessage('halo')
+
+    const asst = useChatStore.getState().messages.find((m) => m.role === 'assistant')
+    expect(asst?.checkpoint?.reason).toBe('error')
+    expect(asst?.checkpoint?.round).toBe(1)
+    expect(asst?.checkpoint?.contextTokens).toBe(500)
+    expect(api.saveCheckpoint).toHaveBeenCalledTimes(1)
+    const cpPayload = api.saveCheckpoint.mock.calls[0][0]
+    expect(cpPayload.round).toBe(1)
+    expect(cpPayload.contextTokens).toBe(500)
+    expect(cpPayload.messageId).toBe(asst?.id)
+    expect(cpPayload.messageIndex).toBe(1)
+    expect(cpPayload.reason).toBe('error')
+  })
+
+  it('timeout marker chunk persists a checkpoint with reason timeout', async () => {
+    const api = mockWindowApi()
+    api.streamAIMessage.mockImplementation(
+      (_payload: unknown, cb: (c: Record<string, unknown>) => void) => {
+        cb({ content: 'parsial', done: false, round: 0 })
+        cb({ content: '\n\n*(timeout — stream stalled)*\n', done: true, error: 'Stream timed out' })
+        return 'stream-1'
+      }
+    )
+
+    await useChatStore.getState().sendMessage('halo')
+
+    expect(api.saveCheckpoint).toHaveBeenCalledTimes(1)
+    expect(api.saveCheckpoint.mock.calls[0][0].reason).toBe('timeout')
+    const asst = useChatStore.getState().messages.find((m) => m.role === 'assistant')
+    expect(asst?.checkpoint?.reason).toBe('timeout')
+  })
+
+  it('cancelStream writes a resume checkpoint for the in-flight message', async () => {
+    const api = mockWindowApi()
+    api.streamAIMessage.mockImplementation(() => 'stream-1')
+    api.cancelAIStream.mockResolvedValue(true)
+    useChatStore.setState({
+      activeStreamId: 'stream-1',
+      activeAssistantMsgId: 'a1',
+      activeStreamRound: 1,
+      isGenerating: true,
+      conversationId: 'conv-c',
+      messages: [
+        msg('u1', 'user', 'jalan'),
+        { ...msg('a1', 'assistant', 'parsial'), contextTokens: 200 }
+      ]
+    })
+
+    await useChatStore.getState().cancelStream()
+
+    const asst = useChatStore.getState().messages.find((m) => m.id === 'a1')
+    expect(asst?.checkpoint?.reason).toBe('cancelled')
+    expect(asst?.checkpoint?.round).toBe(1)
+    expect(api.saveCheckpoint).toHaveBeenCalledTimes(1)
+    const cpPayload = api.saveCheckpoint.mock.calls[0][0]
+    expect(cpPayload.round).toBe(1)
+    expect(cpPayload.conversationId).toBe('conv-c')
+    expect(cpPayload.messageIndex).toBe(1)
+    expect(cpPayload.contextTokens).toBe(200)
+  })
+
+  it('resumeStream appends to the same message, resumes from the saved round, drops the tail', async () => {
+    const api = mockWindowApi()
+    api.streamAIMessage.mockImplementation(
+      (_payload: unknown, cb: (c: Record<string, unknown>) => void) => {
+        cb({ content: ' lanjutan', done: false, round: 2 })
+        cb({ content: '', done: true })
+        return 'stream-2'
+      }
+    )
+    useChatStore.setState({
+      conversationId: 'conv-r2',
+      messages: [
+        msg('u1', 'user', 'halo'),
+        {
+          ...msg('a1', 'assistant', 'jawaban parsial\n\n*(cancelled)*'),
+          checkpoint: cp('conv-r2_a1', 2),
+          contextTokens: 300
+        },
+        msg('u2', 'user', 'sesudahnya') // must be dropped by resume
+      ]
+    })
+
+    await useChatStore.getState().resumeStream('a1')
+
+    const s = useChatStore.getState()
+    expect(s.messages.some((m) => m.id === 'u2')).toBe(false)
+    const asst = s.messages.find((m) => m.id === 'a1')
+    expect(asst?.content).toContain('jawaban parsial')
+    expect(asst?.content).toContain(' lanjutan')
+    expect(s.isGenerating).toBe(false)
+    // The mock fires chunks synchronously inside streamAIMessage, so the done
+    // chunk clears the id before the caller stamps it — assert the terminal
+    // state fields the UI actually reads instead.
+    expect(s.activeAssistantMsgId).toBeNull()
+
+    // resumeFrom rides the 8th streamAIMessage arg
+    const callArgs = api.streamAIMessage.mock.calls[0]
+    expect(callArgs[7]).toEqual({ round: 2, contextTokens: 300 })
+    // History = partial answer (markers stripped) + a continue prompt
+    const payload = callArgs[0]
+    const last = payload.messages[payload.messages.length - 1]
+    expect(last.role).toBe('user')
+    expect(last.content).toContain('Lanjutkan')
+    const secondLast = payload.messages[payload.messages.length - 2]
+    expect(secondLast.role).toBe('assistant')
+    expect(secondLast.content).not.toContain('*(cancelled)*')
+    expect(secondLast.content).toContain('jawaban parsial')
+
+    // Success cleared the on-disk checkpoint + the message stamp
+    expect(api.deleteCheckpoint).toHaveBeenCalledWith('conv-r2_a1')
+    expect(asst?.checkpoint).toBeUndefined()
+  })
+
+  it('resumeStream re-arms pending proposals into the continue prompt (dock restore)', async () => {
+    const api = mockWindowApi()
+    api.streamAIMessage.mockImplementation(
+      (_payload: unknown, cb: (c: Record<string, unknown>) => void) => {
+        cb({ content: '', done: true })
+        return 'stream-2'
+      }
+    )
+    useChatStore.setState({
+      conversationId: 'conv-r3',
+      messages: [
+        msg('u1', 'user', 'susun catatan'),
+        {
+          ...msg('a1', 'assistant', 'parsial'),
+          checkpoint: cp('conv-r3_a1'),
+          proposals: [
+            {
+              id: 'p1',
+              tool: 'create_note',
+              absolutePath: 'C:/v/Knowledge/A.md',
+              relativePath: 'Knowledge/A.md',
+              content: '# A',
+              mode: 'create',
+              preview: '# A',
+              status: 'pending',
+              createdAt: '2026-08-07T00:00:00.000Z'
+            }
+          ]
+        }
+      ]
+    })
+
+    await useChatStore.getState().resumeStream('a1')
+
+    const payload = api.streamAIMessage.mock.calls[0][0]
+    const last = payload.messages[payload.messages.length - 1]
+    expect(last.content).toContain('Knowledge/A.md')
+    expect(last.content).toContain('Lanjutkan')
+  })
+
+  it('resumeStream no-ops while generating / unknown id / missing checkpoint', async () => {
+    const api = mockWindowApi()
+    api.streamAIMessage.mockImplementation(() => 'stream-1')
+    useChatStore.setState({
+      isGenerating: true,
+      messages: [
+        msg('u1', 'user', 'halo'),
+        { ...msg('a1', 'assistant', 'parsial'), checkpoint: cp('x_a1') }
+      ]
+    })
+    await useChatStore.getState().resumeStream('a1')
+    expect(api.streamAIMessage).not.toHaveBeenCalled()
+
+    useChatStore.setState({ isGenerating: false })
+    await useChatStore.getState().resumeStream('nope')
+    expect(api.streamAIMessage).not.toHaveBeenCalled()
+
+    useChatStore.setState({
+      messages: [msg('u1', 'user', 'halo'), msg('a1', 'assistant', 'parsial')]
+    })
+    await useChatStore.getState().resumeStream('a1')
+    expect(api.streamAIMessage).not.toHaveBeenCalled()
+  })
+
+  it('saveCurrentChat persists the checkpoint; loadChat restores it', async () => {
+    const api = mockWindowApi()
+    const checkpoint = cp('conv-p_a1', 2)
+    useChatStore.setState({
+      conversationId: 'conv-p',
+      messages: [msg('u1', 'user', 'halo'), { ...msg('a1', 'assistant', 'parsial'), checkpoint }]
+    })
+    await useChatStore.getState().saveCurrentChat()
+    const payload = api.saveChat.mock.calls[0][0]
+    const saved = (payload.messages as Record<string, unknown>[]).find((m) => m.id === 'a1')
+    expect(saved?.checkpoint).toEqual(checkpoint)
+
+    api.loadChat.mockResolvedValue({
+      id: 'conv-p',
+      agentRole: 'general',
+      messages: [msg('u1', 'user', 'halo'), { ...msg('a1', 'assistant', 'parsial'), checkpoint }]
+    })
+    await useChatStore.getState().loadChat('conv-p')
+    expect(useChatStore.getState().messages.find((m) => m.id === 'a1')?.checkpoint).toEqual(
+      checkpoint
+    )
+  })
+
+  it('error before any model output writes no checkpoint (nothing to continue)', async () => {
+    const api = mockWindowApi()
+    api.streamAIMessage.mockImplementation(
+      (_payload: unknown, cb: (c: Record<string, unknown>) => void) => {
+        cb({ content: '', done: true, error: 'Provider belum dikonfigurasi' })
+        return 'stream-1'
+      }
+    )
+
+    await useChatStore.getState().sendMessage('halo')
+
+    const asst = useChatStore.getState().messages.find((m) => m.role === 'assistant')
+    expect(api.saveCheckpoint).not.toHaveBeenCalled()
+    expect(asst?.checkpoint).toBeUndefined()
+  })
+
+  it('cancel before any model output writes no checkpoint', async () => {
+    const api = mockWindowApi()
+    api.streamAIMessage.mockImplementation(() => 'stream-1')
+    api.cancelAIStream.mockResolvedValue(true)
+    useChatStore.setState({
+      activeStreamId: 'stream-1',
+      activeAssistantMsgId: 'a1',
+      isGenerating: true,
+      conversationId: 'conv-e',
+      messages: [msg('u1', 'user', 'jalan'), msg('a1', 'assistant', '')]
+    })
+
+    await useChatStore.getState().cancelStream()
+
+    expect(api.saveCheckpoint).not.toHaveBeenCalled()
+    expect(useChatStore.getState().messages.find((m) => m.id === 'a1')?.checkpoint).toBeUndefined()
+  })
+
+  it('a second truncation overwrites the checkpoint with the newer round', async () => {
+    const api = mockWindowApi()
+    api.streamAIMessage.mockImplementation(
+      (_payload: unknown, cb: (c: Record<string, unknown>) => void) => {
+        cb({ content: ' lebih', done: false, round: 3 })
+        cb({ content: '', done: true, error: 'gagal lagi', round: 3 })
+        return 'stream-2'
+      }
+    )
+    useChatStore.setState({
+      conversationId: 'conv-x',
+      messages: [
+        msg('u1', 'user', 'halo'),
+        { ...msg('a1', 'assistant', 'parsial'), checkpoint: cp('conv-x_a1', 2) }
+      ]
+    })
+
+    await useChatStore.getState().resumeStream('a1')
+
+    const asst = useChatStore.getState().messages.find((m) => m.id === 'a1')
+    expect(asst?.checkpoint?.round).toBe(3)
+    expect(api.saveCheckpoint).toHaveBeenCalledTimes(1)
+    expect(api.saveCheckpoint.mock.calls[0][0].round).toBe(3)
+    expect(api.deleteCheckpoint).not.toHaveBeenCalled()
+  })
+
+  it('sendMessage catch resets the stream target state (IPC failure)', async () => {
+    const api = mockWindowApi()
+    api.streamAIMessage.mockImplementation(() => {
+      throw new Error('ipc down')
+    })
+
+    await useChatStore.getState().sendMessage('halo')
+
+    const s = useChatStore.getState()
+    expect(s.isGenerating).toBe(false)
+    expect(s.activeStreamId).toBeNull()
+    expect(s.activeAssistantMsgId).toBeNull()
+    expect(s.activeStreamRound).toBe(0)
+  })
+
+  it('rephraseMessage deletes the checkpoint of the replaced message', async () => {
+    const api = mockWindowApi()
+    api.streamAIMessage.mockImplementation(
+      (_payload: unknown, cb: (c: Record<string, unknown>) => void) => {
+        cb({ content: '', done: true })
+        return 'stream-1'
+      }
+    )
+    useChatStore.setState({
+      conversationId: 'conv-rp',
+      messages: [
+        msg('u1', 'user', 'halo'),
+        {
+          ...msg('a1', 'assistant', 'parsial'),
+          checkpoint: cp('conv-rp_a1')
+        },
+        msg('u2', 'user', 'lanjut')
+      ]
+    })
+    await useChatStore.getState().rephraseMessage('a1')
+    expect(api.deleteCheckpoint).toHaveBeenCalledWith('conv-rp_a1')
   })
 })
 

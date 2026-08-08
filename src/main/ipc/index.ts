@@ -4,6 +4,7 @@ import { registerGraphHandlers } from './handlers/graph'
 import { registerSearchHandlers } from './handlers/search'
 import { registerAIHandlers } from './handlers/ai'
 import { registerChatHandlers } from './handlers/chat'
+import { registerCheckpointHandlers } from './handlers/checkpoint'
 import { registerTemplateHandlers } from './handlers/templates'
 import { registerDomainHandlers } from './handlers/domain'
 import { registerAutomationHandlers } from './handlers/automation'
@@ -25,6 +26,7 @@ export function registerIPCHandlers(): void {
   registerSearchHandlers()
   registerAIHandlers()
   registerChatHandlers()
+  registerCheckpointHandlers()
   registerTemplateHandlers()
   registerDomainHandlers()
   registerAutomationHandlers()

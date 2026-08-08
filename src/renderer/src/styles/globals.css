@@ -2983,6 +2983,16 @@ html:not([data-theme]) {
   height: auto;
   min-height: 0;
 }
+/* R2-2: resume button on truncated replies — stands out as an action, not an error */
+.chat-resume-btn {
+  color: var(--color-success);
+}
+.chat-resume-btn .wg-icon {
+  transition: transform 0.15s ease;
+}
+.chat-resume-btn:hover .wg-icon {
+  transform: translateX(2px);
+}
 
 .chat-input-area {
   border-top: 1px solid var(--border-subtle);

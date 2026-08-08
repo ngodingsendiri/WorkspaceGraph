@@ -64,6 +64,7 @@ vi.mock('electron', () => state.electronMock)
 
 import { registerFileHandlers } from '../ipc/handlers/files'
 import { registerChatHandlers } from '../ipc/handlers/chat'
+import { registerCheckpointHandlers } from '../ipc/handlers/checkpoint'
 import { registerSearchHandlers } from '../ipc/handlers/search'
 import { registerWorkspaceHandlers } from '../ipc/handlers/workspace'
 import { workspaceEngine } from '../engine/WorkspaceEngine'
@@ -83,6 +84,7 @@ describe('IPC handlers end-to-end', () => {
     vault = fs.mkdtempSync(path.join(tmpdir(), 'wg-e2e-vault-'))
     registerFileHandlers()
     registerChatHandlers()
+    registerCheckpointHandlers()
     registerSearchHandlers()
     registerWorkspaceHandlers()
     workspaceEngine.openWorkspace(vault)
@@ -197,6 +199,50 @@ describe('IPC handlers end-to-end', () => {
     const del = (await invoke('chat:delete', id)) as { ok: boolean }
     expect(del.ok).toBe(true)
     expect(await invoke('chat:load', id)).toBeNull()
+  })
+
+  it('checkpoint:save → checkpoint:list → checkpoint:load → checkpoint:delete lifecycle (R2-2)', async () => {
+    const cp = {
+      id: '20260807_120000_abcd_m1',
+      conversationId: '20260807_120000_abcd',
+      messageId: 'm1',
+      messageIndex: 3,
+      round: 2,
+      contextTokens: 1240,
+      model: 'grok-4.5',
+      agentRole: 'general',
+      useContext: true,
+      enableTools: true,
+      planMode: false,
+      reason: 'cancelled',
+      timestamp: new Date().toISOString()
+    }
+
+    const saved = (await invoke('checkpoint:save', cp)) as { ok: boolean; path?: string }
+    expect(saved.ok).toBe(true)
+    expect(fs.existsSync(saved.path || '')).toBe(true)
+    expect(fs.existsSync(path.join(vault, '.workspacegraph', 'checkpoints', `${cp.id}.json`))).toBe(
+      true
+    )
+
+    const list = (await invoke('checkpoint:list')) as Array<{ id: string }>
+    expect(list.some((c) => c.id === cp.id)).toBe(true)
+
+    const loaded = (await invoke('checkpoint:load', cp.id)) as {
+      round: number
+      messageIndex: number
+    }
+    expect(loaded?.round).toBe(2)
+    expect(loaded?.messageIndex).toBe(3)
+
+    // Path-traversal id never touches the filesystem
+    expect(
+      ((await invoke('checkpoint:save', { ...cp, id: '../evil' })) as { ok: boolean }).ok
+    ).toBe(false)
+
+    const del = (await invoke('checkpoint:delete', cp.id)) as { ok: boolean }
+    expect(del.ok).toBe(true)
+    expect(await invoke('checkpoint:load', cp.id)).toBeNull()
   })
 
   it('path sandbox rejects reads/writes outside the vault', async () => {
