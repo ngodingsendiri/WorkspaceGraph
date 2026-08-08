@@ -67,8 +67,10 @@ import { registerChatHandlers } from '../ipc/handlers/chat'
 import { registerCheckpointHandlers } from '../ipc/handlers/checkpoint'
 import { registerSearchHandlers } from '../ipc/handlers/search'
 import { registerWorkspaceHandlers } from '../ipc/handlers/workspace'
+import { registerAIHandlers } from '../ipc/handlers/ai'
 import { workspaceEngine } from '../engine/WorkspaceEngine'
 import { indexDatabase } from '../engine/IndexDatabase'
+import { readProviderDefs } from '../ai/providerRegistry'
 
 /** Invoke a registered handler exactly like ipcRenderer.invoke would. */
 async function invoke(channel: string, ...args: unknown[]): Promise<unknown> {
@@ -87,6 +89,7 @@ describe('IPC handlers end-to-end', () => {
     registerCheckpointHandlers()
     registerSearchHandlers()
     registerWorkspaceHandlers()
+    registerAIHandlers()
     workspaceEngine.openWorkspace(vault)
     indexDatabase.open(vault)
   })
@@ -243,6 +246,168 @@ describe('IPC handlers end-to-end', () => {
     const del = (await invoke('checkpoint:delete', cp.id)) as { ok: boolean }
     expect(del.ok).toBe(true)
     expect(await invoke('checkpoint:load', cp.id)).toBeNull()
+  })
+
+  it('dynamic provider registry: get configs → add custom → delete → key cleanup (R2-4)', async () => {
+    // Seeds: nothing saved yet → the classic six built-ins as data
+    const initial = (await invoke('ai:getProviderConfigs')) as { defs: any[] }
+    expect(initial.defs.map((d: { id: string }) => d.id)).toEqual([
+      'grok',
+      'gemini',
+      'openai',
+      'claude',
+      'ollama',
+      'openrouter'
+    ])
+
+    // Stash a key for a provider that is about to be deleted — save must drop it
+    const settings = workspaceEngine.getSettings() as Record<string, unknown>
+    settings.ai = { grok: { apiKey: 'sk-test-delete-me', baseUrl: 'https://api.x.ai/v1' } }
+    settings.activeProvider = 'grok'
+    workspaceEngine.saveSettings(settings)
+
+    // Add a custom OpenAI-compatible provider + delete grok in one save
+    const custom = {
+      id: 'my-mistral',
+      name: 'My Mistral',
+      kind: 'openai-compat',
+      baseUrl: 'https://api.mistral.ai/v1',
+      defaultModel: 'mistral-large'
+    }
+    const saved = (await invoke('ai:saveProviderConfigs', [
+      custom,
+      ...initial.defs.filter((d: { id: string }) => d.id !== 'grok')
+    ])) as { ok: boolean; defs?: any[] }
+    expect(saved.ok).toBe(true)
+    expect(saved.defs?.map((d) => d.id)).toEqual([
+      'my-mistral',
+      'gemini',
+      'openai',
+      'claude',
+      'ollama',
+      'openrouter'
+    ])
+
+    // Persisted + the deleted provider's key is gone; active fell back off grok
+    const after = (await invoke('ai:getProviderConfigs')) as { defs: any[] }
+    expect(after.defs.map((d: { id: string }) => d.id)).toContain('my-mistral')
+    const persisted = workspaceEngine.getSettings() as Record<string, unknown>
+    const persistedAi = (persisted.ai as Record<string, unknown>) || {}
+    expect(persistedAi.grok).toBeUndefined()
+    expect(persisted.activeProvider).not.toBe('grok')
+
+    // Delete the custom provider too → list shrinks, no orphan key
+    const del = (await invoke('ai:saveProviderConfigs', [
+      ...after.defs.filter((d: { id: string }) => d.id !== 'my-mistral')
+    ])) as { ok: boolean; defs?: any[] }
+    expect(del.ok).toBe(true)
+    expect(del.defs?.some((d: { id: string }) => d.id === 'my-mistral')).toBe(false)
+    const finalSettings = workspaceEngine.getSettings() as Record<string, unknown>
+    const finalAi = (finalSettings.ai as Record<string, unknown>) || {}
+    expect(finalAi['my-mistral']).toBeUndefined()
+  })
+
+  it('full provider flow: colliding name → key on grok-2, baseUrl edit applies live, delete-all survives restart (R2-4)', async () => {
+    // Self-contained: reset to a clean slate (no saved defs → seeds)
+    const reset = workspaceEngine.getSettings() as Record<string, unknown>
+    reset.aiProviders = undefined
+    delete reset.ai
+    reset.activeProvider = 'grok'
+    workspaceEngine.saveSettings(reset)
+
+    // 1. Baseline: nothing saved → the six built-in seeds as data
+    const initial = (await invoke('ai:getProviderConfigs')) as { defs: any[] }
+    expect(initial.defs.map((d: { id: string }) => d.id)).toEqual([
+      'grok',
+      'gemini',
+      'openai',
+      'claude',
+      'ollama',
+      'openrouter'
+    ])
+
+    // 2. UI adds a CUSTOM provider named "Grok" — collides with the builtin id.
+    // The UI appends new rows after the existing defs ([...defs, newDef]).
+    const add = (await invoke('ai:saveProviderConfigs', [
+      ...initial.defs,
+      { id: 'grok', name: 'Grok', kind: 'openai-compat', baseUrl: 'https://grok.local/v1' }
+    ])) as { ok: boolean; defs?: any[] }
+    expect(add.ok).toBe(true)
+    const custom = add.defs?.find((d) => d.kind === 'openai-compat')
+    // The server dedupes: the custom row must NOT steal the builtin 'grok' id
+    expect(custom?.id).toBe('grok-2')
+    expect(add.defs?.filter((d) => d.id === 'grok')).toHaveLength(1) // builtin grok intact
+
+    // 3. UI configures the key against the FINAL server id — never the builtin
+    const cfg = (await invoke('ai:configure', {
+      providerId: 'grok-2',
+      apiKey: 'sk-collision-test',
+      baseUrl: 'https://grok.local/v1'
+    })) as { ok: boolean }
+    expect(cfg.ok).toBe(true)
+    const s1 = workspaceEngine.getSettings() as Record<string, any>
+    expect(s1.ai?.['grok-2']?.apiKey).toBe('sk-collision-test')
+    expect(s1.ai?.['grok']).toBeUndefined() // key never leaked into the builtin
+
+    // 4. UI edits the base URL only (no key re-typed) and saves the row
+    const edit = (await invoke('ai:saveProviderConfigs', [
+      ...add.defs!.map((d) =>
+        d.id === 'grok-2' ? { ...d, baseUrl: 'https://grok-new.local/v1' } : d
+      )
+    ])) as { ok: boolean }
+    expect(edit.ok).toBe(true)
+    const s2 = workspaceEngine.getSettings() as Record<string, any>
+    // The def holds the new URL...
+    const def2 = s2.aiProviders.find((d: { id: string }) => d.id === 'grok-2')
+    expect(def2?.baseUrl).toBe('https://grok-new.local/v1')
+    // ...and the key entry must follow, or loadSettingsIntoProviders would
+    // re-apply the STALE url onto the live provider until the next restart
+    expect(s2.ai?.['grok-2']?.baseUrl).toBe('https://grok-new.local/v1')
+
+    // 5. Delete ALL providers — explicit empty must persist (no seed resurrection)
+    const del = (await invoke('ai:saveProviderConfigs', [])) as { ok: boolean; defs?: any[] }
+    expect(del.ok).toBe(true)
+    expect(del.defs).toEqual([])
+    const s3 = workspaceEngine.getSettings() as Record<string, unknown>
+    expect(s3.aiProviders).toEqual([])
+    expect(s3.ai).toBeUndefined() // every saved key wiped
+    // "Restart": readProviderDefs honors the explicitly-saved empty list
+    expect(readProviderDefs(s3)).toEqual([])
+
+    // 6. Reset ke provider bawaan — the six seeds come back (special adapters
+    // restored), no custom rows, keys still empty
+    const resetDefs = (await invoke('ai:resetProviderConfigs')) as {
+      ok: boolean
+      defs?: any[]
+    }
+    expect(resetDefs.ok).toBe(true)
+    expect(resetDefs.defs?.map((d) => d.id)).toEqual([
+      'grok',
+      'gemini',
+      'openai',
+      'claude',
+      'ollama',
+      'openrouter'
+    ])
+    expect((workspaceEngine.getSettings() as Record<string, unknown>).aiProviders).toHaveLength(6)
+
+    // 7. A model pick in chat persists as the provider's default (live + key
+    // entry + def list all in sync — survives sessions and rebuilds)
+    const pick = (await invoke('ai:setProviderDefaultModel', 'gemini', 'gemini-2.5-flash')) as {
+      ok: boolean
+      error?: string
+    }
+    expect(pick.ok).toBe(true)
+    const s4 = workspaceEngine.getSettings() as Record<string, any>
+    expect(s4.ai.gemini.defaultModel).toBe('gemini-2.5-flash')
+    const def4 = s4.aiProviders.find((d: { id: string }) => d.id === 'gemini')
+    expect(def4.defaultModel).toBe('gemini-2.5-flash')
+    // Unknown provider → clean error, nothing persisted
+    const bad = (await invoke('ai:setProviderDefaultModel', 'nope', 'x')) as {
+      ok: boolean
+      error?: string
+    }
+    expect(bad.ok).toBe(false)
   })
 
   it('path sandbox rejects reads/writes outside the vault', async () => {

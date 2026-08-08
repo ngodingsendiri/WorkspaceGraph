@@ -1,6 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { applyTheme, getCachedThemePref, type ThemePreference } from '../../utils/theme'
 import { buildFailoverCandidates, moveInOrder } from './failoverOrder'
+import { confirmDialog } from '../ui/Dialog'
+import { confirmProviderDelete } from './providerDeleteConfirm'
 
 type Section =
   'ai' | 'appearance' | 'index' | 'security' | 'automation' | 'plugins' | 'mcp' | 'logs' | 'about'
@@ -69,21 +71,21 @@ type LogFilter = (typeof LOG_FILTERS)[number]['id']
 
 const DAYS_ID = ['Min', 'Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab']
 
-/**
- * Static card shells rendered instantly while getAIProviders is in flight.
- * Mirrors the provider registration order in AIMiddleware — each card shows a
- * spinner until the per-provider `ai:providerStatus` push (or the full batch
- * result) replaces it with the real status. Keeps the panel from ever looking
- * like an empty list while the parallel /models fetches resolve.
- */
-const PROVIDER_SHELLS: { id: string; name: string }[] = [
-  { id: 'grok', name: 'Grok (xAI)' },
-  { id: 'gemini', name: 'Gemini' },
-  { id: 'openai', name: 'OpenAI' },
-  { id: 'claude', name: 'Claude' },
-  { id: 'ollama', name: 'Ollama' },
-  { id: 'openrouter', name: 'OpenRouter' }
-]
+/** A persisted provider definition — the set is data (settings.aiProviders),
+ * not code: users add custom OpenAI-compatible providers, edit, or delete any
+ * row (built-ins included) just like other AI agents. */
+interface ProviderDef {
+  id: string
+  name: string
+  kind: 'builtin' | 'openai-compat'
+  builtinId?: string
+  baseUrl?: string
+  defaultModel?: string
+}
+
+/** Canonical built-in ids (mirror DEFAULT_PROVIDER_DEFS in main) — used to
+ * decide whether the "Reset ke provider bawaan" button should appear. */
+const BUILTIN_SEED_IDS = ['grok', 'gemini', 'openai', 'claude', 'ollama', 'openrouter']
 
 /**
  * Compact "diperbarui …" stamp for a provider card. Same-day → just the time;
@@ -125,7 +127,6 @@ export const SettingsView: React.FC = () => {
     }[]
   >([])
   const [apiKeys, setApiKeys] = useState<Record<string, string>>({})
-  const [baseUrls, setBaseUrls] = useState<Record<string, string>>({})
   const [savedStatus, setSavedStatus] = useState('')
   const [theme, setTheme] = useState<ThemePreference>(() => getCachedThemePref())
   const [section, setSection] = useState<Section>('ai')
@@ -213,6 +214,16 @@ export const SettingsView: React.FC = () => {
   /** R1-2 failover order: saved aiFailoverOrder (provider ids, first = top pick). */
   const [failoverOrder, setFailoverOrder] = useState<string[]>([])
   const [activeProviderId, setActiveProviderId] = useState('grok')
+  /** Dynamic provider registry — the persisted provider defs (add/edit/delete). */
+  const [defs, setDefs] = useState<ProviderDef[]>([])
+  const [showAddProvider, setShowAddProvider] = useState(false)
+  const [providerDraft, setProviderDraft] = useState({
+    name: '',
+    baseUrl: '',
+    apiKey: ''
+  })
+  /** Provider ids whose def-save is in flight (row spinner on Save). */
+  const [savingProvider, setSavingProvider] = useState<Record<string, boolean>>({})
   /** Drag-reorder bookkeeping — a ref survives the re-renders mid-drag. */
   const dragIdxRef = useRef<number | null>(null)
   const [dragIdx, setDragIdx] = useState<number | null>(null)
@@ -269,29 +280,25 @@ export const SettingsView: React.FC = () => {
   }
 
   const loadAll = async (): Promise<void> => {
-    // First load: seed static card shells so the section renders instantly with
-    // spinners (never an empty list while the parallel /models fetches run).
-    // Refresh: mark the existing cards loading so counts don't look stale.
-    const known = providers.length > 0 ? providers : PROVIDER_SHELLS
-    if (providers.length === 0) {
-      setProviders(
-        PROVIDER_SHELLS.map((s) => ({
-          id: s.id,
-          name: s.name,
-          connected: false,
-          configured: undefined,
-          error: undefined,
-          models: []
-        }))
-      )
+    // Provider defs drive the dynamic list — load them first so the rows (with
+    // their editable name/baseUrl) render even while the /models fetches run.
+    try {
+      const cfg = (await window.api.getAIProviderConfigs()) as { defs?: ProviderDef[] }
+      if (cfg && Array.isArray(cfg.defs)) setDefs(cfg.defs)
+    } catch {
+      /* ignore */
     }
-    setLoadingProviders(Object.fromEntries(known.map((p) => [p.id, true])))
+    // Mark the current rows loading so counts don't look stale while the
+    // parallel /models fetches run (never a blank list).
+    setLoadingProviders(
+      Object.fromEntries((providers.length > 0 ? providers : defs).map((p) => [p.id, true]))
+    )
     try {
       const list = await window.api.getAIProviders()
       setProviders(list || [])
     } catch (err) {
-      // IPC failure: keep the shells/current cards visible; spinners must still
-      // clear (finally) or every card would spin forever + unhandled rejection
+      // IPC failure: keep the current rows visible; spinners must still clear
+      // (finally) or every card would spin forever + unhandled rejection
       console.error('[settings] getAIProviders failed:', err)
     } finally {
       setLoadingProviders({})
@@ -306,13 +313,6 @@ export const SettingsView: React.FC = () => {
         aiEventRetentionDays?: number
         activeProvider?: string
         aiFailoverOrder?: unknown
-      }
-      if (settings?.ai) {
-        const urls: Record<string, string> = {}
-        for (const [id, cfg] of Object.entries(settings.ai)) {
-          if (cfg.baseUrl) urls[id] = cfg.baseUrl
-        }
-        setBaseUrls(urls)
       }
       // Keys are never shipped to the renderer (security) — fields stay masked,
       // "saved" state comes from security:status. Only a newly typed key is sent.
@@ -410,50 +410,6 @@ export const SettingsView: React.FC = () => {
     return unsub
   }, [])
 
-  const handleSaveKey = async (providerId: string): Promise<void> => {
-    const key = apiKeys[providerId]?.trim()
-    const baseUrl = baseUrls[providerId]?.trim()
-    // Key is masked in the UI — leaving it blank keeps the stored key (if any).
-    const alreadySaved =
-      providerId === 'ollama' ||
-      (secStatus?.secrets?.[providerId] && secStatus.secrets[providerId] !== 'empty')
-    if (providerId !== 'ollama' && !key && !alreadySaved) {
-      flash('API key required')
-      return
-    }
-    try {
-      const res = (await window.api.configureAIProvider(
-        providerId,
-        key || undefined,
-        baseUrl || (providerId === 'ollama' ? 'http://localhost:11434' : undefined)
-      )) as boolean | { ok?: boolean; path?: string; error?: string }
-      if (res && typeof res === 'object' && res.ok === false) {
-        flash(`Save gagal: ${res.error || 'unknown'}`)
-        return
-      }
-      // BUGFIX: do NOT setActive on Save — that silently switched chat provider
-      const pathHint = res && typeof res === 'object' && res.path ? ` · ${res.path}` : ''
-      flash(`Saved ${providerId}. Klik Test, atau pilih provider di Chat.${pathHint}`)
-      // Auto-refresh THIS provider's model list right after a successful save
-      // so a new key/baseUrl shows its real catalog immediately — no manual
-      // Refresh click. configure() already busted the TTL cache; this just
-      // guarantees the fetch runs with the saved credentials and the card
-      // spinner reflects it. loadAll() below then reuses the fresh cache.
-      setLoadingProviders((prev) => ({ ...prev, [providerId]: true }))
-      // Surface a failed refresh: a wrong key/baseUrl would otherwise fall back
-      // to the static list and look "saved fine" while the real API rejects.
-      const refreshed = await window.api.refreshProviderModels(providerId).catch(() => null)
-      if (refreshed && typeof refreshed === 'object' && !refreshed.ok) {
-        flash(
-          `Saved, tapi model gagal dimuat: ${refreshed.error || 'unknown'} — cek key/baseUrl, lalu Refresh models`
-        )
-      }
-      await loadAll()
-    } catch (e) {
-      flash(e instanceof Error ? e.message : 'Save failed')
-    }
-  }
-
   const handleTest = async (providerId: string): Promise<void> => {
     flash(`Testing ${providerId}…`)
     try {
@@ -504,6 +460,152 @@ export const SettingsView: React.FC = () => {
         return next
       })
     }
+  }
+
+  /** Persist the provider def list (add/edit/delete) — main rebuilds the live
+   * provider map and drops keys of removed providers. Returns the server's
+   * cleaned defs so callers can use the FINAL ids (a name that slugs onto an
+   * existing id gets deduped server-side, e.g. 'grok' → 'grok-2'). */
+  const persistDefs = async (
+    next: ProviderDef[]
+  ): Promise<{ ok: boolean; defs?: ProviderDef[] }> => {
+    try {
+      const res = (await window.api.saveAIProviderConfigs(next)) as {
+        ok?: boolean
+        defs?: ProviderDef[]
+        error?: string
+      }
+      if (res && typeof res === 'object' && !res.ok) {
+        flash(`Gagal simpan provider: ${res.error || 'unknown'}`)
+        return { ok: false }
+      }
+      if (res?.defs) setDefs(res.defs)
+      return { ok: true, defs: res?.defs }
+    } catch (e) {
+      flash(e instanceof Error ? e.message : 'Gagal simpan provider')
+      return { ok: false }
+    }
+  }
+
+  /** Slug a name into a provider id client-side; main sanitizes/validates anyway. */
+  const providerIdFromName = (name: string): string => {
+    const base =
+      name
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '') || 'provider'
+    return base
+  }
+
+  /** Save one row: def fields (name/baseUrl/defaultModel) + a newly typed key. */
+  const handleSaveProviderRow = async (def: ProviderDef): Promise<void> => {
+    setSavingProvider((prev) => ({ ...prev, [def.id]: true }))
+    try {
+      const key = apiKeys[def.id]?.trim()
+      const saved = await persistDefs(defs.map((d) => (d.id === def.id ? def : d)))
+      if (!saved.ok) return
+      if (key) {
+        await window.api.configureAIProvider(
+          def.id,
+          key,
+          def.baseUrl || undefined,
+          def.defaultModel || undefined
+        )
+      }
+      flash(`Provider ${def.name || def.id} disimpan`)
+      await loadAll()
+    } catch (e) {
+      flash(e instanceof Error ? e.message : 'Save failed')
+    } finally {
+      setSavingProvider((prev) => {
+        const next = { ...prev }
+        delete next[def.id]
+        return next
+      })
+    }
+  }
+
+  /** Reset ke provider bawaan: main merges the six built-in seeds back into
+   * the def list (non-destructive — customs are kept). Restores the special
+   * adapters (Grok CLI, Ollama probe, Gemini SDK) after a delete-all. */
+  const handleResetBuiltins = async (): Promise<void> => {
+    try {
+      const res = (await window.api.resetAIProviderConfigs()) as {
+        ok?: boolean
+        defs?: ProviderDef[]
+        error?: string
+      }
+      if (res && typeof res === 'object' && !res.ok) {
+        flash(`Gagal reset: ${res.error || 'unknown'}`)
+        return
+      }
+      if (res?.defs) setDefs(res.defs)
+      flash('Provider bawaan dikembalikan (Grok, Gemini, OpenAI, Claude, Ollama, OpenRouter)')
+      await loadAll()
+    } catch (e) {
+      flash(e instanceof Error ? e.message : 'Gagal reset provider')
+    }
+  }
+
+  /** Delete a provider row — def + its saved key are removed by main. The
+   * stored API key is destroyed with the row, so deletion needs an explicit
+   * danger confirmation (never a one-click action). */
+  const handleDeleteProvider = async (id: string): Promise<void> => {
+    const def = defs.find((d) => d.id === id)
+    if (!def) return
+    const keySaved = Boolean(secStatus?.secrets?.[id] && secStatus.secrets[id] !== 'empty')
+    const ok = await confirmProviderDelete(confirmDialog, {
+      id,
+      name: def.name,
+      hasKey: keySaved
+    })
+    if (!ok) return
+    const next = defs.filter((d) => d.id !== id)
+    const saved = await persistDefs(next)
+    if (saved.ok) {
+      flash(`Provider ${id} dihapus`)
+      await loadAll()
+    }
+  }
+
+  /** One add-provider form (name + base URL + key) — the single entry point
+   * for new providers, like other AI agents. The model is never typed: the
+   * list is fetched automatically from the base URL + key, and "Auto" picks
+   * the provider's default (first model) from it. */
+  const handleAddProvider = async (): Promise<void> => {
+    const name = providerDraft.name.trim()
+    const baseUrl = providerDraft.baseUrl.trim()
+    if (!name) {
+      flash('Nama provider wajib diisi')
+      return
+    }
+    if (!baseUrl) {
+      flash('Base URL wajib diisi')
+      return
+    }
+    const newDef: ProviderDef = {
+      id: providerIdFromName(name),
+      name,
+      kind: 'openai-compat',
+      baseUrl
+    }
+    const saved = await persistDefs([...defs, newDef])
+    if (!saved.ok) return
+    // The server sanitizes ids — a name that slugs onto an existing provider
+    // (e.g. custom "Grok" → 'grok-2') must NOT send its key to the colliding
+    // provider, or it would overwrite the builtin's credentials.
+    const added = saved.defs?.find(
+      (d) => d.kind === 'openai-compat' && d.name === newDef.name && d.baseUrl === newDef.baseUrl
+    )
+    const finalId = added?.id ?? newDef.id
+    // Key after the def exists — configure() needs the provider in the map
+    if (providerDraft.apiKey.trim()) {
+      await window.api.configureAIProvider(finalId, providerDraft.apiKey.trim(), baseUrl)
+    }
+    setShowAddProvider(false)
+    setProviderDraft({ name: '', baseUrl: '', apiKey: '' })
+    flash(`Provider ${name} ditambahkan — model dimuat otomatis. Klik Test.`)
+    await loadAll()
   }
 
   /** R1-2: persist the ordered failover chain to settings. */
@@ -775,86 +877,112 @@ export const SettingsView: React.FC = () => {
                 marginBottom: 'var(--space-4)'
               }}
             >
-              Default: <b>Grok (xAI)</b> — import sesi dari Grok CLI (login akun X), atau paste API
-              key console.x.ai.
+              Provider dikelola sebagai daftar — tambah provider OpenAI-compatible apa pun (Mistral,
+              Together, vLLM, LM Studio, …), atau pakai built-in (Grok/Gemini/OpenAI/
+              Claude/Ollama/OpenRouter). Default aktif: <b>{activeProviderName || '—'}</b>.
             </p>
 
-            <div
-              style={{
-                background: 'var(--bg-surface)',
-                borderRadius: 8,
-                padding: 14,
-                marginBottom: 16,
-                border: '1px solid var(--border-subtle)'
-              }}
-            >
-              <div style={{ fontWeight: 600, fontSize: 'var(--text-sm)', marginBottom: 6 }}>
-                Grok CLI → WorkspaceGraph
-              </div>
-              <p
+            {defs.some((d) => d.id === 'grok') && (
+              <div
                 style={{
-                  fontSize: 12,
-                  color: 'var(--text-muted)',
-                  marginBottom: 10,
-                  lineHeight: 1.45
+                  background: 'var(--bg-surface)',
+                  borderRadius: 8,
+                  padding: 14,
+                  marginBottom: 16,
+                  border: '1px solid var(--border-subtle)'
                 }}
               >
-                Sudah login Grok di terminal (`grok`)? Impor sesi akun X dari{' '}
-                <code>~/.grok/auth.json</code> → app pakai <code>api.x.ai</code> (bukan CLI proxy).
-                Token di-refresh otomatis.
-              </p>
-              <button
-                className="btn btn-primary btn-sm"
-                onClick={async () => {
-                  flash('Import Grok CLI…')
-                  try {
-                    const res = await window.api.importGrokCli()
-                    if (res.ok) {
-                      flash(
-                        `Grok OK${res.email ? ` (${res.email})` : ''} · ${res.baseUrl || 'api.x.ai'} · ${res.model || 'grok-4.5'}. Klik Test.`
-                      )
-                      await loadAll()
-                    } else {
-                      flash(`Import gagal: ${res.error || 'unknown'}`)
+                <div style={{ fontWeight: 600, fontSize: 'var(--text-sm)', marginBottom: 6 }}>
+                  Grok CLI → WorkspaceGraph
+                </div>
+                <p
+                  style={{
+                    fontSize: 12,
+                    color: 'var(--text-muted)',
+                    marginBottom: 10,
+                    lineHeight: 1.45
+                  }}
+                >
+                  Sudah login Grok di terminal (`grok`)? Impor sesi akun X dari{' '}
+                  <code>~/.grok/auth.json</code> → app pakai <code>api.x.ai</code> (bukan CLI
+                  proxy). Token di-refresh otomatis.
+                </p>
+                <button
+                  className="btn btn-primary btn-sm"
+                  onClick={async () => {
+                    flash('Import Grok CLI…')
+                    try {
+                      const res = await window.api.importGrokCli()
+                      if (res.ok) {
+                        flash(
+                          `Grok OK${res.email ? ` (${res.email})` : ''} · ${res.baseUrl || 'api.x.ai'} · ${res.model || 'grok-4.5'}. Klik Test.`
+                        )
+                        await loadAll()
+                      } else {
+                        flash(`Import gagal: ${res.error || 'unknown'}`)
+                      }
+                    } catch (e) {
+                      flash(e instanceof Error ? e.message : 'Import failed')
                     }
-                  } catch (e) {
-                    flash(e instanceof Error ? e.message : 'Import failed')
-                  }
-                }}
-              >
-                Import dari Grok CLI (akun X)
-              </button>
-            </div>
+                  }}
+                >
+                  Import dari Grok CLI (akun X)
+                </button>
+              </div>
+            )}
 
-            {providers.map((p) => {
-              // Ollama: "connected" = daemon reachable. Cloud: "configured" = key saved (not live ping).
-              const isReady = p.id === 'ollama' ? Boolean(p.connected) : Boolean(p.configured)
-              const isLoading = Boolean(loadingProviders[p.id])
-              const freeCount = p.models.filter((m) => m.free).length
+            {/* Dynamic provider rows — the list IS the data (settings.aiProviders):
+                add via the form below, edit name/baseUrl/model inline, delete any row. */}
+            {defs.length === 0 && (
+              <div className="provider-empty">
+                Belum ada provider. Tambahkan lewat form di bawah.
+              </div>
+            )}
+            {defs.map((def) => {
+              const p = providers.find((x) => x.id === def.id)
+              const isReady = def.id === 'ollama' ? Boolean(p?.connected) : Boolean(p?.configured)
+              const isLoading = Boolean(loadingProviders[def.id])
+              const models = p?.models || []
+              const freeCount = models.filter((m) => m.free).length
               const freeHint =
                 freeCount > 0
                   ? ` · ${freeCount} model gratis`
-                  : p.id === 'ollama'
+                  : def.id === 'ollama'
                     ? ' · semua lokal (gratis)'
                     : ''
               // owned_by from /models — surfaced as the gateway vendor label
               const vendor =
-                [...new Set(p.models.map((m) => m.ownedBy).filter(Boolean))]
-                  .slice(0, 2)
-                  .join('/') || ''
+                [...new Set(models.map((m) => m.ownedBy).filter(Boolean))].slice(0, 2).join('/') ||
+                ''
               const statusText =
-                p.id === 'ollama'
-                  ? p.connected
-                    ? `Online · ${p.models.length} models${freeHint}`
+                def.id === 'ollama'
+                  ? p?.connected
+                    ? `Online · ${models.length} models${freeHint}`
                     : 'Offline — jalankan Ollama di localhost'
-                  : p.configured
-                    ? `Key saved · ${p.models.length} models${freeHint}${vendor ? ` · vendor ${vendor}` : ''} · klik Test`
-                    : p.error || 'Not configured'
+                  : p?.configured
+                    ? `Key saved · ${models.length} models${freeHint}${vendor ? ` · vendor ${vendor}` : ''} · klik Test`
+                    : p?.error || 'Not configured'
+              const keySaved = secStatus?.secrets?.[def.id] && secStatus.secrets[def.id] !== 'empty'
               return (
-                <div key={p.id} className={`provider-card ${isReady ? 'active' : ''}`}>
+                <div
+                  key={def.id}
+                  className={`provider-card ${isReady ? 'active' : ''}${
+                    def.kind === 'openai-compat' ? ' provider-card--custom' : ''
+                  }`}
+                >
                   <div className={`provider-dot ${isReady ? 'connected' : ''}`} />
-                  <div style={{ flex: 1, minWidth: 120 }}>
-                    <div style={{ fontWeight: 600, fontSize: 'var(--text-sm)' }}>{p.name}</div>
+                  <div className="provider-info">
+                    <input
+                      type="text"
+                      className="input provider-name-input"
+                      aria-label={`Nama ${def.name || def.id}`}
+                      value={def.name}
+                      onChange={(e) =>
+                        setDefs((prev) =>
+                          prev.map((d) => (d.id === def.id ? { ...d, name: e.target.value } : d))
+                        )
+                      }
+                    />
                     <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
                       {isLoading ? (
                         <span className="provider-loading">
@@ -863,79 +991,133 @@ export const SettingsView: React.FC = () => {
                       ) : (
                         <>
                           {statusText}
-                          {p.modelsFetchedAt ? ` · ${formatRefreshedAt(p.modelsFetchedAt)}` : ''}
-                          {secStatus?.secrets?.[p.id] ? ` · key:${secStatus.secrets[p.id]}` : ''}
+                          {p?.modelsFetchedAt ? ` · ${formatRefreshedAt(p.modelsFetchedAt)}` : ''}
+                          {keySaved ? ` · key:${secStatus?.secrets?.[def.id]}` : ''}
                         </>
                       )}
                     </div>
                   </div>
-                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                    {p.id === 'ollama' || p.id === 'openai' || p.id === 'grok' ? (
-                      <input
-                        type="text"
-                        className="input"
-                        placeholder={
-                          p.id === 'ollama'
-                            ? 'http://localhost:11434'
-                            : p.id === 'grok'
-                              ? 'https://api.x.ai/v1'
-                              : 'https://api.openai.com/v1'
-                        }
-                        style={{ width: 260 }}
-                        value={baseUrls[p.id] || ''}
-                        onChange={(e) => setBaseUrls({ ...baseUrls, [p.id]: e.target.value })}
-                      />
-                    ) : (
-                      <input
-                        type="password"
-                        className="input"
-                        placeholder={
-                          secStatus?.secrets?.[p.id] && secStatus.secrets[p.id] !== 'empty'
-                            ? '••••••  (saved)'
-                            : 'API Key'
-                        }
-                        style={{ width: 260 }}
-                        value={apiKeys[p.id] || ''}
-                        onChange={(e) => setApiKeys({ ...apiKeys, [p.id]: e.target.value })}
-                        autoComplete="off"
-                      />
-                    )}
-                    <div
-                      style={{
-                        display: 'flex',
-                        gap: 6,
-                        justifyContent: 'flex-end',
-                        flexWrap: 'wrap'
-                      }}
+                  <div className="provider-fields">
+                    <input
+                      type="text"
+                      className="input"
+                      placeholder="Base URL (https://…/v1)"
+                      value={def.baseUrl || ''}
+                      onChange={(e) =>
+                        setDefs((prev) =>
+                          prev.map((d) => (d.id === def.id ? { ...d, baseUrl: e.target.value } : d))
+                        )
+                      }
+                    />
+                    <input
+                      type="password"
+                      className="input"
+                      placeholder={keySaved ? '••••••  (saved)' : 'API Key'}
+                      value={apiKeys[def.id] || ''}
+                      onChange={(e) => setApiKeys({ ...apiKeys, [def.id]: e.target.value })}
+                      autoComplete="off"
+                    />
+                  </div>
+                  <div className="provider-actions">
+                    <button className="btn btn-surface btn-sm" onClick={() => handleTest(def.id)}>
+                      Test
+                    </button>
+                    <button
+                      className="btn btn-surface btn-sm"
+                      onClick={() => void handleSetDefault(def.id)}
                     >
-                      <button className="btn btn-surface btn-sm" onClick={() => handleTest(p.id)}>
-                        Test
-                      </button>
-                      <button
-                        className="btn btn-surface btn-sm"
-                        onClick={() => void handleSetDefault(p.id)}
-                      >
-                        Set default
-                      </button>
-                      <button
-                        className="btn btn-surface btn-sm"
-                        title="Bypass cache 5 menit — tarik ulang daftar model dari API sekarang"
-                        onClick={() => void handleRefreshModels(p.id)}
-                        disabled={!isReady || isLoading}
-                      >
-                        {isLoading ? 'Memuat…' : 'Refresh models'}
-                      </button>
-                      <button
-                        className="btn btn-primary btn-sm"
-                        onClick={() => handleSaveKey(p.id)}
-                      >
-                        Save
-                      </button>
-                    </div>
+                      Set default
+                    </button>
+                    <button
+                      className="btn btn-surface btn-sm"
+                      title="Bypass cache 5 menit — tarik ulang daftar model dari API sekarang"
+                      onClick={() => void handleRefreshModels(def.id)}
+                      disabled={!isReady || isLoading}
+                    >
+                      {isLoading ? 'Memuat…' : 'Refresh models'}
+                    </button>
+                    <button
+                      className="btn btn-primary btn-sm"
+                      onClick={() => void handleSaveProviderRow(def)}
+                      disabled={Boolean(savingProvider[def.id])}
+                    >
+                      {savingProvider[def.id] ? 'Menyimpan…' : 'Save'}
+                    </button>
+                    <button
+                      className="btn btn-ghost btn-sm provider-delete-btn"
+                      onClick={() => void handleDeleteProvider(def.id)}
+                      title={`Hapus provider ${def.name || def.id}`}
+                    >
+                      Hapus
+                    </button>
                   </div>
                 </div>
               )
             })}
+            {/* Reset ke provider bawaan — only when a built-in is missing
+                (e.g. after delete-all); merging is non-destructive. */}
+            {BUILTIN_SEED_IDS.some((id) => !defs.some((d) => d.id === id)) && (
+              <div className="provider-add">
+                <button
+                  className="btn btn-surface btn-sm"
+                  onClick={() => void handleResetBuiltins()}
+                >
+                  ⟲ Reset ke provider bawaan
+                </button>
+              </div>
+            )}
+            {/* Single add-provider entry point — one input flow, like other AI agents */}
+            <div className="provider-add">
+              {showAddProvider ? (
+                <div className="provider-add-form">
+                  <input
+                    type="text"
+                    className="input"
+                    placeholder="Nama provider (mis. Mistral)"
+                    value={providerDraft.name}
+                    onChange={(e) => setProviderDraft({ ...providerDraft, name: e.target.value })}
+                  />
+                  <input
+                    type="text"
+                    className="input"
+                    placeholder="Base URL (mis. https://api.mistral.ai/v1)"
+                    value={providerDraft.baseUrl}
+                    onChange={(e) =>
+                      setProviderDraft({ ...providerDraft, baseUrl: e.target.value })
+                    }
+                  />
+                  <input
+                    type="password"
+                    className="input"
+                    placeholder="API Key (opsional dulu)"
+                    value={providerDraft.apiKey}
+                    onChange={(e) => setProviderDraft({ ...providerDraft, apiKey: e.target.value })}
+                    autoComplete="off"
+                  />
+                  <div className="provider-add-actions">
+                    <button
+                      className="btn btn-primary btn-sm"
+                      onClick={() => void handleAddProvider()}
+                    >
+                      Tambah
+                    </button>
+                    <button
+                      className="btn btn-ghost btn-sm"
+                      onClick={() => {
+                        setShowAddProvider(false)
+                        setProviderDraft({ name: '', baseUrl: '', apiKey: '' })
+                      }}
+                    >
+                      Batal
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <button className="btn btn-surface btn-sm" onClick={() => setShowAddProvider(true)}>
+                  + Tambah provider
+                </button>
+              )}
+            </div>
             {/* R1-2 failover order — drag-reorder the backup provider chain */}
             <div
               style={{
@@ -1095,11 +1277,10 @@ export const SettingsView: React.FC = () => {
               </div>
             </div>
             <p style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 12, lineHeight: 1.5 }}>
-              Alur: isi key → <b>Save</b> (simpan saja) → <b>Test</b> (ping API) → di Chat pilih
-              provider, atau <b>Set default</b>. Save tidak lagi mengganti provider aktif chat.
-              <br />
-              Gemini/OpenAI/Claude/OpenRouter butuh API key. Ollama butuh app Ollama running di
-              localhost.
+              Alur: tambah provider (nama + base URL + key) → <b>Save</b> → <b>Test</b> (ping API) →
+              daftar model dimuat otomatis dari API. Di Chat pilih model, atau <b>Set default</b>.
+              Provider custom memakai protokol OpenAI-compatible (butuh API key; Ollama lokal gratis
+              tanpa key). Menghapus provider juga menghapus key tersimpannya.
             </p>
           </div>
         )}

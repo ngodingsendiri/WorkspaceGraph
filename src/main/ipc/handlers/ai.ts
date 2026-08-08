@@ -35,6 +35,12 @@ import {
   debounceEmit,
   loadSettingsIntoProviders
 } from '../shared'
+import {
+  readProviderDefs,
+  applyProviderDefsToSettings,
+  mergeBuiltinDefs,
+  type AIProviderDef
+} from '../../ai/providerRegistry'
 
 // Idempotency guard: registerAIHandlers may run more than once (startup + e2e
 // test harness), and each run would stack another onProgress listener on the
@@ -56,6 +62,16 @@ function wireEmbeddingProgressBroadcast(): void {
   })
 }
 
+/** Persist a def list + rebuild the live provider map — shared tail of
+ * ai:saveProviderConfigs and ai:resetProviderConfigs. */
+function persistProviderDefs(settings: Record<string, unknown>, defs: unknown): AIProviderDef[] {
+  const clean = applyProviderDefsToSettings(settings, defs)
+  workspaceEngine.saveSettings(settings)
+  aiMiddleware.rebuildProviders(clean)
+  loadSettingsIntoProviders()
+  return clean
+}
+
 export function registerAIHandlers(): void {
   // --- AI Embedding Status ---
   ipcMain.handle('ai:embeddingStatus', async () => {
@@ -65,6 +81,81 @@ export function registerAIHandlers(): void {
   wireEmbeddingProgressBroadcast()
 
   // --- AI Handlers ---
+
+  /** Dynamic provider registry: the persisted provider defs (no keys). */
+  ipcMain.handle('ai:getProviderConfigs', async () => {
+    const settings = workspaceEngine.getSettings() as { aiProviders?: unknown }
+    return { defs: readProviderDefs(settings) }
+  })
+
+  /**
+   * Add / edit / delete providers. Persists the def list, drops API keys of
+   * removed providers, and falls the active provider back to the first one
+   * when it was deleted. Rebuilds the live provider map in place.
+   */
+  ipcMain.handle('ai:saveProviderConfigs', async (_, defs: unknown) => {
+    try {
+      // Pure settings-mutation (unit-tested in providerRegistry.test.ts):
+      // key-cleanup for removed providers, baseUrl/defaultModel sync (P1),
+      // active-provider fallback. The handler then persists + rebuilds.
+      const settings = workspaceEngine.getSettings() as Record<string, unknown>
+      const clean = persistProviderDefs(settings, defs)
+      return { ok: true, defs: clean }
+    } catch (err) {
+      console.error('[ai:saveProviderConfigs] failed:', err)
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  })
+
+  /**
+   * Persist a model pick as the provider's default (chat picker): the live
+   * provider, the key entry (settings.ai), and the def list are all updated so
+   * the pick survives sessions and rebuilds. Auto always resolves to it.
+   */
+  ipcMain.handle('ai:setProviderDefaultModel', async (_, providerId: string, modelId: string) => {
+    try {
+      if (typeof providerId !== 'string' || !providerId) {
+        return { ok: false, error: 'providerId required' }
+      }
+      const clean = String(modelId ?? '').trim()
+      aiMiddleware.configureProvider(providerId, { defaultModel: clean || undefined })
+      const settings = workspaceEngine.getSettings() as Record<string, unknown>
+      const ai = (settings.ai as Record<string, Record<string, unknown>>) || {}
+      if (ai[providerId]) ai[providerId].defaultModel = clean || undefined
+      else ai[providerId] = { defaultModel: clean || undefined }
+      settings.ai = ai
+      // Keep the def list in sync (it is the persisted source at rebuild time)
+      const defs = (settings.aiProviders as AIProviderDef[] | undefined) ?? []
+      const def = defs.find((d) => d.id === providerId)
+      if (def) {
+        if (clean) def.defaultModel = clean
+        else delete def.defaultModel
+      }
+      workspaceEngine.saveSettings(settings)
+      return { ok: true }
+    } catch (err) {
+      console.error('[ai:setProviderDefaultModel] failed:', err)
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  })
+
+  /**
+   * Reset ke provider bawaan: merge the six built-in seeds back into the def
+   * list (non-destructive — existing providers are kept). Restores the special
+   * adapters (Grok CLI, Ollama probe, Gemini SDK) after a delete-all without
+   * hand-editing settings.json.
+   */
+  ipcMain.handle('ai:resetProviderConfigs', async () => {
+    try {
+      const settings = workspaceEngine.getSettings() as Record<string, unknown>
+      const clean = persistProviderDefs(settings, mergeBuiltinDefs(settings.aiProviders))
+      return { ok: true, defs: clean }
+    } catch (err) {
+      console.error('[ai:resetProviderConfigs] failed:', err)
+      return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
+  })
+
   ipcMain.handle('ai:getProviders', async (event) => {
     // Push each provider's status as it resolves so the Settings panel can
     // flip that card's spinner immediately (fast providers land way before

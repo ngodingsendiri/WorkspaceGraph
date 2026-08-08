@@ -8,12 +8,8 @@ import {
   AIToolCall,
   ModelInfo
 } from './providers/BaseProvider'
-import { GeminiProvider } from './providers/GeminiProvider'
-import { OpenAIProvider } from './providers/OpenAIProvider'
-import { ClaudeProvider } from './providers/ClaudeProvider'
-import { OllamaProvider } from './providers/OllamaProvider'
-import { OpenRouterProvider } from './providers/OpenRouterProvider'
 import { GrokProvider, importGrokCliAuth } from './providers/GrokProvider'
+import { readProviderDefs, buildProviderMap, type AIProviderDef } from './providerRegistry'
 import { ContextEngine, AgentRole } from './ContextEngine'
 import { workspaceEngine } from '../engine/WorkspaceEngine'
 import { searchEngine } from '../engine/SearchEngine'
@@ -282,29 +278,42 @@ export class AIMiddleware {
   /** Real HTTP cancellation — abort() stops the provider stream, not just UI. */
   private abortControllers = new Map<string, AbortController>()
 
-  constructor(overrides?: { providers?: Record<string, BaseProvider> }) {
+  constructor(overrides?: { providers?: Record<string, BaseProvider>; defs?: AIProviderDef[] }) {
     this.contextEngine = new ContextEngine(workspaceEngine, searchEngine)
 
-    const grok = new GrokProvider()
-    const gemini = new GeminiProvider()
-    const openai = new OpenAIProvider()
-    const claude = new ClaudeProvider()
-    const ollama = new OllamaProvider()
-    const openrouter = new OpenRouterProvider()
-
-    // Grok first — primary for this workspace app
-    this.providers.set(grok.id, grok)
-    this.providers.set(gemini.id, gemini)
-    this.providers.set(openai.id, openai)
-    this.providers.set(claude.id, claude)
-    this.providers.set(ollama.id, ollama)
-    this.providers.set(openrouter.id, openrouter)
+    // Dynamic provider set: the persisted defs (or the built-in seeds) decide
+    // which adapters exist. Custom entries become generic OpenAI-compatible
+    // providers; builtins keep their special adapters (Grok CLI, Gemini SDK,
+    // Ollama probe). Settings → add/edit/delete swaps this set at runtime.
+    const defs = overrides?.defs ?? readProviderDefs(workspaceEngine.getSettings())
+    for (const [id, p] of buildProviderMap(defs)) {
+      this.providers.set(id, p)
+    }
 
     // Test seam: inject fake providers (P-A1 native loop / fence fallback)
     if (overrides?.providers) {
       for (const [id, p] of Object.entries(overrides.providers)) {
         this.providers.set(id, p)
       }
+    }
+    // A deleted/absent provider must never stay the active one (default is
+    // 'grok' — users can remove grok entirely, leaving it a dead pointer).
+    // loadSettingsIntoProviders may still override to a valid saved value.
+    if (!this.providers.has(this.activeProviderId)) {
+      const first = this.providers.keys().next().value
+      if (first) this.activeProviderId = first
+    }
+  }
+
+  /** Replace the provider set from persisted defs (Settings add/edit/delete).
+   * Keys are re-applied afterwards by loadSettingsIntoProviders. The active
+   * provider survives when it still exists, otherwise falls back to the first. */
+  rebuildProviders(defs: AIProviderDef[]): void {
+    const next = buildProviderMap(defs)
+    this.providers = next
+    if (!next.has(this.activeProviderId)) {
+      const first = next.keys().next().value
+      if (first) this.activeProviderId = first
     }
   }
 
@@ -378,7 +387,12 @@ export class AIMiddleware {
 
   getActiveProvider(): BaseProvider {
     const provider = this.providers.get(this.activeProviderId)
-    if (!provider) throw new Error(`Active provider not configured: ${this.activeProviderId}`)
+    if (!provider) {
+      if (this.providers.size === 0) {
+        throw new Error('No AI provider configured — add one in Settings → AI Providers')
+      }
+      throw new Error(`Active provider not configured: ${this.activeProviderId}`)
+    }
     return provider
   }
 

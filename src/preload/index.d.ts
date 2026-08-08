@@ -202,6 +202,16 @@ export interface API {
   renderMarkdown: (content: string) => Promise<string>
 
   getAIProviders: () => Promise<any[]>
+  /** Dynamic provider registry — persisted provider defs (add/edit/delete). */
+  getAIProviderConfigs: () => Promise<{ defs: any[] }>
+  saveAIProviderConfigs: (defs: any[]) => Promise<{ ok: boolean; defs?: any[]; error?: string }>
+  /** Reset ke provider bawaan: merge the six built-in seeds back into the def list. */
+  resetAIProviderConfigs: () => Promise<{ ok: boolean; defs?: any[]; error?: string }>
+  /** Persist a model pick as the provider's default (chat picker → survives sessions). */
+  setAIProviderDefaultModel: (
+    providerId: string,
+    modelId: string
+  ) => Promise<{ ok: boolean; error?: string }>
   /** Per-provider progress push while ai:getProviders is in flight (Settings spinner). */
   onAIProviderStatus: (callback: (status: unknown) => void) => () => void
   testAIProvider: (providerId?: string) => Promise<{ ok: boolean; error?: string; sample?: string }>

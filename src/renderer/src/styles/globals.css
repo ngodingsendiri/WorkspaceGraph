@@ -3809,6 +3809,7 @@ html:not([data-theme]) {
 
 .settings-content {
   flex: 1;
+  min-width: 0; /* flex children default to min-width:auto → overflow at narrow widths */
   overflow-y: auto;
   padding: var(--space-6) var(--space-8);
 }
@@ -3852,7 +3853,7 @@ html:not([data-theme]) {
 }
 
 /* ================================================
-   Provider Card
+   Provider Card — dynamic provider rows (add/edit/delete)
    ================================================ */
 .provider-card {
   background: var(--bg-panel);
@@ -3861,8 +3862,9 @@ html:not([data-theme]) {
   padding: var(--space-4);
   margin-bottom: var(--space-3);
   display: flex;
-  align-items: center;
-  gap: var(--space-4);
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: var(--space-3) var(--space-4);
   transition: background var(--duration-fast);
 }
 
@@ -3874,12 +3876,91 @@ html:not([data-theme]) {
   background: var(--color-primary-subtle);
 }
 
+.provider-card--custom {
+  border: 1px dashed var(--border-default);
+}
+
+.provider-info {
+  flex: 1 1 140px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.provider-name-input {
+  font-weight: 600;
+  width: 100%;
+}
+
+.provider-fields {
+  flex: 2 1 200px;
+  min-width: 160px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.provider-fields .input {
+  width: 100%;
+}
+
+.provider-actions {
+  flex: 1 1 100%;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  justify-content: flex-end;
+}
+
+.provider-delete-btn {
+  color: var(--color-error);
+}
+
+.provider-delete-btn:hover {
+  background: var(--color-error-subtle);
+}
+
+.provider-empty {
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+  padding: var(--space-3) 0;
+}
+
+/* Single add-provider entry point — one input flow, like other AI agents */
+.provider-add {
+  margin-top: var(--space-2);
+}
+
+.provider-add-form {
+  background: var(--bg-panel);
+  border: 1px dashed var(--border-default);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: var(--space-2);
+  margin-bottom: var(--space-3);
+}
+
+.provider-add-form .input {
+  width: 100%;
+}
+
+.provider-add-actions {
+  display: flex;
+  gap: 6px;
+  justify-content: flex-end;
+  grid-column: 1 / -1;
+}
+
 .provider-dot {
   width: 8px;
   height: 8px;
   border-radius: var(--radius-full);
   background: var(--border-default);
   flex-shrink: 0;
+  margin-top: 6px;
 }
 
 .provider-dot.connected {
@@ -5217,6 +5298,13 @@ body.wg-resizing * {
   }
   .settings-nav {
     width: 170px;
+  }
+}
+
+/* Mid: give the settings content room before the 900px nav-stack breakpoint */
+@media (max-width: 1100px) {
+  .settings-content {
+    padding: var(--space-4);
   }
 }
 

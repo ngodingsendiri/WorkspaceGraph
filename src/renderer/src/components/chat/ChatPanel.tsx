@@ -459,6 +459,13 @@ export const ChatPanel: React.FC = () => {
     // Switching provider resets the model to its default — re-apply the pick
     if (providerId !== activeProviderId) await setActiveProvider(providerId)
     setSelectedModel(modelId)
+    // Persist the pick as THIS provider's default so the next session (and the
+    // Auto label) resolves to it — no re-picking every time. Silent + best-effort.
+    if (!isAutoModel(modelId) && modelId) {
+      window.api.setAIProviderDefaultModel(providerId, modelId).catch(() => {
+        /* non-critical — the in-session pick already applied */
+      })
+    }
   }
   const pickAuto = (): void => {
     closeModelPicker()

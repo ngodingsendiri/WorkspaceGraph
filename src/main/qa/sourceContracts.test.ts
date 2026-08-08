@@ -310,6 +310,8 @@ describe('Renderer wiring', () => {
     expect(has(store, "selectedModelId: 'auto'", 'isAutoModel')).toBe(true)
     const panel = read('src/renderer/src/components/chat/ChatPanel.tsx')
     expect(has(panel, 'chat-model-chip', 'chat-model-picker', 'pickAuto')).toBe(true)
+    // A concrete pick persists as the provider's default (survives sessions)
+    expect(has(panel, 'setAIProviderDefaultModel', 'isAutoModel(modelId)')).toBe(true)
     expect(read('src/renderer/src/styles/globals.css').includes('chat-model-chip')).toBe(true)
   })
   it('P2-1 token budget bar wired end-to-end', () => {
@@ -984,8 +986,8 @@ describe('Engine source contracts', () => {
 })
 
 describe('AI system contracts', () => {
-  it('all six providers registered in middleware', () => {
-    const mid = read('src/main/ai/AIMiddleware.ts')
+  it('all six built-in adapters live in the dynamic provider registry', () => {
+    const reg = read('src/main/ai/providerRegistry.ts')
     for (const p of [
       'GrokProvider',
       'GeminiProvider',
@@ -994,8 +996,14 @@ describe('AI system contracts', () => {
       'OllamaProvider',
       'OpenRouterProvider'
     ]) {
-      expect(mid).toContain(p)
+      expect(reg).toContain(p)
     }
+    // The provider set is DATA (settings.aiProviders), not code — registry builds
+    // the map from defs, with a generic OpenAI-compatible adapter for custom rows.
+    expect(
+      has(reg, 'buildProviderMap', 'readProviderDefs', 'sanitizeDefs', 'OpenAICompatProvider')
+    ).toBe(true)
+    const mid = read('src/main/ai/AIMiddleware.ts')
     expect(
       has(
         mid,
@@ -1005,12 +1013,59 @@ describe('AI system contracts', () => {
         'testProvider',
         'enableTools',
         'MAX_TOOL_ROUNDS',
-        'cancelStream'
+        'cancelStream',
+        'rebuildProviders'
       )
     ).toBe(true)
     expect(has(mid, 'importGrokFromCli', 'getAllProvidersStatus')).toBe(true)
     // P2: kernel comes from the Prompt Registry (per-vault override), not a literal
     expect(has(mid, "renderPrompt('kernel')", 'unknown tools skipped')).toBe(true)
+  })
+  it('dynamic providers: add/edit/delete wired end-to-end (settings → IPC → preload → UI)', () => {
+    const reg = read('src/main/ai/providerRegistry.ts')
+    const ipc = read('src/main/ipc/handlers/ai.ts')
+    const pre = read('src/preload/index.ts')
+    const set = read('src/renderer/src/components/settings/SettingsView.tsx')
+    // Registry: seeds + custom adapter + the pure settings-mutation that owns
+    // key-cleanup (drop removed keys), baseUrl/defaultModel sync, and the
+    // active-provider fallback — the handler delegates to it
+    expect(
+      has(reg, 'DEFAULT_PROVIDER_DEFS', 'makeProviderId', "kind: 'builtin' | 'openai-compat'")
+    ).toBe(true)
+    expect(
+      has(
+        reg,
+        'applyProviderDefsToSettings',
+        'delete ai[id]',
+        'd.baseUrl !== undefined) entry.baseUrl',
+        "settings.activeProvider = clean[0]?.id ?? ''",
+        'mergeBuiltinDefs'
+      )
+    ).toBe(true)
+    // IPC: read + write the provider list; the handler persists + rebuilds live
+    expect(ipc.includes("'ai:getProviderConfigs'")).toBe(true)
+    expect(ipc.includes("'ai:saveProviderConfigs'")).toBe(true)
+    expect(ipc.includes("'ai:resetProviderConfigs'")).toBe(true)
+    expect(ipc.includes("'ai:setProviderDefaultModel'")).toBe(true)
+    expect(has(ipc, 'applyProviderDefsToSettings(settings, defs)', 'rebuildProviders(clean)')).toBe(
+      true
+    )
+    // Preload bridge
+    expect(
+      has(
+        pre,
+        'getAIProviderConfigs',
+        'saveAIProviderConfigs',
+        'resetAIProviderConfigs',
+        'setAIProviderDefaultModel'
+      )
+    ).toBe(true)
+    // UI: one add form + delete per row + reset-to-builtins (no hardcoded shells)
+    expect(set.includes('PROVIDER_SHELLS')).toBe(false)
+    expect(has(set, 'Tambah provider', 'handleAddProvider', 'handleDeleteProvider')).toBe(true)
+    expect(
+      has(set, 'providerIdFromName', 'saveAIProviderConfigs', 'Reset ke provider bawaan')
+    ).toBe(true)
   })
   it('P2 prompt registry: versioned JSON assets under .workspacegraph/prompts/', () => {
     const reg = read('src/main/ai/PromptRegistry.ts')
@@ -1103,9 +1158,8 @@ describe('AI system contracts', () => {
       // first chat call, not only when listModels() happens to have run
       expect(has(src, 'ensureChatBase', 'chatBaseProbed')).toBe(true)
     }
-    // Settings: base URL editable for OpenAI/Grok gateways + vendor label
-    expect(has(set, "p.id === 'ollama' || p.id === 'openai' || p.id === 'grok'")).toBe(true)
-    expect(has(set, 'vendor ', 'ownedBy')).toBe(true)
+    // Settings: base URL editable on EVERY provider row (dynamic registry) + vendor label
+    expect(has(set, "def.id === 'ollama'", 'Base URL', 'vendor ', 'ownedBy')).toBe(true)
     // Manual refresh: cache-bust + IPC + Settings button
     expect(has(base, 'clearModelCache(): void')).toBe(true)
     expect(
@@ -1131,14 +1185,17 @@ describe('AI system contracts', () => {
     )
     // Preload exposes the subscription (returns an unsubscribe)
     expect(has(pre, 'onAIProviderStatus', "ipcRenderer.on('ai:providerStatus'")).toBe(true)
-    // Renderer: instant card shells + per-provider loading state + spinner row
-    expect(has(set, 'PROVIDER_SHELLS', 'loadingProviders', 'Memuat model…')).toBe(true)
-    expect(has(set, 'onAIProviderStatus', 'spinner-sm')).toBe(true)
+    // Renderer: dynamic rows + per-provider loading state + spinner (no more
+    // hardcoded provider shells — the list is the data)
+    expect(set.includes('PROVIDER_SHELLS')).toBe(false)
+    expect(has(set, 'loadingProviders', 'Memuat model…', 'onAIProviderStatus', 'spinner-sm')).toBe(
+      true
+    )
     expect(has(css, '.provider-loading', '.spinner-sm')).toBe(true)
-    // Save auto-refreshes the saved provider's models (configure → spinner →
-    // refreshProviderModels → loadAll) so a new key/baseUrl shows immediately;
-    // a failed refresh surfaces a flash instead of hiding behind static fallback
-    expect(has(set, 'refreshProviderModels(providerId)', '!refreshed.ok')).toBe(true)
+    // Save auto-refreshes the saved provider's models (persist defs → configure
+    // busts the cache → loadAll re-fetches /models) so a new key/baseUrl shows
+    // immediately
+    expect(has(set, 'handleSaveProviderRow', 'configureAIProvider', 'loadAll()')).toBe(true)
   })
   it('last-refreshed stamp: modelsFetchedAt flows main → Settings card', () => {
     const disc = read('src/main/ai/providers/modelDiscovery.ts')
@@ -1162,7 +1219,7 @@ describe('AI system contracts', () => {
     }
     // Card stamps "diperbarui …" when the timestamp is present (same-day = time,
     // older = short date + time so a stale list is obvious)
-    expect(has(set, 'formatRefreshedAt', 'p.modelsFetchedAt ?', 'diperbarui')).toBe(true)
+    expect(has(set, 'formatRefreshedAt', 'modelsFetchedAt ?', 'diperbarui')).toBe(true)
   })
   it('R0-3 retry/backoff + R0-2 parallel reads wired', () => {
     const retry = read('src/main/ai/providers/providerRetry.ts')

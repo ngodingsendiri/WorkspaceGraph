@@ -137,6 +137,14 @@ const api = {
 
   // AI
   getAIProviders: () => ipcRenderer.invoke('ai:getProviders'),
+  /** Dynamic provider registry — the persisted provider defs (add/edit/delete). */
+  getAIProviderConfigs: () => ipcRenderer.invoke('ai:getProviderConfigs'),
+  saveAIProviderConfigs: (defs: unknown) => ipcRenderer.invoke('ai:saveProviderConfigs', defs),
+  /** Reset ke provider bawaan: merge the six built-in seeds back into the def list. */
+  resetAIProviderConfigs: () => ipcRenderer.invoke('ai:resetProviderConfigs'),
+  /** Persist a model pick as the provider's default (chat picker → survives sessions). */
+  setAIProviderDefaultModel: (providerId: string, modelId: string) =>
+    ipcRenderer.invoke('ai:setProviderDefaultModel', providerId, modelId),
   /** Per-provider progress push while ai:getProviders is in flight (spinner). */
   onAIProviderStatus: (callback: (status: unknown) => void) => {
     const handler = (_: unknown, status: unknown): void => callback(status)

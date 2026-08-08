@@ -37,21 +37,35 @@ function toolOptions(
   }
 }
 
-export class OpenAIProvider extends BaseProvider {
-  readonly id = 'openai'
-  readonly name = 'OpenAI'
+/**
+ * Generic OpenAI-compatible provider for user-added providers (any base URL:
+ * Mistral, Together, vLLM, LM Studio, llama.cpp, Azure OpenAI, …). Behaves like
+ * the OpenAI adapter — same SDK, delta extractors, retry and base-path
+ * auto-detection — but its id/name/baseUrl come from the dynamic provider
+ * registry instead of a hardcoded class.
+ */
+export class OpenAICompatProvider extends BaseProvider {
+  readonly id: string
+  readonly name: string
   readonly capabilities: ProviderCapabilities = {
     chat: true,
     streaming: true,
     vision: true,
     toolCalling: true,
-    embeddings: true
+    embeddings: false
   }
 
   private client: OpenAI | null = null
-  protected defaultModel = 'gpt-4o-mini'
   /** True once the chat base was probed this process (avoids re-probing). */
   private chatBaseProbed = false
+
+  constructor(def: { id: string; name: string; baseUrl?: string; defaultModel?: string }) {
+    super()
+    this.id = def.id
+    this.name = def.name
+    this.baseUrl = (def.baseUrl || '').trim()
+    if (def.defaultModel) this.defaultModel = def.defaultModel
+  }
 
   /**
    * Lazily adopt the working versioned base before a chat call. If the user
@@ -73,10 +87,13 @@ export class OpenAIProvider extends BaseProvider {
 
   private getClient(): OpenAI {
     if (!this.apiKey) {
-      throw new Error('OpenAI API Key is not set.')
+      throw new Error(`${this.name} API key is not set.`)
     }
     if (!this.client) {
-      this.client = new OpenAI({ apiKey: this.apiKey, baseURL: this.baseUrl || undefined })
+      this.client = new OpenAI({
+        apiKey: this.apiKey,
+        baseURL: this.baseUrl || undefined
+      })
     }
     return this.client
   }
@@ -106,27 +123,19 @@ export class OpenAIProvider extends BaseProvider {
   async listModels(): Promise<ModelInfo[]> {
     const cached = this.modelCache.get()
     if (cached) return cached
-    // Runtime: the account's REAL models from GET /models (custom baseUrl
-    // supported — Azure/OpenAI-compat gateways list their own catalog). The
-    // base path is auto-detected (/v1 vs /api/v1 vs bare) so pasting just the
-    // domain works for any OpenAI-compat gateway.
+    // Runtime: the gateway's REAL models from GET /models (base path
+    // auto-detected — pasting just the domain works for any compat server).
     const discovered = await discoverOpenAICompat(
       this.baseUrl || 'https://api.openai.com/v1',
       this.apiKey
     )
-    // Adopt the working chat base so completions hit the same versioned path
     const adopted = shouldAdoptChatBase(this.baseUrl, discovered)
     if (adopted) {
       this.baseUrl = adopted
-      this.client = null // rebuild SDK client against the resolved base
+      this.client = null
     }
     const runtime = discovered?.models ?? []
-    const merged = mergeWithFallback(runtime, [
-      { id: 'gpt-4o', name: 'GPT-4o', contextWindow: 128000 },
-      { id: 'gpt-4o-mini', name: 'GPT-4o Mini', contextWindow: 128000 },
-      { id: 'o1', name: 'o1', contextWindow: 200000 },
-      { id: 'o3-mini', name: 'o3-mini', contextWindow: 200000 }
-    ])
+    const merged = mergeWithFallback(runtime, [])
     const out = markFreeByHeuristic(merged)
     if (out.length > 0) this.modelCache.set(out, runtime.length > 0)
     return out
@@ -138,7 +147,6 @@ export class OpenAIProvider extends BaseProvider {
     const model = request.model || this.defaultModel
     const messages = buildOpenAIMessages(request)
 
-    // R0-3: transient 429/5xx are retried with backoff before surfacing
     const response = await withProviderRetry(() =>
       client.chat.completions.create({
         model,
@@ -150,8 +158,6 @@ export class OpenAIProvider extends BaseProvider {
     )
 
     const choice = response.choices[0]
-    // Cast: SDK v5 unions tool_calls with custom variants; we only consume the
-    // standard function-calling shape.
     const rawCalls = choice.message.tool_calls as
       { id?: string; function?: { name?: string; arguments?: string } }[] | undefined
     const toolCalls: AIToolCall[] | undefined = rawCalls
@@ -181,9 +187,8 @@ export class OpenAIProvider extends BaseProvider {
     const messages = buildOpenAIMessages(request)
 
     try {
-      // R0-3: retry only the CREATE — a stream that already emitted chunks can't
-      // be resumed without duplicating content. shouldRetry stops if the user
-      // cancelled during the backoff window.
+      // Retry only the CREATE — a stream that already emitted chunks can't be
+      // resumed without duplicating content. Stop if the user cancelled.
       const stream = await withProviderRetry(
         () =>
           client.chat.completions.create(
@@ -202,13 +207,10 @@ export class OpenAIProvider extends BaseProvider {
       )
 
       let tokensUsed: number | undefined
-      // P-A1: accumulate streaming tool_calls deltas (args split across chunks)
       const acc: MutableToolCall[] = []
       for await (const chunk of stream) {
         const delta = chunk.choices[0]?.delta
         const text = delta?.content || ''
-        // P2-4: o-series reasoning rides `delta.reasoning` (reasoning_content on
-        // some compat servers) — surface it before the content arrives
         const reasoning = deltaReasoning(delta)
         if (text || reasoning) {
           onChunk({ content: text, done: false, model, ...(reasoning ? { reasoning } : {}) })
@@ -230,7 +232,7 @@ export class OpenAIProvider extends BaseProvider {
       // User cancelled — don't surface an error, just stop
       if (signal?.aborted) return
       const msg = err instanceof Error ? err.message : String(err)
-      onChunk({ content: '', done: true, model, error: `OpenAI: ${msg}` })
+      onChunk({ content: '', done: true, model, error: `${this.name}: ${msg}` })
     }
   }
 }
