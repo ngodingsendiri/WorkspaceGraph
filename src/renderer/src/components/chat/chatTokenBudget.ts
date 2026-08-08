@@ -39,8 +39,27 @@ export function contextBudgetForModel(
 
 export interface TokenStatsInput {
   tokensUsed?: number
+  costUsd?: number
   contextTokens?: number
   contextSavedTokens?: number
+}
+
+/** R2-1: per-session estimated USD cost — sum of per-reply costUsd (0 when none). */
+export function sessionCostStats(messages: TokenStatsInput[]): number {
+  let total = 0
+  for (const m of messages) {
+    if (typeof m.costUsd === 'number') total += m.costUsd
+  }
+  return total
+}
+
+/** Compact USD for the budget bar / status line: `$0.0012`, `$1.23`, `$12`. */
+export function formatUsd(usd: number): string {
+  const v = Math.max(0, usd)
+  if (v === 0) return '$0'
+  if (v < 0.01) return `$${v.toFixed(4).replace(/0+$/, '').replace(/\.$/, '')}`
+  if (v < 100) return `$${v.toFixed(2).replace(/\.?0+$/, '')}`
+  return `$${v.toFixed(1)}`
 }
 
 export interface SessionTokenStats {

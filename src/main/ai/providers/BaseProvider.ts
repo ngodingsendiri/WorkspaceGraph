@@ -93,6 +93,9 @@ export interface ModelInfo {
   free?: boolean
   /** Provider-reported owner (OpenAI-compat `owned_by`), when available. */
   ownedBy?: string
+  /** R2-1: runtime per-token USD pricing (OpenRouter /models) — exact when
+   * present; cost.ts falls back to its static table otherwise. */
+  pricing?: { input: number; output: number }
 }
 
 export interface ProviderStatus {
@@ -152,6 +155,24 @@ export abstract class BaseProvider {
    * Public so AIMiddleware can stamp ProviderStatus.modelsFetchedAt. */
   lastModelsFetchedAt(): number | null {
     return this.modelCache.fetchedAt()
+  }
+
+  /**
+   * R2-1: runtime per-token pricing for a model, when the cached /models list
+   * carries it (OpenRouter). Synchronous and never throws — returns null so
+   * cost.ts falls back to the static table. Null when the cache is cold or
+   * the model is unknown; listModels() warms it lazily on chat paths.
+   */
+  modelPricing(modelId: string | undefined | null): { input: number; output: number } | null {
+    try {
+      const id = String(modelId || '')
+      const list = this.modelCache.get()
+      if (!list) return null
+      const m = list.find((x) => x.id === id || x.id === id.replace(/\.[a-z]+$/i, ''))
+      return m?.pricing ?? null
+    } catch {
+      return null
+    }
   }
 
   /** Lightweight: key present / base URL reachable — do NOT burn tokens */

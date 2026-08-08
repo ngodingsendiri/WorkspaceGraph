@@ -279,6 +279,7 @@ export interface API {
       contextTokens?: number
       contextSavedTokens?: number
       reasoning?: string
+      costUsd?: number
       verifications?: { path: string; title: string; supported: boolean; score: number }[]
     }) => void,
     activeFilePath?: string,
@@ -310,6 +311,7 @@ export interface API {
       contextTokens?: number
       contextSavedTokens?: number
       reasoning?: string
+      costUsd?: number
       verifications?: { path: string; title: string; supported: boolean; score: number }[]
     }) => void,
     activeFilePath?: string,
@@ -353,6 +355,7 @@ export interface API {
       stageCount?: number
       durationMs?: number
       tokensUsed?: number
+      costUsd?: number
       status?: string
       error?: string
       tool?: string

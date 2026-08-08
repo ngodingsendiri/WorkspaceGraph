@@ -22,7 +22,9 @@ import {
 import {
   contextBudgetForModel,
   sessionTokenStats,
+  sessionCostStats,
   formatK,
+  formatUsd,
   budgetFraction
 } from './chatTokenBudget'
 import { summarizeToolRuns, toolSummaryLabel } from './chatToolSummary'
@@ -404,6 +406,8 @@ export const ChatPanel: React.FC = () => {
   const modelGroups = buildModelGroups(providers)
   // P2-1: per-session token budget — chunk data already carries both numbers
   const { outputTokens, contextTokens, savedTokens } = sessionTokenStats(messages)
+  // R2-1: per-session estimated cost (sum of per-reply costUsd from the stream)
+  const sessionCost = sessionCostStats(messages)
   const budgetModel = isAutoModel(selectedModelId)
     ? resolveAutoModel(activeProvider)
     : selectedModelId
@@ -900,6 +904,8 @@ export const ChatPanel: React.FC = () => {
   const statusLine = isGenerating
     ? lastToolStatus || lastKernelStatus || 'kernel: running…'
     : toolSummaryText || lastKernelStatus || lastToolStatus || 'kernel: idle'
+  // R2-1: append the session cost to the status line when the session billed
+  const costSuffix = sessionCost > 0 ? ` · ${formatUsd(sessionCost)}` : ''
 
   return (
     <aside
@@ -976,9 +982,10 @@ export const ChatPanel: React.FC = () => {
           </div>
         </div>
 
-        <div className="chat-kernel-status" title={statusLine}>
+        <div className="chat-kernel-status" title={statusLine + costSuffix}>
           <span className="chat-kernel-prompt">wg</span>
           <span className="truncate">{statusLine}</span>
+          {costSuffix && <span className="chat-cost-chip">{costSuffix}</span>}
         </div>
 
         <div className="chat-toolbar-selects">
@@ -1397,7 +1404,7 @@ export const ChatPanel: React.FC = () => {
       {outputTokens > 0 && (
         <div
           className={`chat-budget${budgetPct >= 0.95 ? ' is-critical' : budgetPct >= 0.6 ? ' is-warn' : ''}`}
-          title={`Model ${budgetModel || 'auto'} · budget ~${formatK(budget)} token · output sesi ${formatK(outputTokens)}${contextTokens ? ` · ctx terakhir ~${formatK(contextTokens)}` : ''}${savedTokens ? ` · hemat ~${formatK(savedTokens)}` : ''}`}
+          title={`Model ${budgetModel || 'auto'} · budget ~${formatK(budget)} token · output sesi ${formatK(outputTokens)}${contextTokens ? ` · ctx terakhir ~${formatK(contextTokens)}` : ''}${savedTokens ? ` · hemat ~${formatK(savedTokens)}` : ''}${sessionCost > 0 ? ` · ~${formatUsd(sessionCost)}` : ''}`}
           role="progressbar"
           aria-valuenow={Math.round(budgetPct * 100)}
           aria-valuemin={0}
@@ -1411,6 +1418,7 @@ export const ChatPanel: React.FC = () => {
             out {formatK(outputTokens)}/~{formatK(budget)}
             {contextTokens ? ` · ctx ~${formatK(contextTokens)}` : ''}
             {savedTokens ? ` · −${formatK(savedTokens)}` : ''}
+            {sessionCost > 0 ? ` · ~${formatUsd(sessionCost)}` : ''}
           </span>
         </div>
       )}

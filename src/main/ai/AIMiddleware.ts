@@ -40,6 +40,7 @@ import {
 import { mcpManager } from '../mcp/McpClientManager'
 import { renderPrompt } from './PromptRegistry'
 import { logAIEvent, logAIOutcome, type AIEventStatus } from './AIEventLog'
+import { estimateStreamCostUsd } from './cost'
 import { shouldFailoverError, failoverCandidatesFor } from './providerFailover'
 import { verifyCitations, type CitationVerification } from './CitationVerifier'
 import { compactMessages, contextBudgetForModel, RESERVED_OUTPUT_TOKENS } from './contextCompaction'
@@ -73,6 +74,8 @@ export type StreamEvent = AIStreamChunk & {
   contextSavedTokens?: number
   /** Post-generation grounding check: which citations the answer actually draws on. */
   verifications?: CitationVerification[]
+  /** R2-1: estimated USD cost of the whole stream (context input + output). */
+  costUsd?: number
 }
 
 const MAX_TOOL_ROUNDS = 4
@@ -236,13 +239,20 @@ function toolResultDetail(r: ToolResult, max = 400): string | undefined {
  */
 function withStreamAudit(onChunk: (c: StreamEvent) => void): {
   wrapped: (c: StreamEvent) => void
-  finalMeta: { status: AIEventStatus; tokensUsed?: number; error?: string; rounds?: number }
+  finalMeta: {
+    status: AIEventStatus
+    tokensUsed?: number
+    error?: string
+    rounds?: number
+    costUsd?: number
+  }
 } {
   const finalMeta: {
     status: AIEventStatus
     tokensUsed?: number
     error?: string
     rounds?: number
+    costUsd?: number
   } = { status: 'ok' }
   const wrapped: (c: StreamEvent) => void = (c) => {
     if (c.done) {
@@ -256,6 +266,8 @@ function withStreamAudit(onChunk: (c: StreamEvent) => void): {
       finalMeta.tokensUsed = c.tokensUsed
       finalMeta.error = c.error
       if (typeof c.round === 'number') finalMeta.rounds = c.round + 1
+      // R2-1: last terminal chunk carries the whole-stream cost estimate
+      finalMeta.costUsd = c.costUsd
     }
     onChunk(c)
   }
@@ -765,6 +777,7 @@ export class AIMiddleware {
         tokensUsed: finalMeta.tokensUsed,
         error: finalMeta.error,
         rounds: finalMeta.rounds,
+        costUsd: finalMeta.costUsd,
         durationMs: Date.now() - startedAt
       })
       if (requestId) this.abortControllers.delete(requestId)
@@ -853,6 +866,7 @@ export class AIMiddleware {
         status: finalMeta.status,
         tokensUsed: finalMeta.tokensUsed,
         error: finalMeta.error,
+        costUsd: finalMeta.costUsd,
         durationMs: Date.now() - startedAt
       })
       if (requestId) this.abortControllers.delete(requestId)
@@ -1397,6 +1411,18 @@ export class AIMiddleware {
     // double counting when a provider starts reporting real usage.
     let reportedTokens = false
     let estimatedTokens = 0
+    // R2-1: whole-stream USD estimate (context input + output tokens), attached
+    // to the terminal done chunk so the budget bar/status line can show cost.
+    // Always use estimatedTokens (chars/4 accumulator across ALL tool rounds)
+    // as the output side — never zero it on provider-reporting, which would
+    // under-count output cost when the provider sends a real usage chunk.
+    const streamCostUsd = (): number =>
+      estimateStreamCostUsd(
+        request.model || provider.getDefaultModel(),
+        contextTokens ?? 0,
+        estimatedTokens,
+        provider.modelPricing(request.model || provider.getDefaultModel())
+      )
 
     // P1-4: count provider calls actually made so the terminal chunk can report
     // how much context billing was avoided (context estimate × rounds − 1).
@@ -1556,7 +1582,8 @@ export class AIMiddleware {
           citations: lastCitations,
           proposals: allProposals,
           tokensUsed: reportedTokens ? undefined : estimatedTokens,
-          contextSavedTokens: savedContextTokens()
+          contextSavedTokens: savedContextTokens(),
+          costUsd: streamCostUsd()
         })
         return
       }
@@ -1569,7 +1596,8 @@ export class AIMiddleware {
           proposals: allProposals,
           verifications: getVerifications(),
           tokensUsed: reportedTokens ? undefined : estimatedTokens,
-          contextSavedTokens: savedContextTokens()
+          contextSavedTokens: savedContextTokens(),
+          costUsd: streamCostUsd()
         })
         return
       }
@@ -1587,7 +1615,8 @@ export class AIMiddleware {
           proposals: allProposals,
           verifications: getVerifications(),
           tokensUsed: reportedTokens ? undefined : estimatedTokens,
-          contextSavedTokens: savedContextTokens()
+          contextSavedTokens: savedContextTokens(),
+          costUsd: streamCostUsd()
         })
         return
       }
@@ -1632,7 +1661,8 @@ export class AIMiddleware {
           proposals: allProposals,
           verifications: getVerifications(),
           tokensUsed: reportedTokens ? undefined : estimatedTokens,
-          contextSavedTokens: savedContextTokens()
+          contextSavedTokens: savedContextTokens(),
+          costUsd: streamCostUsd()
         })
         return
       }
@@ -1877,7 +1907,8 @@ export class AIMiddleware {
           proposals: allProposals,
           verifications: getVerifications(),
           tokensUsed: reportedTokens ? undefined : estimatedTokens,
-          contextSavedTokens: savedContextTokens()
+          contextSavedTokens: savedContextTokens(),
+          costUsd: streamCostUsd()
         })
         return
       }
@@ -1940,7 +1971,8 @@ export class AIMiddleware {
       proposals: allProposals,
       verifications: getVerifications(),
       tokensUsed: reportedTokens ? undefined : estimatedTokens,
-      contextSavedTokens: savedContextTokens()
+      contextSavedTokens: savedContextTokens(),
+      costUsd: streamCostUsd()
     })
   }
 }

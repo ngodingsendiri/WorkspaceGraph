@@ -2,7 +2,9 @@ import { describe, it, expect } from 'vitest'
 import {
   contextBudgetForModel,
   sessionTokenStats,
+  sessionCostStats,
   formatK,
+  formatUsd,
   budgetFraction
 } from './chatTokenBudget'
 
@@ -42,6 +44,22 @@ describe('sessionTokenStats (P2-1)', () => {
     expect(s.outputTokens).toBe(0)
     expect(s.contextTokens).toBe(0)
     expect(s.replies).toBe(0)
+  })
+})
+
+describe('sessionCostStats + formatUsd (R2-1)', () => {
+  it('sums per-reply costUsd across the session', () => {
+    expect(sessionCostStats([{ costUsd: 0.001 }, { costUsd: 0.002 }, {}])).toBeCloseTo(0.003, 6)
+    expect(sessionCostStats([])).toBe(0)
+    expect(sessionCostStats([{}, {}])).toBe(0)
+  })
+
+  it('formats fractions, cents and dollars compactly', () => {
+    expect(formatUsd(0)).toBe('$0')
+    expect(formatUsd(0.001234)).toBe('$0.0012')
+    expect(formatUsd(1.23)).toBe('$1.23')
+    expect(formatUsd(12.5)).toBe('$12.5')
+    expect(formatUsd(-3)).toBe('$0')
   })
 })
 

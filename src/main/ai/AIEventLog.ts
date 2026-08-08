@@ -39,6 +39,8 @@ export interface AIEvent {
   stageCount?: number
   durationMs?: number
   tokensUsed?: number
+  /** R2-1: estimated USD cost of the operation (context input + output). */
+  costUsd?: number
   status?: AIEventStatus
   error?: string
   tool?: string
@@ -211,7 +213,8 @@ export function logAIOutcome(
     channel: ev.channel,
     stageCount: ev.stageCount,
     rounds: ev.rounds,
-    tokensUsed: ev.tokensUsed
+    tokensUsed: ev.tokensUsed,
+    costUsd: ev.costUsd
   })
 }
 
@@ -296,6 +299,8 @@ export interface AIEventStatsWindow {
   operations: number
   /** Sum of tokensUsed across those operations (provider-reported or estimate) */
   tokensUsed: number
+  /** R2-1: sum of estimated USD cost across those operations */
+  costUsd: number
   /** status === 'error' operations */
   errors: number
   cancelled: number
@@ -325,6 +330,7 @@ export function getAIEventStatsWindow(
 
   let operations = 0
   let tokensUsed = 0
+  let costUsd = 0
   let errors = 0
   let cancelled = 0
   let timedOut = 0
@@ -342,6 +348,7 @@ export function getAIEventStatsWindow(
     const day = e.ts.slice(0, 10)
     operations++
     if (typeof e.tokensUsed === 'number') tokensUsed += e.tokensUsed
+    if (typeof e.costUsd === 'number') costUsd += e.costUsd
     if (e.status === 'error') errors++
     if (e.status === 'cancelled') cancelled++
     if (e.status === 'timeout') timedOut++
@@ -361,6 +368,7 @@ export function getAIEventStatsWindow(
     days,
     operations,
     tokensUsed,
+    costUsd,
     errors,
     cancelled,
     timedOut,

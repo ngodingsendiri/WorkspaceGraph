@@ -192,12 +192,22 @@ export async function fetchOpenRouterModels(apiKey: string): Promise<ModelInfo[]
         Object.values(pricing).every(
           (v) => v === undefined || v === null || v === '' || Number(v) === 0
         )
+      // R2-1: exact per-token pricing for cost.ts — parse the string numbers.
+      // Only attach when both sides parse to finite non-negative numbers.
+      const pIn = Number(pricing.prompt)
+      const pOut = Number(pricing.completion)
+      const runtimePricing =
+        Number.isFinite(pIn) && Number.isFinite(pOut) && pIn >= 0 && pOut >= 0
+          ? { input: pIn, output: pOut }
+          : undefined
       return {
         id: m.id || '',
         name: m.name || m.id || '',
         contextWindow: m.context_length,
         // omitted when no pricing — unknown ≠ free, never a false claim
-        ...(hasPricing ? { free } : {})
+        ...(hasPricing ? { free } : {}),
+        // omitted when malformed — cost.ts falls back to the static table
+        ...(runtimePricing ? { pricing: runtimePricing } : {})
       }
     })
     .filter((m) => m.id)

@@ -2264,6 +2264,12 @@ html:not([data-theme]) {
   font-weight: 700;
   flex-shrink: 0;
 }
+/* R2-1: session cost chip in the kernel status line */
+.chat-cost-chip {
+  color: var(--color-success);
+  flex-shrink: 0;
+  font-weight: 600;
+}
 .chat-kernel-prompt::after {
   content: '›';
   margin-left: 2px;

@@ -24,6 +24,7 @@ type AiStreamChunkPayload = {
   error?: string
   tokensUsed?: number
   contextTokens?: number
+  costUsd?: number
 }
 
 const streamWatchdogs = new Map<
