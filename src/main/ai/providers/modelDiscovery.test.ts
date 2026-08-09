@@ -2,6 +2,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import {
   fetchOpenAICompatModels,
   chatBaseCandidates,
+  geminiOpenAICompatBase,
   isVersionedBase,
   shouldAdoptChatBase,
   discoverOpenAICompat,
@@ -69,6 +70,43 @@ describe('modelDiscovery (runtime model auto-detection)', () => {
       'https://host/api/v1'
     ])
     expect(chatBaseCandidates('')).toEqual([])
+  })
+
+  it('geminiOpenAICompatBase maps native Gemini base → OpenAI-compat endpoint', () => {
+    // Bare domain and /v1beta both resolve to /v1beta/openai
+    expect(geminiOpenAICompatBase('https://generativelanguage.googleapis.com')).toBe(
+      'https://generativelanguage.googleapis.com/v1beta/openai'
+    )
+    expect(geminiOpenAICompatBase('https://generativelanguage.googleapis.com/v1beta')).toBe(
+      'https://generativelanguage.googleapis.com/v1beta/openai'
+    )
+    // Already on the compat endpoint → unchanged (null = no mapping needed)
+    expect(
+      geminiOpenAICompatBase('https://generativelanguage.googleapis.com/v1beta/openai')
+    ).toBeNull()
+    // Non-Gemini hosts are never touched
+    expect(geminiOpenAICompatBase('https://api.openai.com/v1')).toBeNull()
+    expect(geminiOpenAICompatBase('https://generativelanguage.example.com')).toBeNull()
+    expect(geminiOpenAICompatBase('')).toBeNull()
+  })
+
+  it('chatBaseCandidates tries the Gemini OpenAI-compat base first for native URLs', () => {
+    // Native /v1beta → compat endpoint first, native base as fallback
+    expect(chatBaseCandidates('https://generativelanguage.googleapis.com/v1beta')).toEqual([
+      'https://generativelanguage.googleapis.com/v1beta/openai',
+      'https://generativelanguage.googleapis.com/v1beta'
+    ])
+    // Bare Gemini domain → compat endpoint first, domain as fallback
+    expect(chatBaseCandidates('https://generativelanguage.googleapis.com')).toEqual([
+      'https://generativelanguage.googleapis.com/v1beta/openai',
+      'https://generativelanguage.googleapis.com'
+    ])
+    // Already-compat base → left alone (regular bare-domain probing)
+    expect(chatBaseCandidates('https://generativelanguage.googleapis.com/v1beta/openai')).toEqual([
+      'https://generativelanguage.googleapis.com/v1beta/openai',
+      'https://generativelanguage.googleapis.com/v1beta/openai/v1',
+      'https://generativelanguage.googleapis.com/v1beta/openai/api/v1'
+    ])
   })
 
   it('isVersionedBase detects /vN and /api/vN suffixes only', () => {

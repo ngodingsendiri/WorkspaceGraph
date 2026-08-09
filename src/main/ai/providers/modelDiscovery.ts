@@ -67,6 +67,25 @@ export function isVersionedBase(userBase: string): boolean {
   return /(\/v\d+$|\/api\/v\d+$)/.test(clean)
 }
 
+/** Host of Google's native Gemini API (its OpenAI-compat endpoint is /v1beta/openai). */
+const GEMINI_NATIVE_HOST = 'generativelanguage.googleapis.com'
+
+/**
+ * Map a pasted NATIVE Gemini base URL (…/v1beta or bare domain) to the
+ * OpenAI-compat endpoint (…/v1beta/openai), so Gemini behaves like every other
+ * OpenAI-compatible provider — no `/openai` suffix knowledge required.
+ * Returns null for non-Gemini hosts, or a base already on the compat endpoint.
+ */
+export function geminiOpenAICompatBase(userBase: string): string | null {
+  const clean = userBase.trim().replace(/\/+$/, '')
+  const origin = clean.match(/^https?:\/\/[^/]+/)?.[0]
+  if (!origin) return null
+  const host = origin.replace(/^https?:\/\//, '')
+  if (!host.endsWith(GEMINI_NATIVE_HOST)) return null
+  if (/\/v1beta\/openai$/.test(clean)) return null
+  return `${origin}/v1beta/openai`
+}
+
 /**
  * Single adoption rule shared by listModels + the lazy chat-path guard: return
  * the chat base to adopt (or null when the current base already works). Both
@@ -95,6 +114,10 @@ export function chatBaseCandidates(userBase: string): string[] {
   clean = clean.split(/[?#]/)[0].replace(/\/+$/, '')
   // User pasted the full models URL — strip to the chat base
   clean = clean.replace(/\/models\/?$/, '')
+  // Gemini native base (…/v1beta or bare domain) → its OpenAI-compat endpoint
+  // is tried FIRST so pasting the native URL just works, like any provider
+  const geminiCompat = geminiOpenAICompatBase(clean)
+  if (geminiCompat) return [geminiCompat, clean]
   if (isVersionedBase(clean)) return [clean]
   return [clean, `${clean}/v1`, `${clean}/api/v1`]
 }
