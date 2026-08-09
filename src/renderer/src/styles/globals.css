@@ -3256,11 +3256,48 @@ html:not([data-theme]) {
   opacity: 0.38;
   cursor: not-allowed;
 }
-.chat-cancel-btn {
+/* Stop-generasi button — takes the send slot while streaming. First click
+   arms a visual confirmation (pulse + countdown); a second click inside the
+   window cancels, so a stray click never kills the tool round in progress. */
+.chat-stop-btn {
   flex-shrink: 0;
   display: inline-flex;
   align-items: center;
-  gap: 4px;
+  gap: 5px;
+  height: 30px;
+  padding: 0 11px;
+  border: none;
+  border-radius: 15px;
+  background: var(--color-error);
+  color: #fff;
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    background var(--duration-fast),
+    transform var(--duration-fast),
+    box-shadow var(--duration-fast);
+}
+.chat-stop-btn:hover {
+  background: color-mix(in srgb, var(--color-error) 85%, #000);
+  transform: translateY(-1px);
+}
+.chat-stop-btn.is-armed {
+  animation: chat-stop-pulse 1s ease-in-out infinite;
+}
+.chat-stop-label {
+  white-space: nowrap;
+}
+@keyframes chat-stop-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-error) 55%, transparent);
+  }
+  50% {
+    box-shadow: 0 0 0 6px color-mix(in srgb, var(--color-error) 0%, transparent);
+  }
 }
 
 /* P2-3: composer slash-command popover */
@@ -5326,6 +5363,9 @@ body.wg-resizing * {
     animation: none;
   }
   .graph-theme-fade {
+    animation: none;
+  }
+  .chat-stop-btn.is-armed {
     animation: none;
   }
 }

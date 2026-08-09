@@ -3,6 +3,7 @@ import { applyTheme, getCachedThemePref, type ThemePreference } from '../../util
 import { buildFailoverCandidates, moveInOrder } from './failoverOrder'
 import { confirmDialog } from '../ui/Dialog'
 import { confirmProviderDelete } from './providerDeleteConfirm'
+import { buildRowSaveFlash } from './providerSaveKeyConfirm'
 
 type Section =
   'ai' | 'appearance' | 'index' | 'security' | 'automation' | 'plugins' | 'mcp' | 'logs' | 'about'
@@ -330,7 +331,10 @@ export const SettingsView: React.FC = () => {
       }
       // Keys are never shipped to the renderer (security) — fields stay masked,
       // "saved" state comes from security:status. Only a newly typed key is sent.
-      setApiKeys({})
+      // NOTE: apiKeys is intentionally NOT cleared here — it holds keys typed but
+      // not yet saved, and loadAll runs after Test/Refresh/Set-default/section
+      // switches. Wiping it would silently drop the key before Save (root cause
+      // of "key never persists"). A saved key is cleared in the Save handlers.
       if (settings?.theme) {
         setTheme(settings.theme)
         applyTheme(settings.theme)
@@ -434,7 +438,15 @@ export const SettingsView: React.FC = () => {
     flash(`Testing ${providerId}…`)
     try {
       // BUGFIX: testProvider(id) already targets that provider — don't mutate global active
-      const res = await window.api.testAIProvider(providerId)
+      // A key typed but not yet saved must be what Test verifies (in-memory only,
+      // never persisted by the test) — otherwise Test pings the stale config and
+      // the natural paste→Test→Save flow looks broken.
+      const def = defs.find((d) => d.id === providerId)
+      const typedKey = apiKeys[providerId]?.trim()
+      const res = await window.api.testAIProvider(
+        providerId,
+        typedKey ? { apiKey: typedKey, baseUrl: def?.baseUrl || undefined } : undefined
+      )
       if (res.ok) {
         flash(`OK ${providerId}: ${res.sample || 'connected'}`)
       } else {
@@ -536,21 +548,30 @@ export const SettingsView: React.FC = () => {
       const saved = await persistDefs(defs.map((d) => (d.id === def.id ? def : d)))
       if (!saved.ok) return
       if (key) {
-        await window.api.configureAIProvider(
+        const cfg = (await window.api.configureAIProvider(
           def.id,
           key,
           def.baseUrl || undefined,
           def.defaultModel || undefined
-        )
+        )) as { ok?: boolean; error?: string } | undefined
+        // Never flash "disimpan" on a failed persist — surface the real error
+        if (!cfg || !cfg.ok) {
+          flash(buildRowSaveFlash(def, true, cfg))
+          return
+        }
+        // Key persisted — drop the typed copy so the field is blank again
+        setApiKeys((prev) => {
+          const next = { ...prev }
+          delete next[def.id]
+          return next
+        })
       }
       await loadAll()
       // A newly typed key gets verified automatically — live ping + fresh
       // model list — so the card shows the new status without "klik Test".
+      flash(buildRowSaveFlash(def, Boolean(key), key ? { ok: true } : undefined))
       if (key) {
-        flash(`Provider ${def.name || def.id} disimpan — tes otomatis…`)
         await autoVerifyProvider(def.id)
-      } else {
-        flash(`Provider ${def.name || def.id} disimpan`)
       }
     } catch (e) {
       flash(e instanceof Error ? e.message : 'Save failed')
@@ -639,7 +660,22 @@ export const SettingsView: React.FC = () => {
     // Key after the def exists — configure() needs the provider in the map
     const hadKey = Boolean(providerDraft.apiKey.trim())
     if (hadKey) {
-      await window.api.configureAIProvider(finalId, providerDraft.apiKey.trim(), baseUrl)
+      const cfg = (await window.api.configureAIProvider(
+        finalId,
+        providerDraft.apiKey.trim(),
+        baseUrl
+      )) as { ok?: boolean; error?: string } | undefined
+      if (!cfg || !cfg.ok) {
+        // Def already persisted — close the form and tell the user the key
+        // needs a retry via the row's Save (honest, not "ditambahkan ✓").
+        setShowAddProvider(false)
+        setProviderDraft({ name: '', baseUrl: '', apiKey: '' })
+        flash(
+          `Provider ${name} ditambahkan, tapi key GAGAL disimpan: ${cfg?.error || 'unknown'} — buka kartu & Save untuk ulang`
+        )
+        await loadAll()
+        return
+      }
     }
     setShowAddProvider(false)
     setProviderDraft({ name: '', baseUrl: '', apiKey: '' })

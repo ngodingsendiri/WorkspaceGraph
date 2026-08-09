@@ -43,6 +43,12 @@ import { Icon } from '../ui/Icons'
 import { confirmDialog, promptDialog } from '../ui/Dialog'
 import { usePanelWidth } from '../../hooks/usePanelWidth'
 import { renderStreamingMarkdown } from './streamingMarkdown'
+import {
+  CANCEL_ARM_MS,
+  nextCancelClick,
+  cancelRemainingMs,
+  cancelConfirmLabel
+} from './chatCancelConfirm'
 
 type ChatListItem = { id: string; title?: string; updatedAt?: string }
 
@@ -315,6 +321,14 @@ export const ChatPanel: React.FC = () => {
   const [slashActive, setSlashActive] = useState(0)
   const [slashPos, setSlashPos] = useState<{ left: number; bottom: number } | null>(null)
 
+  /** R2-2+: two-step stop — first click arms a visual confirmation, second
+   * click inside the window cancels; a stray/expired click never kills the
+   * tool round in progress. */
+  const [stopArmed, setStopArmed] = useState(false)
+  const stopArmedAtRef = useRef<number | null>(null)
+  const [stopRemaining, setStopRemaining] = useState(0)
+  const stopTickRef = useRef<ReturnType<typeof setInterval> | null>(null)
+
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const messagesBoxRef = useRef<HTMLDivElement>(null)
   const inputRef = useRef<HTMLTextAreaElement>(null)
@@ -578,6 +592,50 @@ export const ChatPanel: React.FC = () => {
     closeSlash()
     requestAnimationFrame(() => inputRef.current?.focus())
   }
+
+  /** R2-2+: clear the armed confirmation + its countdown ticker. */
+  const disarmStop = useCallback((): void => {
+    if (stopTickRef.current) {
+      clearInterval(stopTickRef.current)
+      stopTickRef.current = null
+    }
+    stopArmedAtRef.current = null
+    setStopArmed(false)
+    setStopRemaining(0)
+  }, [])
+
+  /** R2-2+: stop button click — never cancels on the first click. */
+  const handleStopClick = (): void => {
+    const res = nextCancelClick(stopArmed, stopArmedAtRef.current, Date.now())
+    if (res === 'cancel') {
+      disarmStop()
+      void cancelStream()
+      return
+    }
+    // arm or rearm: restart the countdown from now
+    stopArmedAtRef.current = Date.now()
+    setStopRemaining(CANCEL_ARM_MS)
+    setStopArmed(true)
+    if (stopTickRef.current) clearInterval(stopTickRef.current)
+    stopTickRef.current = setInterval(() => {
+      const rem = cancelRemainingMs(stopArmedAtRef.current, Date.now())
+      setStopRemaining(rem)
+      if (rem <= 0) disarmStop()
+    }, 150)
+  }
+
+  // Auto-disarm when the stream ends on its own (done / error / resumed).
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- sync the stop-gate state to the stream lifecycle; disarmStop is idempotent
+    if (!isGenerating) disarmStop()
+  }, [isGenerating, disarmStop])
+
+  // Clear the ticker on unmount so it can never fire after teardown.
+  useEffect(() => {
+    return () => {
+      if (stopTickRef.current) clearInterval(stopTickRef.current)
+    }
+  }, [])
 
   // P2-3: anchor the slash popover above the textarea (bottom of the panel)
   const updateSlashPos = (): void => {
@@ -1494,11 +1552,23 @@ export const ChatPanel: React.FC = () => {
             {isGenerating ? (
               <button
                 type="button"
-                className="btn btn-surface btn-sm chat-cancel-btn"
-                onClick={() => void cancelStream()}
+                className={`chat-stop-btn${stopArmed ? ' is-armed' : ''}`}
+                onClick={handleStopClick}
+                title={
+                  stopArmed
+                    ? 'Klik lagi untuk berhenti — progres & checkpoint tersimpan, jawaban bisa dilanjutkan'
+                    : 'Hentikan generasi (klik 2× untuk konfirmasi, agar tool round tidak hilang)'
+                }
+                aria-label={
+                  stopArmed
+                    ? `Konfirmasi berhenti — klik lagi (${Math.max(1, Math.ceil(stopRemaining / 1000))}s)`
+                    : 'Hentikan generasi'
+                }
               >
-                <Icon name="cancel" size={12} />
-                Cancel
+                <Icon name="stop" size={13} />
+                <span className="chat-stop-label" aria-live="polite">
+                  {stopArmed ? cancelConfirmLabel(stopRemaining) : 'Stop'}
+                </span>
               </button>
             ) : (
               <button

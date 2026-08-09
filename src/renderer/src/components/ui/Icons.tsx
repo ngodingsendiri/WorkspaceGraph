@@ -43,6 +43,7 @@ export type IconName =
   | 'curator'
   | 'planner'
   | 'cancel'
+  | 'stop'
   | 'note'
   | 'tag'
   | 'warning'
@@ -108,6 +109,7 @@ export const MATERIAL_ICON: Record<IconName, string> = {
   curator: 'account_tree',
   planner: 'checklist',
   cancel: 'cancel',
+  stop: 'stop',
   note: 'sticky_note_2',
   tag: 'sell',
   warning: 'warning',

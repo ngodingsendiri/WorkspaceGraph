@@ -214,7 +214,10 @@ export interface API {
   ) => Promise<{ ok: boolean; error?: string }>
   /** Per-provider progress push while ai:getProviders is in flight (Settings spinner). */
   onAIProviderStatus: (callback: (status: unknown) => void) => () => void
-  testAIProvider: (providerId?: string) => Promise<{ ok: boolean; error?: string; sample?: string }>
+  testAIProvider: (
+    providerId?: string,
+    overrides?: { apiKey?: string; baseUrl?: string }
+  ) => Promise<{ ok: boolean; error?: string; sample?: string }>
   refreshProviderModels: (providerId: string) => Promise<{
     ok: boolean
     models: {

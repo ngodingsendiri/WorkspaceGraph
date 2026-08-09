@@ -254,6 +254,15 @@ describe('Renderer wiring', () => {
     // Refresh models run without extra clicks (card shows the status directly)
     expect(has(set, 'autoVerifyProvider', 'handleTest', 'handleRefreshModels')).toBe(true)
     expect(set.includes('tes otomatis')).toBe(true)
+    // Root cause of "Save never persists the key": loadAll (Test/Refresh/section
+    // switch) must NOT wipe a typed-but-unsaved key. No setApiKeys({}) reset may
+    // exist; a key is cleared only AFTER a successful configure persist, and a
+    // failed persist flashes the real error instead of a fake "disimpan".
+    expect(set.includes('setApiKeys({})')).toBe(false)
+    expect(has(set, 'delete next[def.id]', 'buildRowSaveFlash')).toBe(true)
+    expect(set.includes('intentionally NOT cleared')).toBe(true)
+    // Test verifies a TYPED key (in-memory override), not the stale saved one
+    expect(has(set, 'window.api.testAIProvider(', 'typedKey ? { apiKey: typedKey')).toBe(true)
     expect(has(set, 'await autoVerifyProvider(def.id)', 'await autoVerifyProvider(finalId)')).toBe(
       true
     )
@@ -262,6 +271,18 @@ describe('Renderer wiring', () => {
     )
     expect(hasAny(set, 'Rebuild', 'rebuildSearchIndex')).toBe(true)
     expect(has(set, 'saveSettings', 'getSettings')).toBe(true)
+    // ai:testProvider accepts an in-memory key/baseUrl override so the card's
+    // Test button can verify a key that has not been saved yet.
+    const aiHandler = read('src/main/ipc/handlers/ai.ts')
+    expect(has(aiHandler, 'overrides?.apiKey', 'configureProvider(providerId, patch)')).toBe(true)
+    // Row-Save flash gate: a FAILED configure can never produce the fake
+    // "…tes otomatis…" success flash — the error branch is structurally
+    // separate from the ok branch in the pure builder the view wires in.
+    const flash = read('src/renderer/src/components/settings/providerSaveKeyConfirm.ts')
+    expect(has(flash, 'buildRowSaveFlash', 'Gagal menyimpan key', 'tes otomatis')).toBe(true)
+    expect(
+      has(set, 'buildRowSaveFlash(def, true, cfg)', 'buildRowSaveFlash(def, Boolean(key)')
+    ).toBe(true)
   })
   it('Welcome screen create vault + no bad demo path', () => {
     const wel = read('src/renderer/src/components/welcome/WelcomeScreen.tsx')
@@ -299,8 +320,20 @@ describe('Renderer wiring', () => {
   it('ChatPanel proposals + citations + cancel + kernel UI', () => {
     const panel = read('src/renderer/src/components/chat/ChatPanel.tsx')
     expect(has(panel, 'Write proposals', 'openCitation')).toBe(true)
-    expect(hasAny(panel, 'cancelStream', 'Cancel')).toBe(true)
+    expect(has(panel, 'cancelStream', 'chat-stop-btn')).toBe(true)
     expect(has(panel, 'Pelajari workspace', 'chat-panel--kernel', 'learnWorkspace')).toBe(true)
+  })
+  it('R2-2+ two-step stop gate wired: arm, then click again to cancel', () => {
+    const gate = read('src/renderer/src/components/chat/chatCancelConfirm.ts')
+    expect(has(gate, 'CANCEL_ARM_MS', 'nextCancelClick', 'cancelConfirmLabel')).toBe(true)
+    expect(gate.includes('Stop?')).toBe(true)
+    const panel = read('src/renderer/src/components/chat/ChatPanel.tsx')
+    expect(has(panel, 'handleStopClick', 'nextCancelClick', 'is-armed')).toBe(true)
+    expect(panel.includes('chat-stop-label')).toBe(true)
+    // A stray click must never cancel on the first click — the armed state is
+    // a visible confirmation, and expired arms re-arm instead of cancelling.
+    expect(panel.includes('klik 2×')).toBe(true)
+    expect(read('src/renderer/src/styles/globals.css').includes('chat-stop-btn')).toBe(true)
   })
   it('P1-1 per-tool streaming trail wired end-to-end', () => {
     const mid = read('src/main/ai/AIMiddleware.ts')

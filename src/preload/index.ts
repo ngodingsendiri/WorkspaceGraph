@@ -151,7 +151,8 @@ const api = {
     ipcRenderer.on('ai:providerStatus', handler)
     return () => ipcRenderer.removeListener('ai:providerStatus', handler)
   },
-  testAIProvider: (providerId?: string) => ipcRenderer.invoke('ai:testProvider', providerId),
+  testAIProvider: (providerId?: string, overrides?: { apiKey?: string; baseUrl?: string }) =>
+    ipcRenderer.invoke('ai:testProvider', providerId, overrides),
   refreshProviderModels: (providerId: string) =>
     ipcRenderer.invoke('ai:refreshProviderModels', providerId),
   importGrokCli: () => ipcRenderer.invoke('ai:importGrokCli'),

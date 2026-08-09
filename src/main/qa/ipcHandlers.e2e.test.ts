@@ -70,6 +70,7 @@ import { registerWorkspaceHandlers } from '../ipc/handlers/workspace'
 import { registerAIHandlers } from '../ipc/handlers/ai'
 import { workspaceEngine } from '../engine/WorkspaceEngine'
 import { indexDatabase } from '../engine/IndexDatabase'
+import { aiMiddleware } from '../ai/AIMiddleware'
 import { readProviderDefs } from '../ai/providerRegistry'
 
 /** Invoke a registered handler exactly like ipcRenderer.invoke would. */
@@ -408,6 +409,95 @@ describe('IPC handlers end-to-end', () => {
       error?: string
     }
     expect(bad.ok).toBe(false)
+  })
+
+  it('auto-verify chain after Save: key survives test+refresh+getProviders (paste→Save→"tes otomatis")', async () => {
+    // Clean slate → builtin seeds, no keys, gemini active
+    const reset = workspaceEngine.getSettings() as Record<string, any>
+    reset.aiProviders = undefined
+    delete reset.ai
+    reset.activeProvider = 'gemini'
+    workspaceEngine.saveSettings(reset)
+
+    // Fail-fast network: every provider ping rejects instantly — deterministic,
+    // no real API call in the test. The assertions here are about PERSISTENCE,
+    // not connectivity.
+    const net = vi.fn(async () => {
+      throw new Error('network-mocked')
+    })
+    vi.stubGlobal('fetch', net)
+    try {
+      // 1. Renderer row-Save step 1: persist defs (handleSaveProviderRow → persistDefs)
+      const defsBefore = (await invoke('ai:getProviderConfigs')) as { defs: any[] }
+      const saved = (await invoke('ai:saveProviderConfigs', defsBefore.defs)) as { ok: boolean }
+      expect(saved.ok).toBe(true)
+
+      // 2. Row-Save step 2: configure the NEW key (configureAIProvider) — the
+      //    order matters: defs first, then the key, exactly like the renderer.
+      const gemini = defsBefore.defs.find((d) => d.id === 'gemini')
+      const cfg = (await invoke('ai:configure', {
+        providerId: 'gemini',
+        apiKey: 'sk-auto-verify-123',
+        baseUrl: gemini?.baseUrl || 'https://generativelanguage.googleapis.com/v1beta',
+        defaultModel: gemini?.defaultModel || 'gemini-2.5-flash'
+      })) as { ok: boolean; error?: string }
+      expect(cfg.ok).toBe(true)
+      const afterSave = workspaceEngine.getSettings() as Record<string, any>
+      expect(afterSave.ai?.gemini?.apiKey).toBe('sk-auto-verify-123')
+
+      // 3. Auto-verify chain — what runs after the "…tes otomatis…" flash:
+      //    Test (no typed-key override post-Save), Refresh models, then the
+      //    card's status fetch (getProviders → listModels on every provider).
+      //    None of these may drop the persisted key.
+      const testRes = (await invoke('ai:testProvider', 'gemini')) as {
+        ok: boolean
+        error?: string
+      }
+      expect(typeof testRes.ok).toBe('boolean')
+      const refresh = (await invoke('ai:refreshProviderModels', 'gemini')) as {
+        ok: boolean
+        error?: string
+      }
+      expect(typeof refresh.ok).toBe('boolean')
+      const status = (await invoke('ai:getProviders')) as unknown[]
+      expect(Array.isArray(status)).toBe(true)
+
+      // 4. The card can truthfully show "Key saved" — key still on disk after
+      //    the whole verify chain, and a LATER def re-save keeps it too (a
+      //    row edit without re-typing the key must not wipe it).
+      const afterVerify = workspaceEngine.getSettings() as Record<string, any>
+      expect(afterVerify.ai?.gemini?.apiKey).toBe('sk-auto-verify-123')
+      const resave = (await invoke('ai:saveProviderConfigs', defsBefore.defs)) as { ok: boolean }
+      expect(resave.ok).toBe(true)
+      const afterResave = workspaceEngine.getSettings() as Record<string, any>
+      expect(afterResave.ai?.gemini?.apiKey).toBe('sk-auto-verify-123')
+      // The def list itself never carries the key (defs are key-free by design)
+      expect((afterResave.aiProviders as any[]).find((d) => d.id === 'gemini')?.apiKey).toBe(
+        undefined
+      )
+
+      // 5. SAVE WITH A FAILING CONFIGURE (mock main throwing): ai:configure
+      //    must return {ok:false} with the error AND persist nothing — so the
+      //    renderer's cfg.ok check catches it and flashes the real error, never
+      //    the fake "…disimpan — tes otomatis…" success.
+      vi.spyOn(aiMiddleware, 'configureProvider').mockImplementationOnce(() => {
+        throw new Error('boom: safeStorage unavailable')
+      })
+      const failCfg = (await invoke('ai:configure', {
+        providerId: 'gemini',
+        apiKey: 'sk-fail-test'
+      })) as { ok: boolean; error?: string }
+      expect(failCfg.ok).toBe(false)
+      expect(failCfg.error).toContain('boom')
+      // Nothing persisted by the failed save — and the previously saved key is
+      // untouched (a failed configure must never corrupt or wipe it)
+      const afterFail = workspaceEngine.getSettings() as Record<string, any>
+      expect(afterFail.ai?.gemini?.apiKey).toBe('sk-auto-verify-123')
+      expect(afterFail.ai?.gemini?.apiKey).not.toBe('sk-fail-test')
+    } finally {
+      vi.unstubAllGlobals()
+      vi.restoreAllMocks()
+    }
   })
 
   it('malformed IPC payloads degrade to clean errors — never wipe or crash state', async () => {

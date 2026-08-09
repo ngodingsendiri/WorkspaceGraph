@@ -172,9 +172,27 @@ export function registerAIHandlers(): void {
     })
   })
 
-  ipcMain.handle('ai:testProvider', async (_, providerId?: string) => {
-    return aiMiddleware.testProvider(providerId)
-  })
+  ipcMain.handle(
+    'ai:testProvider',
+    async (_, providerId?: string, overrides?: { apiKey?: string; baseUrl?: string }) => {
+      try {
+        // A key typed in the card but not yet saved: patch the in-memory config
+        // (never persisted by a Test) so the ping verifies the NEW key instead of
+        // the stale saved one — the natural paste → Test → Save flow stays honest.
+        if (overrides?.apiKey && String(overrides.apiKey).trim() && providerId) {
+          const patch: { apiKey?: string; baseUrl?: string } = {
+            apiKey: String(overrides.apiKey).trim()
+          }
+          if (overrides.baseUrl) patch.baseUrl = overrides.baseUrl
+          aiMiddleware.configureProvider(providerId, patch)
+        }
+        return await aiMiddleware.testProvider(providerId)
+      } catch (err) {
+        console.error('[ai:testProvider] failed:', err)
+        return { ok: false, error: err instanceof Error ? err.message : String(err) }
+      }
+    }
+  )
 
   /** P-model-discovery: force-refresh one provider's runtime model list. */
   ipcMain.handle('ai:refreshProviderModels', async (_, providerId: string) => {
