@@ -67,6 +67,9 @@ describe('IPC surface (whole src/main/ipc dir)', () => {
   })
   it('AI configure persists settings', () => {
     expect(ipc.includes('workspaceEngine.saveSettings')).toBe(true)
+    // Robustness: a malformed (non-array) defs payload is rejected, so a buggy
+    // renderer can never wipe the saved provider list by accident
+    expect(ipc.includes("'defs must be an array'")).toBe(true)
   })
   it('workspace lifecycle clears graph+search+domain', () => {
     expect(has(ipc, 'graphEngine.clear', 'searchEngine.clear', 'domainEngine.clear')).toBe(true)
@@ -961,6 +964,21 @@ describe('Engine source contracts', () => {
       )
     ).toBe(true)
     expect(has(we, 'Knowledge', 'Daily', 'People')).toBe(true)
+    // Robustness: corrupt settings/config degrade instead of crashing — the
+    // unreadable file is backed up (never silently destroyed) and a leftover
+    // .tmp (atomic-write) is used as recovery source
+    expect(has(we, 'readSettingsFile', "settingsPath + '.tmp'", '.corrupt-${Date.now()}')).toBe(
+      true
+    )
+    // recent.json gets the same self-healing: atomic writes + .tmp recovery
+    expect(has(we, 'loadRecentWorkspaces', 'atomicWriteJson', 'quarantineCorruptFile')).toBe(true)
+    // Chat + proposal stores share the pattern: corrupt files are quarantined
+    // (preserved aside, removed from the list) and writes are atomic
+    const conv = read('src/main/ai/ConversationStore.ts')
+    expect(has(conv, 'isStoredConversation', 'quarantineCorruptFile', 'atomicWriteJson')).toBe(true)
+    expect(has(read('src/main/ai/AgentTools.ts'), 'quarantineCorruptFile', 'atomicWriteJson')).toBe(
+      true
+    )
   })
   it('GraphEngine outLinks cache + ghost + prune', () => {
     const eng = read('src/main/engine/GraphEngine.ts')
@@ -1500,7 +1518,10 @@ describe('AI system contracts', () => {
         'checkpointIdFor',
         'saveCheckpoint',
         'loadCheckpoint',
-        'deleteCheckpoint'
+        'deleteCheckpoint',
+        // Shape guard — foreign/corrupt JSON in checkpoints/ is skipped, never
+        // surfaced as a bogus "Lanjutkan" resume point
+        'isStreamCheckpoint'
       )
     ).toBe(true)
     // Middleware resumes the tool loop from the saved round, not round 0

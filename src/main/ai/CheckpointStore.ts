@@ -58,6 +58,22 @@ function safeCheckpointId(id: string): string | null {
   return clean
 }
 
+/** Shape guard — a foreign/corrupt JSON file in checkpoints/ must never be
+ * treated as a resume point (missing coordinates would render a broken
+ * "Lanjutkan" button). */
+function isStreamCheckpoint(c: unknown): c is StreamCheckpoint {
+  if (!c || typeof c !== 'object') return false
+  const x = c as Record<string, unknown>
+  return (
+    typeof x.id === 'string' &&
+    typeof x.conversationId === 'string' &&
+    typeof x.messageId === 'string' &&
+    typeof x.messageIndex === 'number' &&
+    typeof x.round === 'number' &&
+    (x.reason === 'cancelled' || x.reason === 'timeout' || x.reason === 'error')
+  )
+}
+
 export function saveCheckpoint(cp: StreamCheckpoint): {
   ok: boolean
   path?: string
@@ -90,7 +106,8 @@ export function loadCheckpoint(id: string): StreamCheckpoint | null {
   if (rel.startsWith('..') || path.isAbsolute(rel)) return null
   if (!fs.existsSync(filePath)) return null
   try {
-    return JSON.parse(fs.readFileSync(filePath, 'utf-8')) as StreamCheckpoint
+    const parsed = JSON.parse(fs.readFileSync(filePath, 'utf-8')) as unknown
+    return isStreamCheckpoint(parsed) ? parsed : null
   } catch {
     return null
   }
@@ -105,12 +122,12 @@ export function listCheckpoints(): StreamCheckpoint[] {
       .filter((f) => f.endsWith('.json'))
       .map((f) => {
         try {
-          return JSON.parse(fs.readFileSync(path.join(dir, f), 'utf-8')) as StreamCheckpoint
+          return JSON.parse(fs.readFileSync(path.join(dir, f), 'utf-8')) as unknown
         } catch {
           return null
         }
       })
-      .filter((c): c is StreamCheckpoint => c !== null)
+      .filter((c): c is StreamCheckpoint => isStreamCheckpoint(c))
   } catch {
     return []
   }

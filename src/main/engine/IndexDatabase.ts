@@ -78,6 +78,29 @@ export class IndexDatabase {
       return true
     } catch (err) {
       console.error('[IndexDatabase] open failed, Fuse-only mode:', err)
+      // A corrupt/leftover db file must not block future opens forever — move
+      // it aside so the next open can create a fresh index. Search degrades to
+      // Fuse for this session, never a crash.
+      try {
+        if (this.dbPath && fs.existsSync(this.dbPath)) {
+          // rename can fail while the sqlite handle still holds the file
+          // (Windows EPERM) — fall back to copy + unlink; if even that fails,
+          // leave the file and let the next open retry the recovery.
+          const aside = `${this.dbPath}.corrupt-${Date.now()}`
+          try {
+            fs.renameSync(this.dbPath, aside)
+          } catch {
+            fs.copyFileSync(this.dbPath, aside)
+            try {
+              fs.rmSync(this.dbPath, { force: true })
+            } catch {
+              /* keep the corrupt file; next open retries */
+            }
+          }
+        }
+      } catch {
+        /* best-effort */
+      }
       this.db = null
       this.available = false
       return false

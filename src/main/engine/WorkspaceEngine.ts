@@ -5,6 +5,7 @@ import { app } from 'electron'
 // Static import so electron-vite bundles SecretsStore into out/main/index.js
 // (dynamic require('../security/SecretsStore') broke at runtime: module not found)
 import { protectSettingsSecrets, revealSettingsSecrets } from '../security/SecretsStore'
+import { atomicWriteJson, quarantineCorruptFile } from '../utils/quarantine'
 // Static import so electron-vite bundles TemplateEngine into out/main/index.js
 // (dynamic require('./TemplateEngine') failed under vitest: Cannot find module)
 import { templateEngine } from './TemplateEngine'
@@ -199,18 +200,37 @@ export class WorkspaceEngine {
 
   private loadRecentWorkspaces(): void {
     const filePath = path.join(this.configDir, 'recent.json')
+    // Self-healing: prefer the main file, fall back to the .tmp atomic-write
+    // leftover (last full write), and if neither parses, quarantine the corrupt
+    // file so it is preserved but never re-read (or re-backed-up) on every boot.
+    for (const candidate of [filePath, filePath + '.tmp']) {
+      try {
+        if (fs.existsSync(candidate)) {
+          const parsed = JSON.parse(fs.readFileSync(candidate, 'utf-8'))
+          // parseable-but-wrong entries (numbers etc.) are dropped — a corrupt
+          // recent.json must never make getRecentWorkspaces throw in existsSync
+          this.recentWorkspaces = Array.isArray(parsed)
+            ? parsed.filter((p): p is string => typeof p === 'string')
+            : []
+          return
+        }
+      } catch {
+        /* try the next candidate */
+      }
+    }
+    this.recentWorkspaces = []
     try {
       if (fs.existsSync(filePath)) {
-        this.recentWorkspaces = JSON.parse(fs.readFileSync(filePath, 'utf-8'))
+        quarantineCorruptFile(filePath)
+        console.warn('[WorkspaceEngine] recent.json unreadable — quarantined')
       }
     } catch {
-      this.recentWorkspaces = []
+      /* best-effort */
     }
   }
 
   private saveRecentWorkspaces(): void {
-    const filePath = path.join(this.configDir, 'recent.json')
-    fs.writeFileSync(filePath, JSON.stringify(this.recentWorkspaces, null, 2))
+    atomicWriteJson(path.join(this.configDir, 'recent.json'), this.recentWorkspaces)
   }
 
   openWorkspace(workspacePath: string): WorkspaceState {
@@ -231,12 +251,24 @@ export class WorkspaceEngine {
       fs.mkdirSync(configFolder, { recursive: true })
     }
 
-    let config: WorkspaceConfig
+    let config: WorkspaceConfig | null = null
     if (fs.existsSync(configPath)) {
-      config = JSON.parse(fs.readFileSync(configPath, 'utf-8'))
-      config.lastOpenedAt = new Date().toISOString()
-      config.path = resolvedPath
-    } else {
+      try {
+        config = JSON.parse(fs.readFileSync(configPath, 'utf-8')) as WorkspaceConfig
+        config.lastOpenedAt = new Date().toISOString()
+        config.path = resolvedPath
+      } catch {
+        // Corrupt vault config must never prevent opening the vault — preserve
+        // the file (best-effort backup) and recreate fresh from defaults.
+        try {
+          fs.copyFileSync(configPath, `${configPath}.corrupt-${Date.now()}`)
+          console.warn('[WorkspaceEngine] workspace.json unreadable — backed up and recreated')
+        } catch {
+          /* best-effort */
+        }
+      }
+    }
+    if (!config) {
       config = {
         name: path.basename(resolvedPath),
         path: resolvedPath,
@@ -601,36 +633,54 @@ export class WorkspaceEngine {
     return path.join(this.configDir, 'settings.json')
   }
 
-  getSettings(): Record<string, unknown> {
+  /**
+   * Read settings defensively (robustness): prefer the main file, fall back to
+   * the .tmp sibling (an atomic-write leftover = the last full write), and if
+   * neither parses, back the corrupt file aside so a later save never silently
+   * destroys it. Returns null when nothing parseable exists.
+   */
+  private readSettingsFile(): Record<string, unknown> | null {
     const settingsPath = this.getSettingsPath()
+    for (const candidate of [settingsPath, settingsPath + '.tmp']) {
+      try {
+        if (fs.existsSync(candidate)) {
+          return JSON.parse(fs.readFileSync(candidate, 'utf-8')) as Record<string, unknown>
+        }
+      } catch {
+        /* try the next candidate */
+      }
+    }
+    // Neither parsed — quarantine the corrupt file (preserved, never silently
+    // destroyed, and never re-backed-up on every read)
     try {
       if (fs.existsSync(settingsPath)) {
-        const raw = JSON.parse(fs.readFileSync(settingsPath, 'utf-8')) as Record<string, unknown>
-        const migrated = this.migrateSettings(raw)
-        // If version changed, save migrated version
-        if ((raw.version as number) !== SETTINGS_VERSION) {
-          this.saveSettings(migrated)
-        }
-        return revealSettingsSecrets(migrated)
+        const aside = quarantineCorruptFile(settingsPath)
+        if (aside)
+          console.warn('[WorkspaceEngine] settings.json unreadable — quarantined to', aside)
       }
-    } catch (err) {
-      console.error('[WorkspaceEngine] getSettings failed:', err)
+    } catch {
+      /* best-effort */
+    }
+    return null
+  }
+
+  getSettings(): Record<string, unknown> {
+    const raw = this.readSettingsFile()
+    if (raw) {
+      const migrated = this.migrateSettings(raw)
+      // If version changed, save migrated version
+      if ((raw.version as number) !== SETTINGS_VERSION) {
+        this.saveSettings(migrated)
+      }
+      return revealSettingsSecrets(migrated)
     }
     return { version: SETTINGS_VERSION }
   }
 
   /** Raw settings as stored on disk (encrypted secrets) */
   getSettingsRaw(): Record<string, unknown> {
-    const settingsPath = this.getSettingsPath()
-    try {
-      if (fs.existsSync(settingsPath)) {
-        const raw = JSON.parse(fs.readFileSync(settingsPath, 'utf-8')) as Record<string, unknown>
-        return this.migrateSettings(raw)
-      }
-    } catch {
-      /* ignore */
-    }
-    return {}
+    const raw = this.readSettingsFile()
+    return raw ? this.migrateSettings(raw) : {}
   }
 
   saveSettings(settings: Record<string, unknown>): string {

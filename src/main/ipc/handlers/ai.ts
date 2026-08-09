@@ -95,6 +95,12 @@ export function registerAIHandlers(): void {
    */
   ipcMain.handle('ai:saveProviderConfigs', async (_, defs: unknown) => {
     try {
+      // Robustness: only an ARRAY may replace the list. A malformed payload
+      // (undefined/null/object) must never wipe every saved provider+key —
+      // legit delete-all sends an explicit empty array [].
+      if (!Array.isArray(defs)) {
+        return { ok: false, error: 'defs must be an array' }
+      }
       // Pure settings-mutation (unit-tested in providerRegistry.test.ts):
       // key-cleanup for removed providers, baseUrl/defaultModel sync (P1),
       // active-provider fallback. The handler then persists + rebuilds.

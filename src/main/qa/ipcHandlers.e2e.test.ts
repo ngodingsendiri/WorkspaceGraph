@@ -410,6 +410,33 @@ describe('IPC handlers end-to-end', () => {
     expect(bad.ok).toBe(false)
   })
 
+  it('malformed IPC payloads degrade to clean errors — never wipe or crash state', async () => {
+    // A non-array defs payload must NOT wipe the saved provider list (a legit
+    // delete-all is an explicit []); unknown/null/object forms are rejected
+    const before = (await invoke('ai:getProviderConfigs')) as { defs: any[] }
+    const bad = (await invoke('ai:saveProviderConfigs', 'not-an-array')) as {
+      ok: boolean
+      error?: string
+    }
+    expect(bad.ok).toBe(false)
+    expect(bad.error).toContain('array')
+    const after = (await invoke('ai:getProviderConfigs')) as { defs: any[] }
+    expect(after.defs.map((d: { id: string }) => d.id)).toEqual(
+      before.defs.map((d: { id: string }) => d.id)
+    )
+    expect(((await invoke('ai:saveProviderConfigs', null)) as { ok: boolean }).ok).toBe(false)
+    expect(((await invoke('ai:saveProviderConfigs', {})) as { ok: boolean }).ok).toBe(false)
+    // Oversized file content → clean rejection (no partial write)
+    await expect(
+      invoke('file:create', {
+        filePath: path.join(vault, 'Big.md'),
+        content: 'x'.repeat(5_000_001)
+      })
+    ).rejects.toThrow()
+    // Non-string workspace path → clean rejection before any state mutation
+    await expect(invoke('workspace:open', 42)).rejects.toThrow()
+  })
+
   it('path sandbox rejects reads/writes outside the vault', async () => {
     const outside = path.join(tmpdir(), `wg-e2e-outside-${Date.now()}.md`)
     fs.writeFileSync(outside, 'x')

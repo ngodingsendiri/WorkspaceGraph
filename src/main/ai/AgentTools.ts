@@ -11,6 +11,7 @@ import { searchEngine } from '../engine/SearchEngine'
 import { markdownEngine } from '../engine/MarkdownEngine'
 import { templateEngine } from '../engine/TemplateEngine'
 import { isPathInVault } from '../security/PathSandbox'
+import { atomicWriteJson, quarantineCorruptFile } from '../utils/quarantine'
 import { renderPrompt } from './PromptRegistry'
 import { mcpManager } from '../mcp/McpClientManager'
 import type { AgentRole } from './ContextEngine'
@@ -213,15 +214,16 @@ function ensureProposalsLoaded(): void {
   try {
     for (const f of fs.readdirSync(proposalDir(root))) {
       if (!f.endsWith('.json')) continue
+      const filePath = path.join(proposalDir(root), f)
       try {
-        const p = JSON.parse(
-          fs.readFileSync(path.join(proposalDir(root), f), 'utf-8')
-        ) as WriteProposal
+        const p = JSON.parse(fs.readFileSync(filePath, 'utf-8')) as WriteProposal
         if (p && typeof p.id === 'string' && p.status === 'pending') {
           proposals.set(p.id, p)
         }
       } catch {
-        /* skip corrupt proposal file */
+        // Corrupt proposal file: quarantine it (preserved, removed from the
+        // dock) so the store self-heals instead of skipping it silently.
+        quarantineCorruptFile(filePath)
       }
     }
   } catch {
@@ -233,7 +235,8 @@ function persistProposal(p: WriteProposal): void {
   const root = workspaceEngine.getState().rootPath
   if (!root) return
   try {
-    fs.writeFileSync(proposalFile(root, p.id), JSON.stringify(p, null, 2), 'utf-8')
+    // Atomic write — a crash mid-save never leaves a half-written proposal
+    atomicWriteJson(proposalFile(root, p.id), p)
   } catch (err) {
     console.error('[proposals] persist failed:', err)
   }

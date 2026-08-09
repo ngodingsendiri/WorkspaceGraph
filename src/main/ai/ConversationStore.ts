@@ -5,6 +5,7 @@
 import fs from 'fs'
 import path from 'path'
 import { workspaceEngine } from '../engine/WorkspaceEngine'
+import { atomicWriteJson, quarantineCorruptFile } from '../utils/quarantine'
 
 export interface StoredMessage {
   id: string
@@ -44,6 +45,15 @@ function safeConversationId(id: string): string | null {
   return clean
 }
 
+/** Minimal shape guard — a foreign/corrupt JSON in chats/ must never surface
+ * as a conversation (an empty/undefined messages array would render a broken
+ * chat). True when the file has the base conversation contract. */
+function isStoredConversation(c: unknown): c is StoredConversation {
+  if (!c || typeof c !== 'object') return false
+  const x = c as Record<string, unknown>
+  return typeof x.id === 'string' && Array.isArray(x.messages)
+}
+
 export function saveConversation(conv: StoredConversation): {
   ok: boolean
   path?: string
@@ -59,7 +69,8 @@ export function saveConversation(conv: StoredConversation): {
     if (rel.startsWith('..') || path.isAbsolute(rel)) {
       return { ok: false, error: 'Invalid conversation path' }
     }
-    fs.writeFileSync(filePath, JSON.stringify({ ...conv, id: clean }, null, 2), 'utf-8')
+    // Atomic write — a crash mid-save never leaves a half-written chat
+    atomicWriteJson(filePath, { ...conv, id: clean })
     return { ok: true, path: filePath }
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) }
@@ -80,8 +91,13 @@ export function listConversations(limit = 30): StoredConversation[] {
     return files
       .map((f) => {
         try {
-          return JSON.parse(fs.readFileSync(f, 'utf-8')) as StoredConversation
+          const parsed = JSON.parse(fs.readFileSync(f, 'utf-8')) as unknown
+          return isStoredConversation(parsed) ? parsed : null
         } catch {
+          // Corrupt chat file: quarantine it (preserved for inspection, removed
+          // from the list) so the store self-heals instead of silently dropping
+          // the data with no trace.
+          quarantineCorruptFile(f)
           return null
         }
       })
@@ -102,8 +118,10 @@ export function loadConversation(id: string): StoredConversation | null {
   if (rel.startsWith('..') || path.isAbsolute(rel)) return null
   if (!fs.existsSync(filePath)) return null
   try {
-    return JSON.parse(fs.readFileSync(filePath, 'utf-8')) as StoredConversation
+    const parsed = JSON.parse(fs.readFileSync(filePath, 'utf-8')) as unknown
+    return isStoredConversation(parsed) ? parsed : null
   } catch {
+    quarantineCorruptFile(filePath)
     return null
   }
 }
