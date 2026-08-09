@@ -2064,3 +2064,50 @@ describe('AIMiddleware.getAllProvidersStatus progress push (per-provider spinner
     }
   })
 })
+
+describe('AIMiddleware provider-error surfacing (Settings card: bad key → clear message + Ganti key)', () => {
+  it('persists a failed Test as testError + modelsError until the credentials work', async () => {
+    const provider = new ScriptedProvider()
+    const mid = new AIMiddleware({ providers: { fake: provider } })
+    // A bad key fails BOTH the live test and the /models fetch with 401
+    vi.spyOn(provider, 'sendMessage').mockRejectedValueOnce(new Error('401 Invalid API key'))
+    vi.spyOn(provider, 'listModels').mockRejectedValue(new Error('401 Invalid API key'))
+
+    const fail = await mid.testProvider('fake')
+    expect(fail.ok).toBe(false)
+    expect(fail.error).toContain('401')
+
+    // The card status carries BOTH failures — never a silent "0 models"
+    const after = await mid.getAllProvidersStatus()
+    const s = after.find((x) => x.id === 'fake')
+    expect(s?.testError).toContain('401')
+    expect(s?.modelsError).toContain('401')
+
+    // A later successful Test clears the remembered testError (modelsError
+    // stays until the /models fetch itself succeeds — the key may be valid
+    // but the base URL still wrong)
+    const ok = await mid.testProvider('fake')
+    expect(ok.ok).toBe(true)
+    const healed = await mid.getAllProvidersStatus()
+    expect(healed.find((x) => x.id === 'fake')?.testError).toBeUndefined()
+    expect(healed.find((x) => x.id === 'fake')?.modelsError).toContain('401')
+  })
+
+  it('clears modelsError once the model list fetches successfully (self-healing card)', async () => {
+    const provider = new ScriptedProvider()
+    const mid = new AIMiddleware({ providers: { fake: provider } })
+    const spy = vi
+      .spyOn(provider, 'listModels')
+      .mockRejectedValueOnce(new Error('Connection refused'))
+
+    const first = await mid.getAllProvidersStatus()
+    expect(first.find((x) => x.id === 'fake')?.modelsError).toContain('Connection refused')
+
+    // Network recovers → next status run drops the error and returns models
+    spy.mockResolvedValue([{ id: 'm1', name: 'Model 1' }])
+    const second = await mid.getAllProvidersStatus()
+    const s = second.find((x) => x.id === 'fake')
+    expect(s?.modelsError).toBeUndefined()
+    expect(s?.models.map((m) => m.id)).toEqual(['m1'])
+  })
+})

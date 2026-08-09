@@ -242,6 +242,18 @@ describe('Renderer wiring', () => {
     const set = read('src/renderer/src/components/settings/SettingsView.tsx')
     expect(has(set, 'testAIProvider', 'handleTest')).toBe(true)
     expect(has(set, 'configureAIProvider', 'importGrokCli')).toBe(true)
+    // Bad-key failures surface ON the card (not just a toast): red status line +
+    // a "Ganti key" action that focuses the key input; typing clears it locally
+    expect(has(set, 'AUTH_ERROR_RE', 'providerIssue', 'Ganti key')).toBe(true)
+    expect(set.includes('keyInputRefs')).toBe(true)
+    expect(set.includes('API key tidak valid')).toBe(true)
+    // A newly typed key is verified automatically on Save/add — live Test +
+    // Refresh models run without extra clicks (card shows the status directly)
+    expect(has(set, 'autoVerifyProvider', 'handleTest', 'handleRefreshModels')).toBe(true)
+    expect(set.includes('tes otomatis')).toBe(true)
+    expect(has(set, 'await autoVerifyProvider(def.id)', 'await autoVerifyProvider(finalId)')).toBe(
+      true
+    )
     expect(hasAny(set, "'security'", "'automation'", 'Security', 'Automation', 'Plugins')).toBe(
       true
     )
@@ -1018,6 +1030,9 @@ describe('AI system contracts', () => {
       )
     ).toBe(true)
     expect(has(mid, 'importGrokFromCli', 'getAllProvidersStatus')).toBe(true)
+    // Bad-key/empty-list failures surface on the Settings card: Test failures
+    // are remembered (lastTestError) and /models failures become modelsError
+    expect(has(mid, 'lastTestError', 'testError: this.lastTestError.get', 'modelsError')).toBe(true)
     // P2: kernel comes from the Prompt Registry (per-vault override), not a literal
     expect(has(mid, "renderPrompt('kernel')", 'unknown tools skipped')).toBe(true)
   })

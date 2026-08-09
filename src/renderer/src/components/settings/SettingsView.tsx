@@ -88,6 +88,14 @@ interface ProviderDef {
 const BUILTIN_SEED_IDS = ['grok', 'gemini', 'openai', 'claude', 'ollama', 'openrouter']
 
 /**
+ * Messages that mean "the credentials are wrong" — the card reacts by showing
+ * a "Ganti key" button (not just the raw error). Covers provider error text
+ * from OpenAI SDKs, Gemini, Grok CLI and gateway 401/403 responses.
+ */
+const AUTH_ERROR_RE =
+  /\b(401|403|unauthorized|authentication|invalid\s+(?:api[\s-]?key|key)|api[\s-]?key\s+(?:invalid|incorrect|tidak\s+valid|salah)|tidak\s+valid)/i
+
+/**
  * Compact "diperbarui …" stamp for a provider card. Same-day → just the time;
  * older → short date + time so a stale list is obvious at a glance.
  */
@@ -124,9 +132,15 @@ export const SettingsView: React.FC = () => {
       models: { id: string; name: string; free?: boolean; ownedBy?: string }[]
       /** Unix ms when main last fetched this provider's model list (cache set time). */
       modelsFetchedAt?: number
+      /** Last Test failure (invalid key etc.) — shown on the card until fixed. */
+      testError?: string
+      /** Why the model list is empty (bad key / wrong base URL / offline). */
+      modelsError?: string
     }[]
   >([])
   const [apiKeys, setApiKeys] = useState<Record<string, string>>({})
+  /** Ref per provider-card key input so "Ganti key" can focus it directly. */
+  const keyInputRefs = useRef<Record<string, HTMLInputElement | null>>({})
   const [savedStatus, setSavedStatus] = useState('')
   const [theme, setTheme] = useState<ThemePreference>(() => getCachedThemePref())
   const [section, setSection] = useState<Section>('ai')
@@ -369,6 +383,8 @@ export const SettingsView: React.FC = () => {
         error?: string
         models?: { id: string; name: string; free?: boolean; ownedBy?: string }[]
         modelsFetchedAt?: number
+        testError?: string
+        modelsError?: string
       }
       if (!s?.id) return
       setProviders((prev) => {
@@ -383,7 +399,9 @@ export const SettingsView: React.FC = () => {
                     configured: s.configured,
                     error: s.error,
                     models: s.models || [],
-                    modelsFetchedAt: s.modelsFetchedAt
+                    modelsFetchedAt: s.modelsFetchedAt,
+                    testError: s.testError,
+                    modelsError: s.modelsError
                   }
                 : p
             )
@@ -396,7 +414,9 @@ export const SettingsView: React.FC = () => {
                 configured: s.configured,
                 error: s.error,
                 models: s.models || [],
-                modelsFetchedAt: s.modelsFetchedAt
+                modelsFetchedAt: s.modelsFetchedAt,
+                testError: s.testError,
+                modelsError: s.modelsError
               }
             ]
       })
@@ -462,6 +482,17 @@ export const SettingsView: React.FC = () => {
     }
   }
 
+  /**
+   * After a NEW key is saved (row Save or add), verify it live without extra
+   * clicks: ping the API (Test) then force a fresh model list (Refresh). Each
+   * handler ends in loadAll, so the card's status — OK, or an invalid-key
+   * error with "Ganti key" — lands on the card automatically.
+   */
+  const autoVerifyProvider = async (providerId: string): Promise<void> => {
+    await handleTest(providerId)
+    await handleRefreshModels(providerId)
+  }
+
   /** Persist the provider def list (add/edit/delete) — main rebuilds the live
    * provider map and drops keys of removed providers. Returns the server's
    * cleaned defs so callers can use the FINAL ids (a name that slugs onto an
@@ -512,8 +543,15 @@ export const SettingsView: React.FC = () => {
           def.defaultModel || undefined
         )
       }
-      flash(`Provider ${def.name || def.id} disimpan`)
       await loadAll()
+      // A newly typed key gets verified automatically — live ping + fresh
+      // model list — so the card shows the new status without "klik Test".
+      if (key) {
+        flash(`Provider ${def.name || def.id} disimpan — tes otomatis…`)
+        await autoVerifyProvider(def.id)
+      } else {
+        flash(`Provider ${def.name || def.id} disimpan`)
+      }
     } catch (e) {
       flash(e instanceof Error ? e.message : 'Save failed')
     } finally {
@@ -599,13 +637,22 @@ export const SettingsView: React.FC = () => {
     )
     const finalId = added?.id ?? newDef.id
     // Key after the def exists — configure() needs the provider in the map
-    if (providerDraft.apiKey.trim()) {
+    const hadKey = Boolean(providerDraft.apiKey.trim())
+    if (hadKey) {
       await window.api.configureAIProvider(finalId, providerDraft.apiKey.trim(), baseUrl)
     }
     setShowAddProvider(false)
     setProviderDraft({ name: '', baseUrl: '', apiKey: '' })
-    flash(`Provider ${name} ditambahkan — model dimuat otomatis. Klik Test.`)
+    flash(
+      hadKey
+        ? `Provider ${name} ditambahkan — tes otomatis…`
+        : `Provider ${name} ditambahkan — model dimuat otomatis. Klik Test.`
+    )
     await loadAll()
+    // New key → verify immediately (live ping + fresh model list), no extra clicks
+    if (hadKey) {
+      await autoVerifyProvider(finalId)
+    }
   }
 
   /** R1-2: persist the ordered failover chain to settings. */
@@ -962,6 +1009,10 @@ export const SettingsView: React.FC = () => {
                   : p?.configured
                     ? `Key saved · ${models.length} models${freeHint}${vendor ? ` · vendor ${vendor}` : ''} · klik Test`
                     : p?.error || 'Not configured'
+              // A Test failure, or an empty model list the API refused to
+              // deliver — surface the reason on the card instead of "0 models"
+              const providerIssue = p?.testError || (p?.configured ? p?.modelsError : undefined)
+              const isAuthIssue = Boolean(providerIssue && AUTH_ERROR_RE.test(providerIssue))
               const keySaved = secStatus?.secrets?.[def.id] && secStatus.secrets[def.id] !== 'empty'
               return (
                 <div
@@ -987,6 +1038,12 @@ export const SettingsView: React.FC = () => {
                       {isLoading ? (
                         <span className="provider-loading">
                           <span className="spinner spinner-sm" /> Memuat model…
+                        </span>
+                      ) : providerIssue ? (
+                        <span className="provider-error-text" title={providerIssue} role="alert">
+                          {isAuthIssue
+                            ? 'API key tidak valid — periksa atau ganti key'
+                            : providerIssue}
                         </span>
                       ) : (
                         <>
@@ -1014,11 +1071,42 @@ export const SettingsView: React.FC = () => {
                       className="input"
                       placeholder={keySaved ? '••••••  (saved)' : 'API Key'}
                       value={apiKeys[def.id] || ''}
-                      onChange={(e) => setApiKeys({ ...apiKeys, [def.id]: e.target.value })}
+                      onChange={(e) => {
+                        setApiKeys({ ...apiKeys, [def.id]: e.target.value })
+                        // Typing a new key dismisses the error banner — it only
+                        // returns (from main) if the new key still fails.
+                        if (p?.testError || p?.modelsError) {
+                          setProviders((prev) =>
+                            prev.map((x) =>
+                              x.id === def.id
+                                ? { ...x, testError: undefined, modelsError: undefined }
+                                : x
+                            )
+                          )
+                        }
+                      }}
+                      ref={(el) => {
+                        keyInputRefs.current[def.id] = el
+                      }}
                       autoComplete="off"
                     />
                   </div>
                   <div className="provider-actions">
+                    {isAuthIssue && (
+                      <button
+                        className="btn btn-surface btn-sm"
+                        title="Fokus ke kolom API key untuk memasukkan key baru"
+                        onClick={() => {
+                          keyInputRefs.current[def.id]?.focus()
+                          keyInputRefs.current[def.id]?.scrollIntoView({
+                            block: 'nearest',
+                            behavior: 'smooth'
+                          })
+                        }}
+                      >
+                        Ganti key
+                      </button>
+                    )}
                     <button className="btn btn-surface btn-sm" onClick={() => handleTest(def.id)}>
                       Test
                     </button>
@@ -1277,10 +1365,10 @@ export const SettingsView: React.FC = () => {
               </div>
             </div>
             <p style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 12, lineHeight: 1.5 }}>
-              Alur: tambah provider (nama + base URL + key) → <b>Save</b> → <b>Test</b> (ping API) →
-              daftar model dimuat otomatis dari API. Di Chat pilih model, atau <b>Set default</b>.
-              Provider custom memakai protokol OpenAI-compatible (butuh API key; Ollama lokal gratis
-              tanpa key). Menghapus provider juga menghapus key tersimpannya.
+              Alur: tambah provider (nama + base URL + key) → <b>Save</b> → tes otomatis (ping API)
+              + daftar model dimuat ulang. Di Chat pilih model, atau <b>Set default</b>. Provider
+              custom memakai protokol OpenAI-compatible (butuh API key; Ollama lokal gratis tanpa
+              key). Menghapus provider juga menghapus key tersimpannya.
             </p>
           </div>
         )}

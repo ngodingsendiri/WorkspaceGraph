@@ -108,6 +108,13 @@ export interface ProviderStatus {
   defaultModel?: string
   /** Unix ms when the model list was last fetched from the API (cache set time). */
   modelsFetchedAt?: number
+  /** Last live-ping failure (Settings → Test), e.g. invalid API key. Cleared on the
+   * next successful test or model-list fetch, so the card stops showing it once
+   * the key works again. */
+  testError?: string
+  /** Why the model list is empty — the GET /models fetch failed (bad key, wrong
+   * base URL, offline). Lets the card explain "0 models" instead of hiding it. */
+  modelsError?: string
 }
 
 import { createModelCache } from './modelDiscovery'

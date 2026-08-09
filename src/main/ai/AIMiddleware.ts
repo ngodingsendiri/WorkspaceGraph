@@ -277,6 +277,9 @@ export class AIMiddleware {
   private abortFlags = new Map<string, boolean>()
   /** Real HTTP cancellation — abort() stops the provider stream, not just UI. */
   private abortControllers = new Map<string, AbortController>()
+  /** Last Test-failure message per provider (invalid key etc.) — surfaced on
+   * the Settings card until a successful test/model fetch clears it. */
+  private lastTestError = new Map<string, string>()
 
   constructor(overrides?: { providers?: Record<string, BaseProvider>; defs?: AIProviderDef[] }) {
     this.contextEngine = new ContextEngine(workspaceEngine, searchEngine)
@@ -422,8 +425,19 @@ export class AIMiddleware {
     const settled = await Promise.all(
       providers.map(async (provider) => {
         const configured = provider.isConfigured()
-        // Always expose model list so UI can select before/after key entry
-        const models = await provider.listModels().catch(() => [])
+        // Always expose model list so UI can select before/after key entry.
+        // A failure is surfaced as modelsError (never a silent "0 models") —
+        // bad key / wrong base URL / offline each explain themselves on the card.
+        let models: ModelInfo[] = []
+        let modelsError: string | undefined
+        try {
+          models = await provider.listModels()
+          // A successful fetch proves the credentials work — clear any stale
+          // Test failure so the card heals itself once the key is fixed.
+          this.lastTestError.delete(provider.id)
+        } catch (err) {
+          modelsError = err instanceof Error ? err.message : String(err)
+        }
         /**
          * BUGFIX: most healthCheck() === isConfigured() (key present), which made UI
          * claim "connected" without a live ping. Only Ollama implements a real probe.
@@ -450,7 +464,11 @@ export class AIMiddleware {
           error,
           // When this list was really fetched (cache set time) — the Settings
           // card stamps "diperbarui HH:MM" so stale lists are visible at a glance
-          modelsFetchedAt: provider.lastModelsFetchedAt() ?? undefined
+          modelsFetchedAt: provider.lastModelsFetchedAt() ?? undefined,
+          // Last Test failure (invalid key etc.) — the card shows it with a
+          // "Ganti key" affordance instead of only a disappearing toast
+          testError: this.lastTestError.get(provider.id),
+          modelsError
         }
         // Per-provider progress push — lets the Settings panel flip its spinner
         // for THIS provider the moment its /models resolves (parallel batch, so
@@ -516,6 +534,8 @@ export class AIMiddleware {
         maxTokens: 16,
         systemPrompt: 'You are a connectivity test. Reply only OK.'
       })
+      // Success proves the credentials — drop any earlier Test failure
+      this.lastTestError.delete(id)
       logAIOutcome('test', {
         startedAt,
         ok: true,
@@ -525,6 +545,9 @@ export class AIMiddleware {
       return { ok: true, sample: (res.content || '').slice(0, 80) }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err)
+      // Remember the failure so the card can show it (and a "Ganti key" button)
+      // until the next successful test or model fetch clears it.
+      this.lastTestError.set(id, msg)
       logAIOutcome('test', {
         startedAt,
         ok: false,
