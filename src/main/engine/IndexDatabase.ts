@@ -74,6 +74,7 @@ export class IndexDatabase {
       this.db.pragma('journal_mode = WAL')
       this.db.pragma('synchronous = NORMAL')
       this.migrate()
+      this.backfillNoteTags()
       this.available = true
       return true
     } catch (err) {
@@ -144,6 +145,15 @@ export class IndexDatabase {
       CREATE INDEX IF NOT EXISTS idx_notes_updated ON notes(updated_at);
       CREATE INDEX IF NOT EXISTS idx_notes_type ON notes(type);
 
+      -- WB-1: normalized tag index so #tag search is a column query, not a
+      -- capped scan of the 2000 most recent notes. Tags stored lowercased.
+      CREATE TABLE IF NOT EXISTS note_tags (
+        note_id TEXT NOT NULL,
+        tag TEXT NOT NULL,
+        PRIMARY KEY (note_id, tag)
+      );
+      CREATE INDEX IF NOT EXISTS idx_note_tags_tag ON note_tags(tag);
+
       CREATE VIRTUAL TABLE IF NOT EXISTS notes_fts USING fts5(
         title,
         content,
@@ -174,9 +184,31 @@ export class IndexDatabase {
     `)
   }
 
+  /**
+   * WB-1 migration: index.db created before note_tags existed has no tag rows
+   * until the next rebuild. Backfill once from the stored JSON so #tag search
+   * is correct immediately after upgrade (no full reindex needed).
+   */
+  private backfillNoteTags(): void {
+    if (!this.db) return
+    const count = this.db.prepare('SELECT COUNT(*) as c FROM note_tags').get() as
+      { c: number } | undefined
+    if ((count?.c || 0) > 0) return
+    const rows = this.db.prepare('SELECT id, tags FROM notes').all() as
+      { id: string; tags: string }[] | []
+    if (rows.length === 0) return
+    const ins = this.db.prepare('INSERT OR IGNORE INTO note_tags (note_id, tag) VALUES (?, ?)')
+    for (const r of rows) {
+      for (const t of this.parseTags(r.tags)) {
+        ins.run(r.id, t.toLowerCase())
+      }
+    }
+  }
+
   clear(): void {
     if (!this.db) return
     this.db.exec('DELETE FROM notes')
+    this.db.exec('DELETE FROM note_tags')
     // FTS content table rebuild via triggers on delete
     try {
       this.db.exec(`INSERT INTO notes_fts(notes_fts) VALUES('rebuild')`)
@@ -188,14 +220,23 @@ export class IndexDatabase {
   upsertNote(file: ParsedMarkdown): void {
     if (!this.db) return
     const tags = JSON.stringify(file.tags || [])
+    const tagList = Array.isArray(file.tags) ? file.tags.map(String) : []
     const headings = (file.headings || []).map((h) => h.text).join(' ')
     const fm = JSON.stringify(file.frontmatter || {})
     const updated =
       String(file.frontmatter.updated || file.frontmatter.date || '') || new Date().toISOString()
     const type = (file.frontmatter.type as string) || 'note'
 
-    // Avoid UNIQUE(path) clash if id changed for same path
+    // Avoid UNIQUE(path) clash if id changed for same path — drop stale tag
+    // rows for any note previously stored under this path, then re-insert.
+    this.db
+      .prepare('DELETE FROM note_tags WHERE note_id IN (SELECT id FROM notes WHERE path = ?)')
+      .run(file.filePath)
     this.db.prepare('DELETE FROM notes WHERE path = ? AND id != ?').run(file.filePath, file.id)
+    const insTag = this.db.prepare('INSERT OR IGNORE INTO note_tags (note_id, tag) VALUES (?, ?)')
+    for (const t of tagList) {
+      insTag.run(file.id, t.toLowerCase())
+    }
 
     this.db
       .prepare(
@@ -246,11 +287,15 @@ export class IndexDatabase {
   removeById(id: string): void {
     if (!this.db) return
     this.db.prepare('DELETE FROM notes WHERE id = ?').run(id)
+    this.db.prepare('DELETE FROM note_tags WHERE note_id = ?').run(id)
   }
 
   removeByPath(filePath: string): void {
     if (!this.db) return
     this.db.prepare('DELETE FROM notes WHERE path = ?').run(filePath)
+    this.db
+      .prepare('DELETE FROM note_tags WHERE note_id IN (SELECT id FROM notes WHERE path = ?)')
+      .run(filePath)
   }
 
   count(): number {
@@ -333,12 +378,24 @@ export class IndexDatabase {
     }
   }
 
+  /**
+   * WB-1: #tag search is a column query against note_tags — every matching
+   * note is found regardless of recency (the old path scanned only the 2000
+   * most recent rows and silently dropped older matches).
+   */
   searchByTag(tag: string, limit = 50): FtsHit[] {
     if (!this.db) return []
     const needle = tag.toLowerCase()
     const rows = this.db
-      .prepare(`SELECT * FROM notes ORDER BY updated_at DESC LIMIT 2000`)
-      .all() as Array<{
+      .prepare(
+        `SELECT n.id, n.path, n.relative_path, n.title, n.type, n.tags, n.updated_at
+         FROM note_tags nt
+         JOIN notes n ON n.id = nt.note_id
+         WHERE nt.tag = ?
+         ORDER BY n.updated_at DESC
+         LIMIT ?`
+      )
+      .all(needle, limit) as Array<{
       id: string
       path: string
       relative_path: string
@@ -346,23 +403,19 @@ export class IndexDatabase {
       type: string
       tags: string
       updated_at: string
-      content: string
     }>
 
-    return rows
-      .filter((r) => this.parseTags(r.tags).some((t) => t.toLowerCase() === needle))
-      .slice(0, limit)
-      .map((r) => ({
-        id: r.id,
-        path: r.path,
-        relativePath: r.relative_path,
-        title: r.title,
-        type: r.type,
-        tags: this.parseTags(r.tags),
-        updatedAt: r.updated_at,
-        rank: 0,
-        snippet: this.parseTags(r.tags).join(', ')
-      }))
+    return rows.map((r) => ({
+      id: r.id,
+      path: r.path,
+      relativePath: r.relative_path,
+      title: r.title,
+      type: r.type,
+      tags: this.parseTags(r.tags),
+      updatedAt: r.updated_at,
+      rank: 0,
+      snippet: this.parseTags(r.tags).join(', ')
+    }))
   }
 
   getRecent(limit = 10): FtsHit[] {

@@ -82,7 +82,8 @@ export function parseCheckboxes(
   const out: CheckboxTask[] = []
   const lines = content.split('\n')
   lines.forEach((line, i) => {
-    const m = line.match(/^\s*[-*]\s+\[([ xX])\]\s+(.+)$/)
+    // WB-7: GFM allows -, * AND + as task-list markers.
+    const m = line.match(/^\s*[-*+]\s+\[([ xX])\]\s+(.+)$/)
     if (m) {
       out.push({
         text: m[2].trim(),
@@ -98,16 +99,28 @@ export function parseCheckboxes(
 
 export class DomainEngine {
   private cache: ParsedMarkdown[] = []
+  /** WB-8: overview computed once per parsed-file snapshot — invalidated on setParsedFiles/clear. */
+  private overviewCache: DomainOverview | null = null
 
   setParsedFiles(files: ParsedMarkdown[]): void {
     this.cache = files
+    this.overviewCache = null
   }
 
   clear(): void {
     this.cache = []
+    this.overviewCache = null
   }
 
   getOverview(): DomainOverview {
+    if (this.overviewCache) return this.overviewCache
+    const overview = this.computeOverview()
+    this.overviewCache = overview
+    return overview
+  }
+
+  /** Callers must not mutate the returned overview — it is shared across calls. */
+  private computeOverview(): DomainOverview {
     const projects: DomainItem[] = []
     const tasks: DomainItem[] = []
     const people: DomainItem[] = []
@@ -163,9 +176,16 @@ export class DomainEngine {
       }
     }
 
-    // Sort recent first
-    const byUpdated = (a: DomainItem, b: DomainItem): number =>
-      String(b.updatedAt || '').localeCompare(String(a.updatedAt || ''))
+    // Sort recent first; WB-9: notes WITHOUT an updated/date field sink to the
+    // bottom instead of sorting first (an empty string compares as "newest").
+    const byUpdated = (a: DomainItem, b: DomainItem): number => {
+      const ta = a.updatedAt || ''
+      const tb = b.updatedAt || ''
+      if (!ta && !tb) return 0
+      if (!ta) return 1
+      if (!tb) return -1
+      return tb.localeCompare(ta)
+    }
     projects.sort(byUpdated)
     tasks.sort(byUpdated)
     people.sort(byUpdated)

@@ -8,7 +8,8 @@ import {
   syncSingleFile,
   markSelfWrite,
   debounceEmit,
-  handleFileRemove
+  handleFileRemove,
+  handleDirRemove
 } from '../shared'
 
 export function registerFileHandlers(): void {
@@ -110,14 +111,23 @@ export function registerFileHandlers(): void {
     assertPathInVault(filePath, root)
     const settings = workspaceEngine.getSettings()
     const trashEnabled = settings.trashEnabled !== false
+    // WA-2: deleting a FOLDER must cascade to its children in graph/search.
+    let wasDir = false
+    try {
+      wasDir = fs.statSync(filePath).isDirectory()
+    } catch {
+      /* already gone */
+    }
     if (trashEnabled && !isTrashPath(filePath)) {
       const trashPath = workspaceEngine.moveToTrash(filePath)
-      handleFileRemove(filePath)
+      if (wasDir) handleDirRemove(filePath)
+      else handleFileRemove(filePath)
       debounceEmit()
       return { ok: true, trashed: true, trashPath }
     }
     workspaceEngine.deleteFile(filePath)
-    handleFileRemove(filePath)
+    if (wasDir) handleDirRemove(filePath)
+    else handleFileRemove(filePath)
     debounceEmit()
     return { ok: true, trashed: false }
   })
@@ -179,8 +189,14 @@ export function registerFileHandlers(): void {
       const result = workspaceEngine.renameFile(oldPath, newPath)
       const state = workspaceEngine.getState()
       if (state.rootPath) {
-        // Mark all affected files as self-written to suppress double-sync from chokidar
-        for (const f of result.affectedFiles) markSelfWrite(f)
+        // AE-1: every file whose [[link]] was rewritten must be RE-SYNCED into
+        // graph/search — markSelfWrite only suppresses the chokidar echo, it
+        // does not update the index. Without this the nodes keep stale outLinks
+        // (ghost [[OldTitle]]) until a full rebuild.
+        for (const f of result.affectedFiles) {
+          markSelfWrite(f)
+          syncSingleFile(f, state.rootPath)
+        }
         markSelfWrite(newPath)
         handleFileRemove(oldPath)
         syncSingleFile(newPath, state.rootPath)

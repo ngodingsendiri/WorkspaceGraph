@@ -218,6 +218,29 @@ export function handleFileRemove(filePath: string): void {
   searchEngine.setOrphanIds(graphEngine.getOrphanNodeIds())
 }
 
+/**
+ * WA-2: cascade removal when a whole FOLDER disappears (unlinkDir / file:delete
+ * on a directory). Children have their own nodes — a single-file removal would
+ * leave them stale in graph/search/embeddings until a full rebuild.
+ */
+export function handleDirRemove(dirPath: string): void {
+  const prefix = dirPath.replace(/\\/g, '/').toLowerCase()
+  // Collect affected .md paths BEFORE removal (search + embedding need them).
+  const mdPaths: string[] = []
+  for (const n of graphEngine.getGraphData().nodes) {
+    const p = (n.path || '').replace(/\\/g, '/').toLowerCase()
+    if (p === prefix || p.startsWith(prefix + '/')) {
+      if (n.path.toLowerCase().endsWith('.md')) mdPaths.push(n.path)
+    }
+  }
+  graphEngine.removeNodesUnderPath(dirPath)
+  for (const fp of mdPaths) {
+    searchEngine.removeFromIndex(filePathId(fp))
+    embeddingEngine.removeFile(fp)
+  }
+  searchEngine.setOrphanIds(graphEngine.getOrphanNodeIds())
+}
+
 let emitTimeout: NodeJS.Timeout | null = null
 export function debounceEmit(): void {
   if (emitTimeout) clearTimeout(emitTimeout)
@@ -253,6 +276,13 @@ function isSelfWriteEcho(filePath: string, windowMs = 2500): boolean {
 export function attachFileWatcher(folderPath: string): void {
   fileWatcher.start(folderPath)
   fileWatcher.removeAllListeners('change')
+  // WA-1: an EventEmitter that emit('error') with NO listener throws (uncaught
+  // exception → main crash). Chokidar errors (permission denied, disk I/O) must
+  // be logged, never fatal — attach a default listener after every start.
+  fileWatcher.removeAllListeners('error')
+  fileWatcher.on('error', (err) => {
+    console.error('[FileWatcher] chokidar error:', err)
+  })
   fileWatcher.on('change', (event: FileChangeEvent) => {
     if (isTrashPath(event.path)) {
       debounceEmit()
@@ -277,7 +307,10 @@ export function attachFileWatcher(folderPath: string): void {
         )
       }
     } else if (event.type === 'unlink' || event.type === 'unlinkDir') {
-      handleFileRemove(event.path)
+      // WA-2: a deleted folder must cascade to every child node, not just the
+      // folder path (which has no graph node of its own).
+      if (event.type === 'unlinkDir') handleDirRemove(event.path)
+      else handleFileRemove(event.path)
       embeddingEngine.removeFile(event.path)
       const perms = readPermissions(workspaceEngine.getSettings())
       if (perms.automation && automationEngine.isEnabled()) {

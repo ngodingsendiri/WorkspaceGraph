@@ -90,6 +90,33 @@ describe('GraphEngine deep behaviors', () => {
     ).toBe(true)
   })
 
+  it('WB-3: removeNode re-resolves remaining [[links]] into ghosts incrementally', () => {
+    const a = write('Knowledge/A.md', '# Alpha\n[[Beta]]\n')
+    const b = write('Knowledge/B.md', '# Beta\n')
+    graph.buildFromParsedFiles([a, b])
+    graph.removeNode(graph.getNodeByPath(b.filePath)!.id)
+    const data = graph.getGraphData()
+    // A was NOT re-parsed — its cached outLink must now resolve to a ghost.
+    expect(data.nodes.some((n) => n.isGhost && n.id === 'ghost:beta')).toBe(true)
+    expect(data.edges.some((e) => e.type === 'wiki_link' && e.target === 'ghost:beta')).toBe(true)
+  })
+
+  it('WB-3: rename flow (remove old + add new) re-resolves other notes incrementally', () => {
+    const a = write('Knowledge/A.md', '# Alpha\n[[Beta]] [[Gamma]]\n')
+    const b = write('Knowledge/B.md', '# Beta\n')
+    const g = write('Knowledge/G.md', '# Gamma\n')
+    graph.buildFromParsedFiles([a, b, g])
+    graph.removeNode(graph.getNodeByPath(b.filePath)!.id)
+    const b2 = write('Knowledge/Beta2.md', '# Beta2\n[[Gamma]]\n')
+    graph.updateNodeAndEdges(b2)
+    const data = graph.getGraphData()
+    // A's cached [[Beta]] no longer resolves → ghost (its content was untouched).
+    expect(data.nodes.some((n) => n.isGhost && n.id === 'ghost:beta')).toBe(true)
+    expect(data.edges.some((e) => e.type === 'wiki_link' && e.target === 'ghost:beta')).toBe(true)
+    // Gamma still receives backlinks from A AND the renamed note.
+    expect(graph.getBacklinks(graph.getNodeByPath(g.filePath)!.id).nodes).toHaveLength(2)
+  })
+
   it('local graph depth clamps to 1–5 and grows with depth', () => {
     const chain = []
     for (const [name, links] of [

@@ -197,6 +197,65 @@ describe('GraphEngine', () => {
       const hubNode = graph.getGraphData().nodes.find((n) => n.title === 'Hub')
       expect(hubs).toContain(hubNode!.id)
     })
+
+    it('does not treat shared #tags as hub connections — WB-4', () => {
+      // TagHub shares a tag with 5 notes (under the 8-node co-tag cap so star
+      // edges ARE built) but has ZERO wiki links. WikiHub has 3 wiki links and
+      // no tags. Co-tag star edges are ON like the real app, so TagHub's
+      // VISUAL degree is inflated — it must not be reported as a hub.
+      const notes = [
+        parseNote('/vault/TagHub.md', '---\ntags: [shared]\n---\n# TagHub'),
+        parseNote('/vault/WikiHub.md', '# WikiHub\n\n[[A]]\n[[B]]\n[[C]]')
+      ]
+      for (let i = 0; i < 5; i++) {
+        notes.push(parseNote(`/vault/Spoke${i}.md`, '---\ntags: [shared]\n---\n# Spoke' + i))
+      }
+      notes.push(parseNote('/vault/A.md', '# A\n\n[[WikiHub]]'))
+      notes.push(parseNote('/vault/B.md', '# B\n\n[[WikiHub]]'))
+      notes.push(parseNote('/vault/C.md', '# C\n\n[[WikiHub]]'))
+      graph.buildFromParsedFiles(notes, true)
+
+      const hubs = graph.getHubNodeIds(3)
+      const tagHub = graph.getGraphData().nodes.find((n) => n.title === 'TagHub')
+      const wikiHub = graph.getGraphData().nodes.find((n) => n.title === 'WikiHub')
+      expect(tagHub!.degree).toBeGreaterThanOrEqual(5)
+      expect(hubs).not.toContain(tagHub!.id)
+      expect(hubs).toContain(wikiHub!.id)
+    })
+  })
+
+  describe('removeNodesUnderPath (WA-2 cascade)', () => {
+    it('removes every node under a deleted folder, keeps the rest', () => {
+      const notes = [
+        parseNote('/vault/Projects/Sub/A.md', '# A\n\n[[B]]'),
+        parseNote('/vault/Projects/Sub/B.md', '# B'),
+        parseNote('/vault/Outside.md', '# Outside\n\n[[A]]')
+      ]
+      buildGraph(notes)
+      const before = graph.getGraphData()
+      expect(before.nodes.length).toBe(3)
+
+      const removed = graph.removeNodesUnderPath('/vault/Projects')
+      expect(removed).toBe(2)
+
+      const after = graph.getGraphData()
+      // No real note remains under the deleted folder (A survives only as an
+      // unresolved GHOST — Outside still says [[A]] — correct Obsidian behavior)
+      expect(after.nodes.some((n) => n.path.toLowerCase().includes('projects'))).toBe(false)
+      expect(after.nodes.some((n) => n.title === 'Outside')).toBe(true)
+      const ghostA = after.nodes.find((n) => n.isGhost && n.title === 'A')
+      expect(ghostA).toBeDefined()
+      // No edges point at removed nodes
+      expect(after.edges.every((e) => after.nodes.some((n) => n.id === e.source))).toBe(true)
+    })
+
+    it('leaves state untouched when nothing lives under the path', () => {
+      const notes = [parseNote('/vault/A.md', '# A')]
+      buildGraph(notes)
+      const removed = graph.removeNodesUnderPath('/vault/Empty')
+      expect(removed).toBe(0)
+      expect(graph.getGraphData().nodes.length).toBe(1)
+    })
   })
 
   describe('Shortest path', () => {
@@ -280,6 +339,72 @@ describe('GraphEngine', () => {
     })
   })
 
+  describe('Co-tag star edges — WB-3 M5 incremental (inverted index)', () => {
+    const starEdgeIds = (g: GraphEngine): string[] =>
+      g
+        .getGraphData()
+        .edges.filter((e) => e.id.startsWith('tag:'))
+        .map((e) => e.id)
+        .sort()
+
+    it("tag membership change rebuilds only the affected tag's star edges", () => {
+      const notes = [
+        parseNote('/vault/Hub.md', '---\ntags: [shared]\n---\n# Hub'),
+        parseNote('/vault/A.md', '---\ntags: [shared]\n---\n# A'),
+        parseNote('/vault/B.md', '---\ntags: [shared]\n---\n# B'),
+        parseNote('/vault/C.md', '---\ntags: [other]\n---\n# C')
+      ]
+      graph.buildFromParsedFiles(notes, true)
+      const [hub, a, b, c] = notes.map((n) => n.id)
+      const before = starEdgeIds(graph)
+      // Hub+A+B share 'shared' (2 star edges), C is alone on 'other' (none)
+      expect(before).toEqual([`tag:${hub}<->${a}`, `tag:${hub}<->${b}`])
+
+      // C drops 'other' and joins 'shared' → the 'shared' star set grows; the
+      // untouched 'other' tag must not linger as a stale edge anywhere.
+      const updated = parseNote('/vault/C.md', '---\ntags: [shared]\n---\n# C')
+      graph.updateNodeAndEdges(updated)
+      expect(starEdgeIds(graph)).toEqual(
+        [`tag:${hub}<->${a}`, `tag:${hub}<->${b}`, `tag:${hub}<->${c}`].sort()
+      )
+
+      // A leaves 'shared' → its spoke disappears (hub stays stable).
+      const aUpdated = parseNote('/vault/A.md', '---\ntags: [solo]\n---\n# A')
+      graph.updateNodeAndEdges(aUpdated)
+      expect(starEdgeIds(graph)).toEqual([`tag:${hub}<->${b}`, `tag:${hub}<->${c}`].sort())
+    })
+
+    it('removing a node drops its star edges and re-hubs the tag (WB-3 M5)', () => {
+      const notes = [
+        parseNote('/vault/Hub.md', '---\ntags: [shared]\n---\n# Hub'),
+        parseNote('/vault/A.md', '---\ntags: [shared]\n---\n# A'),
+        parseNote('/vault/B.md', '---\ntags: [shared]\n---\n# B')
+      ]
+      graph.buildFromParsedFiles(notes, true)
+      const [hub, a, b] = notes.map((n) => n.id)
+      expect(starEdgeIds(graph)).toEqual([`tag:${hub}<->${a}`, `tag:${hub}<->${b}`])
+
+      graph.removeNode(hub) // Hub leaves the graph entirely
+      // Remaining members A+B re-hub to A → one star edge.
+      expect(starEdgeIds(graph)).toEqual([`tag:${a}<->${b}`])
+    })
+
+    it('cascade folder delete updates star edges for affected tags only (WB-3 M5)', () => {
+      const notes = [
+        parseNote('/vault/Sub/Hub.md', '---\ntags: [shared]\n---\n# Hub'),
+        parseNote('/vault/Sub/A.md', '---\ntags: [shared]\n---\n# A'),
+        parseNote('/vault/Keep.md', '---\ntags: [shared]\n---\n# Keep')
+      ]
+      graph.buildFromParsedFiles(notes, true)
+      const [hub, a, keep] = notes.map((n) => n.id)
+      expect(starEdgeIds(graph)).toEqual([`tag:${hub}<->${a}`, `tag:${hub}<->${keep}`].sort())
+
+      graph.removeNodesUnderPath('/vault/Sub')
+      // Hub+A gone → Keep is alone on 'shared' → no star edges left.
+      expect(starEdgeIds(graph)).toEqual([])
+    })
+  })
+
   describe('Attachment nodes', () => {
     it('registers attachment nodes', () => {
       const notes = [parseNote('/vault/A.md', '# A')]
@@ -293,6 +418,28 @@ describe('GraphEngine', () => {
       const attachNode = data.nodes.find((n) => n.isAttachment)
       expect(attachNode).toBeDefined()
       expect(attachNode!.title).toBe('image.png')
+    })
+
+    it('WB-10: converts an attachment node to a note in place when a parsed file arrives with the same id', () => {
+      const notes = [parseNote('/vault/A.md', '# A\n\nSee [[image.png]]')]
+      buildGraph(notes)
+
+      // Attachment registered under the same path a parsed note will later claim.
+      const imgId = parseNote('/vault/image.png', '').id
+      graph.setAttachments([
+        { id: imgId, path: '/vault/image.png', relativePath: 'image.png', title: 'image.png' }
+      ])
+      expect(graph.getGraphData().nodes.find((n) => n.id === imgId)?.isAttachment).toBe(true)
+
+      // File flips to a note at that path (id collision) — convert in place
+      // instead of leaving a stale attachment node until a full rebuild.
+      graph.updateNodeAndEdges(parseNote('/vault/image.png', '# Image\n\nNow a note'))
+
+      const node = graph.getGraphData().nodes.find((n) => n.id === imgId)
+      expect(node).toBeDefined()
+      expect(node!.isAttachment).toBeFalsy()
+      expect(node!.title).toBe('Image')
+      expect(node!.type).toBe('other')
     })
   })
 

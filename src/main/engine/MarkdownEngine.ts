@@ -1,6 +1,7 @@
 import matter from 'gray-matter'
 import path from 'path'
 import crypto from 'crypto'
+import { stripCodeRegions, fenceMarkerOf } from './markdownCode'
 
 // NOTE: do NOT use remark/remark-gfm in the Electron main bundle —
 // electron-vite/rollup mangles their ESM plugin exports into empty presets
@@ -47,13 +48,6 @@ export interface ParsedMarkdown {
 const WIKI_LINK_INNER_REGEX = /\[\[([^\]]+?)\]\]/g
 const TAG_INLINE_REGEX = /#([a-zA-Z0-9_/-]+)/g
 
-/** Strip fenced/inline code so [[links]] inside code do not create graph edges (Obsidian behavior). */
-function stripCodeRegions(content: string): string {
-  return content
-    .replace(/```[\s\S]*?```/g, (m) => ' '.repeat(m.length))
-    .replace(/`[^`\n]+`/g, (m) => ' '.repeat(m.length))
-}
-
 /**
  * Parse Obsidian wikilinks:
  *  [[Note]] [[path/Note]] [[Note|alias]] [[path/Note\|alias]] (escaped pipe in tables)
@@ -99,7 +93,16 @@ function extractWikiLinks(content: string): WikiLink[] {
 function extractHeadings(content: string): { level: number; text: string }[] {
   const headings: { level: number; text: string }[] = []
   const lines = content.split('\n')
+  // WA-5: skip headings inside fenced code (``` or ~~~) — they are code, not outline.
+  let fence: '```' | '~~~' | null = null
   for (const line of lines) {
+    const marker = fenceMarkerOf(line)
+    if (marker) {
+      if (fence === null) fence = marker
+      else if (fence === marker) fence = null
+      continue
+    }
+    if (fence !== null) continue
     const m = line.match(/^(#{1,6})\s+(.+)$/)
     if (m) {
       headings.push({ level: m[1].length, text: m[2].trim() })
@@ -109,10 +112,12 @@ function extractHeadings(content: string): { level: number; text: string }[] {
 }
 
 function extractInlineTags(content: string): string[] {
+  // WA-4: #tag inside code (fenced or inline) is code, not a tag node.
+  const scan = stripCodeRegions(content)
   const tags = new Set<string>()
   let match: RegExpExecArray | null
   const regex = new RegExp(TAG_INLINE_REGEX.source, 'g')
-  while ((match = regex.exec(content)) !== null) {
+  while ((match = regex.exec(scan)) !== null) {
     tags.add(match[1])
   }
   return Array.from(tags)
@@ -159,6 +164,18 @@ function escapeHtml(value: string): string {
     .replace(/'/g, '&#39;')
 }
 
+/**
+ * WA-11: render a frontmatter value as a YAML scalar without ever corrupting
+ * the document. Plain-safe values stay unquoted; anything containing YAML
+ * metacharacters (:, #, quotes, newlines, leading -/.) is double-quoted via
+ * JSON.stringify (a valid YAML double-quoted scalar).
+ */
+function yamlScalar(value: unknown): string {
+  const s = String(value)
+  if (/^[A-Za-z0-9_ ./#+()'-]+$/.test(s) && !/^[-.]/.test(s)) return s
+  return JSON.stringify(s)
+}
+
 function headingId(raw: string): string {
   return (
     raw
@@ -180,7 +197,7 @@ function isGfmSepRow(line: string): boolean {
 
 function isGfmTableRow(line: string): boolean {
   const t = line.trim()
-  if (!t || t.startsWith('```') || t.startsWith('#')) return false
+  if (!t || t.startsWith('```') || t.startsWith('~~~') || t.startsWith('#')) return false
   if (!(t.startsWith('|') || t.endsWith('|'))) return false
   return t.split('|').length >= 3
 }
@@ -260,12 +277,18 @@ function renderInline(text: string): string {
 function renderMarkdownToHtml(content: string): string {
   // Normalize CRLF first — see normalizeNewlines() (infinite loop on Windows notes)
   const normalized = normalizeNewlines(content)
+  // WA-6: escape literal placeholder-like text so user content can never
+  // collide with our internal slot tokens (§§CODE/§§WIKI/§§EXT). § is mapped to
+  // a PUA character that no engine pattern can match, and any pre-existing PUA
+  // char is shifted one step further — fully reversible at the end.
+  let src = normalized.replace(/\uE000/g, '\uE001').replace(/§/g, '\uE000')
 
-  // 1) Fenced code FIRST — so [[wiki]] / | inside code stay literal
+  // 1) Fenced code FIRST — so [[wiki]] / | inside code stay literal.
+  //    WA-10: GFM allows both ``` and ~~~ fences (backreference = same marker).
   const codeBlocks: string[] = []
-  let src = normalized.replace(
-    /```([^\n`]*)\n([\s\S]*?)```/g,
-    (_m, langRaw: string, body: string) => {
+  src = src.replace(
+    /(```|~~~)([^\n]*)\n([\s\S]*?)\1/g,
+    (_m, _fence: string, langRaw: string, body: string) => {
       const lang = String(langRaw || '')
         .trim()
         .replace(/[^a-zA-Z0-9_+#.-]/g, '')
@@ -486,6 +509,10 @@ function renderMarkdownToHtml(content: string): string {
     return extSlots[Number(n)] || ''
   })
 
+  // WA-6: restore user-literal § (all engine slots already substituted above —
+  // they were created AFTER the escape, so this pass only touches user text).
+  html = html.replace(/\uE001/g, '\uE000').replace(/\uE000/g, '§')
+
   return html
 }
 
@@ -584,9 +611,9 @@ export class MarkdownEngine {
       if (val === undefined || val === null) continue
       if (Array.isArray(val)) {
         lines.push(`${key}:`)
-        for (const v of val) lines.push(`  - ${v}`)
+        for (const v of val) lines.push(`  - ${yamlScalar(v)}`)
       } else {
-        lines.push(`${key}: ${val}`)
+        lines.push(`${key}: ${yamlScalar(val)}`)
       }
     }
     lines.push('---', '')
@@ -595,15 +622,18 @@ export class MarkdownEngine {
 
   createNoteTemplate(title: string, type: string = 'note'): string {
     const now = new Date().toISOString().split('T')[0]
+    // WA-11: title is user input — quote it so `:`/`#`/newline can never corrupt
+    // the YAML frontmatter; flatten newlines in the H1 body heading too.
+    const flatTitle = title.replace(/\n/g, ' ')
     return `---
-title: ${title}
-type: ${type}
+title: ${yamlScalar(title)}
+type: ${yamlScalar(type)}
 created: ${now}
 updated: ${now}
 tags: []
 ---
 
-# ${title}
+# ${flatTitle}
 
 `
   }

@@ -33,6 +33,13 @@ describe('DomainEngine', () => {
     it('returns empty for no checkboxes', () => {
       expect(parseCheckboxes('plain text', 'T', '/t.md')).toHaveLength(0)
     })
+
+    it('parses GFM + [ ] task markers — WB-7', () => {
+      const boxes = parseCheckboxes('+ [ ] Open\n+ [x] Done\n* [ ] Star\n- [ ] Dash', 'T', '/t.md')
+      expect(boxes).toHaveLength(4)
+      expect(boxes[0].text).toBe('Open')
+      expect(boxes[1].done).toBe(true)
+    })
   })
 
   describe('getOverview', () => {
@@ -108,6 +115,45 @@ describe('DomainEngine', () => {
         engine.setParsedFiles([parse('Projects/A.md', '# A\n', vault)])
         engine.clear()
         expect(engine.getOverview().projects).toHaveLength(0)
+      } finally {
+        fs.rmSync(vault, { recursive: true, force: true })
+      }
+    })
+
+    it('sorts items without updated/date LAST — WB-9', () => {
+      const vault = fs.mkdtempSync(path.join(tmpdir(), 'wg-domain6-'))
+      try {
+        const files = [
+          parse('Projects/NoDate.md', '---\ntype: project\n---\n# NoDate\n', vault),
+          parse('Projects/Old.md', '---\ntype: project\nupdated: 2020-01-01\n---\n# Old\n', vault),
+          parse('Projects/New.md', '---\ntype: project\nupdated: 2024-06-01\n---\n# New\n', vault)
+        ]
+        engine.setParsedFiles(files)
+        const titles = engine.getOverview().projects.map((p) => p.title)
+        // Recent first, then the one WITHOUT updated sinks to the BOTTOM.
+        expect(titles[0]).toBe('New')
+        expect(titles[1]).toBe('Old')
+        expect(titles[2]).toBe('NoDate')
+      } finally {
+        fs.rmSync(vault, { recursive: true, force: true })
+      }
+    })
+
+    it('caches overview until setParsedFiles — WB-8', () => {
+      const vault = fs.mkdtempSync(path.join(tmpdir(), 'wg-domain5-'))
+      try {
+        engine.setParsedFiles([parse('Projects/A.md', '# A\n', vault)])
+        const o1 = engine.getOverview()
+        const o2 = engine.getOverview()
+        expect(o1).toBe(o2) // cache hit — same object, no recompute
+        // listByType / peopleLinkedTo are served from the same cached overview
+        expect(engine.listByType('project')).toBe(o1.projects)
+        // invalidation on a new snapshot
+        engine.setParsedFiles([parse('Projects/B.md', '# B\n', vault)])
+        const o3 = engine.getOverview()
+        expect(o3).not.toBe(o1)
+        expect(o3.projects).toHaveLength(1)
+        expect(o3.projects[0].title).toBe('B')
       } finally {
         fs.rmSync(vault, { recursive: true, force: true })
       }

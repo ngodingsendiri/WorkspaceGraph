@@ -6,9 +6,14 @@ import { app } from 'electron'
 // (dynamic require('../security/SecretsStore') broke at runtime: module not found)
 import { protectSettingsSecrets, revealSettingsSecrets } from '../security/SecretsStore'
 import { atomicWriteJson, quarantineCorruptFile } from '../utils/quarantine'
+// WC-7: TOCTOU hardening — re-verify the CURRENT realpath right before a
+// write/delete op so a symlink swapped since the handler's assertPathInVault
+// can never redirect the operation outside the vault.
+import { reverifyPathInVault } from '../security/PathSandbox'
 // Static import so electron-vite bundles TemplateEngine into out/main/index.js
 // (dynamic require('./TemplateEngine') failed under vitest: Cannot find module)
 import { templateEngine } from './TemplateEngine'
+import { splitCodeSegments } from './markdownCode'
 
 const SETTINGS_VERSION = 1
 
@@ -60,6 +65,11 @@ export interface WorkspaceState {
   totalFolders: number
   /** Markdown notes only (blueprint dashboard metrics) */
   totalNotes: number
+  /**
+   * AE-5: true while the background index pass (syncWorkspaceData) is still
+   * running after open/create — search/graph may be partial until it flips.
+   */
+  indexing?: boolean
 }
 
 const WORKSPACE_CONFIG_FILE = '.workspacegraph/workspace.json'
@@ -176,12 +186,43 @@ function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
+/**
+ * WA-3: rewrite [[oldTitle…]] → [[newTitle…]] but NEVER inside code (fenced
+ * ``` / ~~~ blocks or inline `code`) — a rename must not corrupt code samples.
+ * Pure: exported for golden tests.
+ */
+export function rewriteWikiLinksOutsideCode(
+  content: string,
+  oldTitle: string,
+  newTitle: string
+): string {
+  if (!oldTitle || !newTitle || oldTitle === newTitle) return content
+  const pattern = new RegExp(
+    `\\[\\[${escapeRegex(oldTitle)}((?:#[^\\]|]*)?)(\\|[^\\]]*)?\\]\\]`,
+    'gi'
+  )
+  let out = ''
+  for (const seg of splitCodeSegments(content)) {
+    if (seg.type === 'code') {
+      out += seg.raw
+    } else {
+      out += seg.raw.replace(pattern, (_match, heading: string, alias: string) => {
+        const h = heading || ''
+        const a = alias || ''
+        return `[[${newTitle}${h}${a}]]`
+      })
+    }
+  }
+  return out
+}
+
 export class WorkspaceEngine {
   private state: WorkspaceState = {
     isOpen: false,
     rootPath: null,
     config: null,
     files: [],
+    indexing: false,
     totalFiles: 0,
     totalFolders: 0,
     totalNotes: 0
@@ -279,7 +320,9 @@ export class WorkspaceEngine {
       }
       this.initializeWorkspaceStructure(resolvedPath)
     }
-    fs.writeFileSync(configPath, JSON.stringify(config, null, 2))
+    // WA-9: atomic write — a crash mid-write must never leave workspace.json
+    // truncated (loaders already fall back to the .tmp sibling on read).
+    atomicWriteJson(configPath, config)
 
     // Scan files
     const files = scanDirectory(resolvedPath, resolvedPath)
@@ -292,7 +335,9 @@ export class WorkspaceEngine {
       files,
       totalFiles: counts.files,
       totalFolders: counts.folders,
-      totalNotes: counts.notes
+      totalNotes: counts.notes,
+      // AE-5: set true by the open/create flow while the background index runs
+      indexing: false
     }
 
     // Update recent (normalize so duplicates with different separators collapse)
@@ -343,7 +388,8 @@ export class WorkspaceEngine {
       files: [],
       totalFiles: 0,
       totalFolders: 0,
-      totalNotes: 0
+      totalNotes: 0,
+      indexing: false
     }
   }
 
@@ -373,6 +419,8 @@ export class WorkspaceEngine {
   }
 
   writeFile(filePath: string, content: string): void {
+    const root = this.state.rootPath
+    if (root) reverifyPathInVault(filePath, root)
     const dir = path.dirname(filePath)
     if (!fs.existsSync(dir)) {
       fs.mkdirSync(dir, { recursive: true })
@@ -381,6 +429,8 @@ export class WorkspaceEngine {
   }
 
   deleteFile(filePath: string): void {
+    const root = this.state.rootPath
+    if (root) reverifyPathInVault(filePath, root)
     if (fs.existsSync(filePath)) {
       const stats = fs.statSync(filePath)
       if (stats.isDirectory()) {
@@ -408,6 +458,9 @@ export class WorkspaceEngine {
       const ext = path.extname(target)
       target = `${target.slice(0, target.length - ext.length)}-${Date.now()}${ext}`
     }
+    // WC-7: the file could be a symlink swapped after the handler's check —
+    // re-verify the CURRENT realpath stays inside the vault before renaming.
+    reverifyPathInVault(filePath, root)
     fs.mkdirSync(path.dirname(target), { recursive: true })
     fs.renameSync(filePath, target)
     return target
@@ -500,6 +553,8 @@ export class WorkspaceEngine {
   }
 
   createFile(filePath: string, content = ''): void {
+    const root = this.state.rootPath
+    if (root) reverifyPathInVault(filePath, root)
     if (fs.existsSync(filePath)) {
       throw new Error(`File already exists: ${filePath}`)
     }
@@ -542,16 +597,12 @@ export class WorkspaceEngine {
   }
 
   /**
-   * Scan all vault Markdown files and rewrite [[oldTitle]] → [[newTitle]].
+   * Scan all vault Markdown files and rewrite [[oldTitle]] → [[newTitle]]
+   * (never inside code — see rewriteWikiLinksOutsideCode).
    * Returns the list of absolute paths that were modified.
    */
   updateLinksInVault(oldTitle: string, newTitle: string): string[] {
     if (!oldTitle || !newTitle || oldTitle === newTitle) return []
-    // Match [[OldTitle]], [[OldTitle|alias]], [[OldTitle#heading]], [[OldTitle#heading|alias]]
-    const pattern = new RegExp(
-      `\\[\\[${escapeRegex(oldTitle)}((?:#[^\\]|]*)?)?(\\|[^\\]]*)?\\]\\]`,
-      'gi'
-    )
     const affected: string[] = []
     for (const filePath of this.getAllMarkdownPaths()) {
       let raw: string
@@ -560,13 +611,8 @@ export class WorkspaceEngine {
       } catch {
         continue
       }
-      if (!pattern.test(raw)) continue
-      pattern.lastIndex = 0
-      const updated = raw.replace(pattern, (_match, heading, alias) => {
-        const h = heading || ''
-        const a = alias || ''
-        return `[[${newTitle}${h}${a}]]`
-      })
+      const updated = rewriteWikiLinksOutsideCode(raw, oldTitle, newTitle)
+      if (updated === raw) continue
       try {
         fs.writeFileSync(filePath, updated, 'utf-8')
         affected.push(filePath)
@@ -595,16 +641,24 @@ export class WorkspaceEngine {
       fs.mkdirSync(dir, { recursive: true })
     }
 
-    // Auto-update WikiLinks in vault before renaming the file on disk
+    // WA-7: rename FIRST, then rewrite WikiLinks — if the rename fails (locked
+    // file, permission) nothing has changed on disk yet, so links can never end
+    // up pointing at a title that doesn't exist. Link rewrite is best-effort.
+    fs.renameSync(oldPath, newPath)
+
     let affectedFiles: string[] = []
     const shouldUpdateLinks = opts?.updateLinks !== false
     if (shouldUpdateLinks && oldPath.toLowerCase().endsWith('.md')) {
       const oldTitle = path.basename(oldPath, '.md')
       const newTitle = path.basename(newPath, '.md')
-      affectedFiles = this.updateLinksInVault(oldTitle, newTitle)
+      try {
+        affectedFiles = this.updateLinksInVault(oldTitle, newTitle)
+      } catch (err) {
+        // The rename itself succeeded — a failed link sweep must not fail the
+        // whole operation or leave the vault in a half-renamed state.
+        console.error('[WorkspaceEngine] rename ok, wiki-link update failed:', err)
+      }
     }
-
-    fs.renameSync(oldPath, newPath)
     return { renamedLinks: affectedFiles.length, affectedFiles }
   }
 

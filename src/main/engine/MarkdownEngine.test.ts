@@ -103,6 +103,27 @@ describe('MarkdownEngine', () => {
       ])
     })
 
+    it('ignores headings inside fenced code (``` and ~~~) — WA-5', () => {
+      const content = `# Real\n\n\`\`\`\n# Fake in backtick fence\n\`\`\`\n\n~~~\n# Fake in tilde fence\n~~~\n\n## Real too`
+      const parsed = engine.parseFile('/vault/Note.md', content, '/vault')
+      expect(parsed.headings).toEqual([
+        { level: 1, text: 'Real' },
+        { level: 2, text: 'Real too' }
+      ])
+    })
+
+    it('ignores #tags inside code (fenced + inline) — WA-4', () => {
+      const content = `\`\`\`\n#ghost-tag\n\`\`\`\n\n\`#inline-ghost\`\n\n#real-tag`
+      const parsed = engine.parseFile('/vault/Note.md', content, '/vault')
+      expect(parsed.tags).toEqual(['real-tag'])
+    })
+
+    it('ignores #tags inside tilde fences — WA-4/WA-10', () => {
+      const content = `~~~\n#tilde-ghost\n~~~\n\n#real-tag`
+      const parsed = engine.parseFile('/vault/Note.md', content, '/vault')
+      expect(parsed.tags).toEqual(['real-tag'])
+    })
+
     it('normalizes CRLF line endings', () => {
       const content = '---\ntitle: Test\r\n---\r\n\r\n# Title\r\n'
       const parsed = engine.parseFile('/vault/Note.md', content, '/vault')
@@ -143,6 +164,17 @@ describe('MarkdownEngine', () => {
     it('renders code blocks', () => {
       const html = engine.renderToHtml('```js\nconst x = 1\n```')
       expect(html).toContain('<pre><code class="language-js">const x = 1</code></pre>')
+    })
+
+    it('renders tilde fenced code blocks — WA-10', () => {
+      const html = engine.renderToHtml('~~~js\nconst x = 1\n~~~')
+      expect(html).toContain('<pre><code class="language-js">const x = 1</code></pre>')
+    })
+
+    it('keeps wikilinks inside tilde fences literal — WA-10', () => {
+      const html = engine.renderToHtml('~~~\n[[NotARender]]\n~~~')
+      expect(html).not.toContain('wiki-link')
+      expect(html).toContain('[[NotARender]]')
     })
 
     it('renders inline code', () => {
@@ -206,6 +238,15 @@ describe('MarkdownEngine', () => {
       const html = engine.renderToHtml('<script>alert(1)</script>')
       expect(html).not.toContain('<script>')
     })
+
+    it('literal §§ placeholder text never collides with slots — WA-6', () => {
+      // User wrote text that looks exactly like an internal slot token
+      const html = engine.renderToHtml('See §§WIKI0§§ and [[Target]]')
+      expect(html).toContain('§§WIKI0§§')
+      expect(html).toContain('class="wiki-link"')
+      const insideCode = engine.renderToHtml('```\n§§WIKI0§§ literal inside code\n```')
+      expect(insideCode).toContain('§§WIKI0§§')
+    })
   })
 
   describe('resolveWikiLink', () => {
@@ -245,6 +286,34 @@ describe('MarkdownEngine', () => {
       expect(template).toContain('title: My Note')
       expect(template).toContain('type: project')
       expect(template).toContain('tags: []')
+    })
+
+    it('quotes titles that would corrupt YAML — WA-11', () => {
+      const template = engine.createNoteTemplate('Project: Alpha', 'project')
+      expect(template).toContain('title: "Project: Alpha"')
+    })
+
+    it('flattens newlines in title heading and quotes the frontmatter — WA-11', () => {
+      const template = engine.createNoteTemplate('Line one\nline two')
+      expect(template).toContain('title: "Line one\\nline two"')
+      expect(template).toContain('# Line one line two')
+      // frontmatter round-trips through gray-matter
+      const matter = engine.parseFile('/vault/x.md', template.replace(/^#.*$/m, ''), '/vault')
+      expect(matter.frontmatter.title).toBe('Line one\nline two')
+    })
+  })
+
+  describe('buildFrontmatterString', () => {
+    it('quotes dangerous scalar values — WA-11', () => {
+      const str = engine.buildFrontmatterString({
+        title: 'a: b',
+        tags: ['x:y', 'ok'],
+        note: 'c\nd'
+      })
+      expect(str).toContain('title: "a: b"')
+      expect(str).toContain('- "x:y"')
+      expect(str).toContain('- ok')
+      expect(str).toContain('note: "c\\nd"')
     })
   })
 

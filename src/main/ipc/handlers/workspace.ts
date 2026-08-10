@@ -1,4 +1,4 @@
-import { ipcMain, dialog } from 'electron'
+import { ipcMain, dialog, BrowserWindow } from 'electron'
 import { workspaceEngine } from '../../engine/WorkspaceEngine'
 import { graphEngine } from '../../engine/GraphEngine'
 import { searchEngine } from '../../engine/SearchEngine'
@@ -11,6 +11,63 @@ import { pluginHost } from '../../plugin/PluginHost'
 import { mcpManager } from '../../mcp/McpClientManager'
 import { readPermissions } from '../../security/Permissions'
 import { syncWorkspaceData, attachFileWatcher } from '../shared'
+
+/**
+ * AE-2: shared vault-open flow for workspace:open and workspace:create.
+ * Every engine reset, index kick, watcher attach, and platform load happens
+ * here so the two entry points can never drift apart. Workspace creation is
+ * also an open, so both fire `workspace_opened` to automation rules.
+ */
+function openVaultFlow(root: string): void {
+  indexDatabase.close()
+  graphEngine.clear()
+  searchEngine.clear()
+  domainEngine.clear()
+  embeddingEngine.clear()
+  indexDatabase.open(root)
+  const state = workspaceEngine.getState()
+  // AE-5: expose indexing readiness — stays true until the background index
+  // pass finishes; search/graph may be partial while it runs.
+  state.indexing = true
+  // Fire-and-forget (original behavior): return state immediately, index in
+  // background. Errors are logged, and the flag always flips back + notifies.
+  syncWorkspaceData(root)
+    .catch((err) => {
+      console.error('[workspace] index failed:', err)
+    })
+    .finally(() => {
+      const s = workspaceEngine.getState()
+      if (s.rootPath === root) {
+        s.indexing = false
+        for (const win of BrowserWindow.getAllWindows()) {
+          if (win.isDestroyed()) continue
+          win.webContents.send('workspace:updated', workspaceEngine.getState())
+        }
+      }
+    })
+  attachFileWatcher(root)
+  const perms = readPermissions(workspaceEngine.getSettings())
+  automationEngine.load(root)
+  automationEngine.setEnabled(perms.automation)
+  automationEngine.start()
+  pluginHost.setAllowed(perms.plugins)
+  pluginHost.load(root)
+  if (perms.automation) {
+    automationEngine.handleEvent('workspace_opened')
+  }
+  // R0-1: connect enabled MCP servers for this vault (fire-and-forget — a
+  // dead server must not block vault open; Settings shows the error).
+  mcpManager.connectAll()
+  // Load persisted vectors, then background-index only new/changed files
+  const db = indexDatabase.getDb()
+  embeddingEngine
+    .init()
+    .then(() => {
+      if (db) embeddingEngine.loadFromDb(db)
+      return embeddingEngine.indexVaultBackground(root, db)
+    })
+    .catch(() => {})
+}
 
 export function registerWorkspaceHandlers(): void {
   // --- Dialog Handlers ---
@@ -29,39 +86,10 @@ export function registerWorkspaceHandlers(): void {
     if (!folderPath || typeof folderPath !== 'string') {
       throw new Error('Invalid workspace path')
     }
-    indexDatabase.close()
-    graphEngine.clear()
-    searchEngine.clear()
-    domainEngine.clear()
-    embeddingEngine.clear()
     const state = workspaceEngine.openWorkspace(folderPath)
     const root = state.rootPath
     if (!root) throw new Error('Failed to open workspace')
-    indexDatabase.open(root)
-    // Fire-and-forget (original behavior): return state immediately, index in background
-    syncWorkspaceData(root)
-    attachFileWatcher(root)
-    const perms = readPermissions(workspaceEngine.getSettings())
-    automationEngine.load(root)
-    automationEngine.setEnabled(perms.automation)
-    automationEngine.start()
-    pluginHost.setAllowed(perms.plugins)
-    pluginHost.load(root)
-    if (perms.automation) {
-      automationEngine.handleEvent('workspace_opened')
-    }
-    // R0-1: connect enabled MCP servers for this vault (fire-and-forget — a
-    // dead server must not block vault open; Settings shows the error).
-    mcpManager.connectAll()
-    // Load persisted vectors, then background-index only new/changed files
-    const db = indexDatabase.getDb()
-    embeddingEngine
-      .init()
-      .then(() => {
-        if (db) embeddingEngine.loadFromDb(db)
-        return embeddingEngine.indexVaultBackground(root, db)
-      })
-      .catch(() => {})
+    openVaultFlow(root)
     return state
   })
 
@@ -76,32 +104,7 @@ export function registerWorkspaceHandlers(): void {
         throw new Error('Invalid workspace name')
       }
       const state = workspaceEngine.createWorkspace(parentPath, name)
-      if (state.rootPath) {
-        indexDatabase.close()
-        graphEngine.clear()
-        searchEngine.clear()
-        domainEngine.clear()
-        embeddingEngine.clear()
-        indexDatabase.open(state.rootPath)
-        // Fire-and-forget (original behavior): return state immediately, index in background
-        syncWorkspaceData(state.rootPath)
-        attachFileWatcher(state.rootPath)
-        const perms = readPermissions(workspaceEngine.getSettings())
-        automationEngine.load(state.rootPath)
-        automationEngine.setEnabled(perms.automation)
-        automationEngine.start()
-        pluginHost.setAllowed(perms.plugins)
-        pluginHost.load(state.rootPath)
-        mcpManager.connectAll()
-        const db = indexDatabase.getDb()
-        embeddingEngine
-          .init()
-          .then(() => {
-            if (db) embeddingEngine.loadFromDb(db)
-            return embeddingEngine.indexVaultBackground(state.rootPath!, db)
-          })
-          .catch(() => {})
-      }
+      if (state.rootPath) openVaultFlow(state.rootPath)
       return state
     }
   )

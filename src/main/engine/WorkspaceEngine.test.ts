@@ -261,6 +261,53 @@ describe('WorkspaceEngine', () => {
       expect(content).toContain('[[B#Heading]]')
     })
 
+    it('does not rewrite wikilinks inside code fences or inline code — WA-3 golden', () => {
+      const source = [
+        '# OldName',
+        '',
+        'See [[OldName]] outside code',
+        '',
+        '```',
+        'const link = "[[OldName]]"',
+        '```',
+        '~~~',
+        '[[OldName]] in tilde fence',
+        '~~~',
+        'Inline `[[OldName]]` stays',
+        ''
+      ].join('\n')
+      fs.writeFileSync(path.join(testDir, 'OldName.md'), source)
+
+      const result = engine.renameFile(
+        path.join(testDir, 'OldName.md'),
+        path.join(testDir, 'NewName.md')
+      )
+
+      // Only the link OUTSIDE code was rewritten
+      expect(result.renamedLinks).toBe(1)
+      const updated = fs.readFileSync(path.join(testDir, 'NewName.md'), 'utf-8')
+      expect(updated).toContain('See [[NewName]] outside code')
+      expect(updated).toContain('const link = "[[OldName]]"')
+      expect(updated).toContain('[[OldName]] in tilde fence')
+      expect(updated).toContain('Inline `[[OldName]]` stays')
+    })
+
+    it('leaves links untouched when the rename itself fails — WA-7 atomic', () => {
+      fs.writeFileSync(path.join(testDir, 'OldName.md'), '# OldName\n\nSee [[OldName]]')
+      fs.writeFileSync(path.join(testDir, 'Other.md'), '# Other\n\nLink to [[OldName]]')
+      // A directory at the target makes fs.renameSync throw (EPERM/EISDIR)
+      fs.mkdirSync(path.join(testDir, 'TargetDir'))
+
+      expect(() =>
+        engine.renameFile(path.join(testDir, 'OldName.md'), path.join(testDir, 'TargetDir'))
+      ).toThrow()
+
+      // Neither file was touched — no dangling [[NewName]] anywhere
+      expect(fs.existsSync(path.join(testDir, 'OldName.md'))).toBe(true)
+      expect(fs.readFileSync(path.join(testDir, 'Other.md'), 'utf-8')).toContain('[[OldName]]')
+      expect(fs.readFileSync(path.join(testDir, 'OldName.md'), 'utf-8')).toContain('[[OldName]]')
+    })
+
     it('does not update links when disabled', () => {
       fs.writeFileSync(path.join(testDir, 'A.md'), '# A\n\n[[A]]')
       engine.renameFile(path.join(testDir, 'A.md'), path.join(testDir, 'B.md'), {

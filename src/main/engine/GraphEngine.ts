@@ -41,6 +41,11 @@ export interface GraphNode {
   /** Non-md file node */
   isAttachment?: boolean
   degree: number
+  /**
+   * Degree counting wiki_link edges ONLY (WB-4) — hub detection must not be
+   * inflated by shared #tags. `degree` remains the visual degree (wiki + tag).
+   */
+  wikiDegree?: number
   pinned?: boolean
   x?: number
   y?: number
@@ -216,22 +221,43 @@ function buildLookupMaps(
   return maps
 }
 
+function setsEqual(a: Set<string>, b: Set<string>): boolean {
+  if (a.size !== b.size) return false
+  for (const k of a) if (!b.has(k)) return false
+  return true
+}
+
 function recomputeDegrees(nodes: Map<string, GraphNode>, edges: Map<string, GraphEdge>): void {
-  for (const n of nodes.values()) n.degree = 0
+  for (const n of nodes.values()) {
+    n.degree = 0
+    n.wikiDegree = 0
+  }
   const neighbors = new Map<string, Set<string>>()
+  const wikiNeighbors = new Map<string, Set<string>>()
   for (const e of edges.values()) {
-    // wiki + tag edges both contribute to visual degree (Obsidian tag hubs grow)
     if (e.type !== 'wiki_link' && e.type !== 'tag') continue
     // Ghost guard: skip edges whose endpoints no longer exist
     if (!nodes.has(e.source) || !nodes.has(e.target)) continue
+    // Visual degree: wiki + tag edges (Obsidian tag hubs grow).
     if (!neighbors.has(e.source)) neighbors.set(e.source, new Set())
     if (!neighbors.has(e.target)) neighbors.set(e.target, new Set())
     neighbors.get(e.source)!.add(e.target)
     neighbors.get(e.target)!.add(e.source)
+    // Hub degree (WB-4): wiki links only — shared #tags must not inflate hubs.
+    if (e.type === 'wiki_link') {
+      if (!wikiNeighbors.has(e.source)) wikiNeighbors.set(e.source, new Set())
+      if (!wikiNeighbors.has(e.target)) wikiNeighbors.set(e.target, new Set())
+      wikiNeighbors.get(e.source)!.add(e.target)
+      wikiNeighbors.get(e.target)!.add(e.source)
+    }
   }
   for (const [id, set] of neighbors) {
     const n = nodes.get(id)
     if (n) n.degree = set.size
+  }
+  for (const [id, set] of wikiNeighbors) {
+    const n = nodes.get(id)
+    if (n) n.wikiDegree = set.size
   }
 }
 
@@ -254,6 +280,17 @@ export class GraphEngine {
   private attachments: GraphAttachmentMeta[] = []
   /** Whether co-tag star edges between notes are built (legacy toggle) */
   private includeCoTagEdges = false
+  /**
+   * WB-3 (M5): inverted tag index — tagLower → note ids that carry it (ghosts
+   * excluded), kept incrementally so co-tag star edges don't rescan every node
+   * per mutation. Membership semantics match the pre-M5 full scan exactly
+   * (raw tag.toLowerCase(), no #-strip / trim, tag nodes included).
+   */
+  private tagIndex = new Map<string, string[]>()
+  /** Tags whose membership changed since their star edges were last rebuilt. */
+  private dirtyTags = new Set<string>()
+  /** Star edge ids created per tag (ownership for stale-edge removal). */
+  private tagEdgeIdsByTag = new Map<string, Set<string>>()
 
   /** Drop all graph state (workspace close / switch). */
   clear(): void {
@@ -261,6 +298,9 @@ export class GraphEngine {
     this.edges.clear()
     this.attachments = []
     this.includeCoTagEdges = false
+    this.tagIndex.clear()
+    this.dirtyTags.clear()
+    this.tagEdgeIdsByTag.clear()
   }
 
   private buildLookupFromNodes(): LookupMaps {
@@ -332,15 +372,20 @@ export class GraphEngine {
         isTag: true,
         degree: 0
       })
-      for (const noteId of noteIds) {
-        const edgeId = `tagnode:${noteId}->${id}`
-        this.edges.set(edgeId, {
-          id: edgeId,
-          source: noteId,
-          target: id,
-          type: 'tag',
-          weight: 1
-        })
+      // Pre-M5 behavior preserved: with co-tag star edges ON the old full
+      // rebuild wiped these tagnode edges right after creation — skip creating
+      // them instead of create-then-delete.
+      if (!this.includeCoTagEdges) {
+        for (const noteId of noteIds) {
+          const edgeId = `tagnode:${noteId}->${id}`
+          this.edges.set(edgeId, {
+            id: edgeId,
+            source: noteId,
+            target: id,
+            type: 'tag',
+            weight: 1
+          })
+        }
       }
     }
   }
@@ -371,7 +416,7 @@ export class GraphEngine {
     // Re-resolve wiki (attachments now resolvable) + tags
     this.rebuildWikiEdgesFromOutLinks()
     this.rebuildTagNodes()
-    if (this.includeCoTagEdges) this.rebuildTagEdges()
+    if (this.includeCoTagEdges) this.rebuildDirtyTagEdges()
     recomputeDegrees(this.nodes, this.edges)
   }
 
@@ -398,7 +443,7 @@ export class GraphEngine {
     })
     this.rebuildWikiEdgesFromOutLinks()
     this.rebuildTagNodes()
-    if (this.includeCoTagEdges) this.rebuildTagEdges()
+    if (this.includeCoTagEdges) this.rebuildDirtyTagEdges()
     recomputeDegrees(this.nodes, this.edges)
   }
 
@@ -418,7 +463,7 @@ export class GraphEngine {
     }
     this.rebuildWikiEdgesFromOutLinks()
     this.rebuildTagNodes()
-    if (this.includeCoTagEdges) this.rebuildTagEdges()
+    if (this.includeCoTagEdges) this.rebuildDirtyTagEdges()
     recomputeDegrees(this.nodes, this.edges)
   }
 
@@ -517,40 +562,126 @@ export class GraphEngine {
     return { linked, unresolved }
   }
 
-  private rebuildTagEdges(): void {
-    // Remove existing tag edges
-    for (const [edgeId, edge] of this.edges.entries()) {
-      if (edge.type === 'tag') this.edges.delete(edgeId)
-    }
-    const tagToNodeIds = new Map<string, string[]>()
+  /**
+   * WB-3 (M5): rebuild the inverted tag index from scratch (full builds only —
+   * buildFromParsedFiles). Marks every tag dirty so the first
+   * rebuildDirtyTagEdges rebuilds the whole star-edge set.
+   */
+  private rebuildTagIndex(): void {
+    this.tagIndex.clear()
+    this.dirtyTags.clear()
+    this.tagEdgeIdsByTag.clear()
     for (const n of this.nodes.values()) {
       if (n.isGhost) continue
-      for (const tag of n.tags || []) {
-        const tagLower = tag.toLowerCase()
-        const existing = tagToNodeIds.get(tagLower) || []
-        existing.push(n.id)
-        tagToNodeIds.set(tagLower, existing)
+      for (const raw of n.tags || []) {
+        const tagLower = String(raw).toLowerCase()
+        const list = this.tagIndex.get(tagLower)
+        if (list) list.push(n.id)
+        else this.tagIndex.set(tagLower, [n.id])
+        this.dirtyTags.add(tagLower)
       }
     }
-    for (const [, nodeIds] of tagToNodeIds.entries()) {
-      if (nodeIds.length < 2 || nodeIds.length > 8) continue
-      const hub = nodeIds[0]
-      for (let i = 1; i < nodeIds.length; i++) {
-        const tgtId = nodeIds[i]
-        const edgeId = `tag:${hub}<->${tgtId}`
-        const wiki1 = `${hub}->${tgtId}`
-        const wiki2 = `${tgtId}->${hub}`
-        if (!this.edges.has(edgeId) && !this.edges.has(wiki1) && !this.edges.has(wiki2)) {
-          this.edges.set(edgeId, {
-            id: edgeId,
-            source: hub,
-            target: tgtId,
-            type: 'tag',
-            weight: 1
-          })
+  }
+
+  /**
+   * WB-3 (M5): keep the inverted tag index in sync with one node's tags.
+   * `remove` drops the node from every tag list (node deletion / tag change).
+   * The affected tags are marked dirty so their star edges rebuild lazily.
+   */
+  private syncNodeTags(
+    node: { id: string; isGhost?: boolean; tags?: string[] },
+    remove = false
+  ): void {
+    if (!node || node.isGhost) return
+    for (const raw of node.tags || []) {
+      const tagLower = String(raw).toLowerCase()
+      if (remove) {
+        const list = this.tagIndex.get(tagLower)
+        if (list) {
+          const i = list.indexOf(node.id)
+          if (i >= 0) list.splice(i, 1)
+          if (list.length === 0) this.tagIndex.delete(tagLower)
+        }
+        this.dirtyTags.add(tagLower)
+      } else {
+        let list = this.tagIndex.get(tagLower)
+        if (!list) {
+          list = []
+          this.tagIndex.set(tagLower, list)
+        }
+        if (!list.includes(node.id)) {
+          list.push(node.id)
+          this.dirtyTags.add(tagLower)
         }
       }
     }
+  }
+
+  /**
+   * WB-3 (M5): rebuild co-tag star edges ONLY for tags whose membership changed
+   * (inverted index — no full node scan). Star edge ids are owned per tag, so
+   * stale edges for departed members are removed too. Edge-case note: when the
+   * same note pair carries two tags, the star edge belongs to whichever tag
+   * created it first; if that tag's membership drops the pair, ownership is
+   * transferred to the other tag (pairConnectedByOtherTag) so the edge survives.
+   */
+  private rebuildDirtyTagEdges(): void {
+    if (this.dirtyTags.size === 0) return
+    for (const tagLower of this.dirtyTags) {
+      const created = this.tagEdgeIdsByTag.get(tagLower)
+      if (created) {
+        for (const edgeId of created) {
+          // `tag:${hub}<->${tgt}` — if another tag still connects the pair,
+          // keep the edge and transfer ownership to it.
+          const sep = edgeId.indexOf('<->')
+          const a = sep > 4 ? edgeId.slice(4, sep) : ''
+          const b = sep > 0 ? edgeId.slice(sep + 3) : ''
+          const owner = a && b ? this.pairConnectedByOtherTag(a, b, tagLower) : null
+          if (owner) {
+            const ownerSet = this.tagEdgeIdsByTag.get(owner)
+            if (ownerSet) ownerSet.add(edgeId)
+            continue
+          }
+          this.edges.delete(edgeId)
+        }
+        created.clear()
+      }
+      const memberIds = this.tagIndex.get(tagLower) ?? []
+      if (this.includeCoTagEdges && memberIds.length >= 2 && memberIds.length <= 8) {
+        const hub = memberIds[0]
+        for (let i = 1; i < memberIds.length; i++) {
+          const tgtId = memberIds[i]
+          const edgeId = `tag:${hub}<->${tgtId}`
+          const wiki1 = `${hub}->${tgtId}`
+          const wiki2 = `${tgtId}->${hub}`
+          if (!this.edges.has(edgeId) && !this.edges.has(wiki1) && !this.edges.has(wiki2)) {
+            this.edges.set(edgeId, {
+              id: edgeId,
+              source: hub,
+              target: tgtId,
+              type: 'tag',
+              weight: 1
+            })
+            let ownerSet = this.tagEdgeIdsByTag.get(tagLower)
+            if (!ownerSet) {
+              ownerSet = new Set()
+              this.tagEdgeIdsByTag.set(tagLower, ownerSet)
+            }
+            ownerSet.add(edgeId)
+          }
+        }
+      }
+    }
+    this.dirtyTags.clear()
+  }
+
+  /** True if any tag OTHER than exceptTag connects both note ids. */
+  private pairConnectedByOtherTag(a: string, b: string, exceptTag: string): string | null {
+    for (const [tagLower, ids] of this.tagIndex) {
+      if (tagLower === exceptTag) continue
+      if (ids.includes(a) && ids.includes(b)) return tagLower
+    }
+    return null
   }
 
   private displayTitleFromParsed(parsedFile: ParsedMarkdown): string {
@@ -627,8 +758,9 @@ export class GraphEngine {
     }
 
     const { linked, unresolved } = this.rebuildWikiEdgesFromOutLinks()
+    this.rebuildTagIndex()
     this.rebuildTagNodes()
-    if (includeTagEdges) this.rebuildTagEdges()
+    if (includeTagEdges) this.rebuildDirtyTagEdges()
     recomputeDegrees(this.nodes, this.edges)
 
     if (unresolved > 0) {
@@ -640,16 +772,122 @@ export class GraphEngine {
     return this.getGraphData()
   }
 
+  /**
+   * WB-3: every way a [[link]] can address this node (title, basename, relative
+   * path + suffixes, aliases) — used to find OTHER notes whose edges must be
+   * re-resolved when this node is added/renamed/removed.
+   */
+  private identityKeys(node: GraphNode): Set<string> {
+    const keys = new Set<string>()
+    const add = (k: string): void => {
+      if (k) keys.add(k.toLowerCase().trim())
+    }
+    add(node.title)
+    add(path.basename(node.path, path.extname(node.path)))
+    const rel = (node.relativePath || '').replace(/\\/g, '/').replace(/\.md$/i, '')
+    add(rel)
+    const parts = rel.split('/').filter(Boolean)
+    for (let i = 0; i < parts.length; i++) add(parts.slice(i).join('/'))
+    for (const a of node.aliases || []) add(a)
+    return keys
+  }
+
+  /**
+   * WB-3: nodes (other than skipId) whose cached outLinks reference any of the
+   * given identity keys — they need their outgoing edges re-resolved.
+   */
+  private collectAffectedByKeys(keys: Set<string>, skipId: string): Set<string> {
+    const affected = new Set<string>()
+    if (keys.size === 0) return affected
+    for (const node of this.nodes.values()) {
+      if (node.id === skipId) continue
+      if (node.isGhost || node.isTag || node.isAttachment) continue
+      for (const raw of node.outLinks || []) {
+        if (!raw) continue
+        if (keys.has(normalizeLinkTarget(raw))) {
+          affected.add(node.id)
+          break
+        }
+      }
+    }
+    return affected
+  }
+
+  /** WB-3: drop ghost nodes that are no longer referenced by any wiki edge. */
+  private pruneOrphanGhostNodes(): void {
+    const referenced = new Set<string>()
+    for (const e of this.edges.values()) {
+      if (e.type === 'wiki_link') {
+        referenced.add(e.source)
+        referenced.add(e.target)
+      }
+    }
+    for (const [id, n] of this.nodes.entries()) {
+      if (n.isGhost && !referenced.has(id)) this.nodes.delete(id)
+    }
+  }
+
+  /**
+   * WB-3: rebuild ONLY the outgoing wiki edges of the given nodes. Incoming
+   * edges are owned by their source nodes and only change when those sources
+   * re-resolve (they are found via collectAffectedByKeys).
+   */
+  private rebuildWikiEdgesForNodes(nodeIds: Iterable<string>, maps: LookupMaps): void {
+    for (const nodeId of nodeIds) {
+      const node = this.nodes.get(nodeId)
+      if (!node || node.isGhost || node.isTag || node.isAttachment) continue
+      for (const [edgeId, edge] of this.edges.entries()) {
+        if (edge.type === 'wiki_link' && edge.source === nodeId) this.edges.delete(edgeId)
+      }
+      for (const raw of node.outLinks || []) {
+        if (!raw?.trim()) continue
+        const targetId = resolveLinkTarget(raw, maps)
+        const tgt = targetId ? this.nodes.get(targetId) : undefined
+        if (targetId && targetId !== nodeId && tgt && !tgt.isGhost && !tgt.isTag) {
+          const edgeId = `${nodeId}->${targetId}`
+          if (!this.edges.has(edgeId)) {
+            this.edges.set(edgeId, {
+              id: edgeId,
+              source: nodeId,
+              target: targetId,
+              type: 'wiki_link',
+              weight: 2
+            })
+          }
+        } else if (raw.trim()) {
+          const gid = this.ensureGhostNode(raw)
+          if (gid && gid !== nodeId) {
+            const edgeId = `${nodeId}->${gid}`
+            if (!this.edges.has(edgeId)) {
+              this.edges.set(edgeId, {
+                id: edgeId,
+                source: nodeId,
+                target: gid,
+                type: 'wiki_link',
+                weight: 1
+              })
+            }
+          }
+        }
+      }
+    }
+  }
+
   updateNodeAndEdges(parsedFile: ParsedMarkdown): void {
     const aliases = Array.isArray(parsedFile.frontmatter?.aliases)
       ? parsedFile.frontmatter.aliases.map(String)
       : []
     const existing = this.nodes.get(parsedFile.id)
+    const wasReal = !!(existing && !existing.isAttachment && !existing.isTag && !existing.isGhost)
+    const oldKeys = wasReal && existing ? this.identityKeys(existing) : new Set<string>()
+    // WB-3 (M5): drop the OLD tag membership from the inverted index before the
+    // in-place mutation below overwrites existing.tags.
+    if (wasReal && existing) this.syncNodeTags(existing, true)
     const displayTitle = this.displayTitleFromParsed(parsedFile)
     const outLinks = this.outLinksFromParsed(parsedFile)
     const nodeType = nodeTypeFromPath(parsedFile.relativePath)
 
-    if (existing && !existing.isAttachment && !existing.isTag && !existing.isGhost) {
+    if (wasReal && existing) {
       existing.title = displayTitle
       existing.tags = parsedFile.tags
       existing.aliases = aliases
@@ -657,6 +895,22 @@ export class GraphEngine {
       existing.relativePath = parsedFile.relativePath
       existing.type = nodeType
       existing.outLinks = outLinks
+    } else if (existing && existing.isAttachment) {
+      // WB-10: file flipped from attachment to note (e.g. .png → .md). Convert
+      // in place instead of leaving a stale attachment node until a full
+      // rebuild; the old attachment registry entry is dropped too. (Re-resolve
+      // of linkers is covered by the !wasReal branch below — new identity keys.)
+      existing.title = displayTitle
+      existing.tags = parsedFile.tags
+      existing.aliases = aliases
+      existing.path = parsedFile.filePath
+      existing.relativePath = parsedFile.relativePath
+      existing.type = nodeType
+      existing.outLinks = outLinks
+      existing.isAttachment = false
+      this.attachments = this.attachments.filter(
+        (a) => a.id !== parsedFile.id && a.path !== parsedFile.filePath
+      )
     } else if (!existing) {
       this.nodes.set(parsedFile.id, {
         id: parsedFile.id,
@@ -671,24 +925,101 @@ export class GraphEngine {
       })
     }
 
-    // Full wiki re-resolve + tag nodes
-    this.rebuildWikiEdgesFromOutLinks()
+    // WB-3: incremental wiki-edge update. For a plain content edit (identity
+    // unchanged) only this node's own edges are rebuilt; when the node is
+    // added/renamed (identity changed) also re-resolve every node that links
+    // to its old/new identity — NOT the whole graph's outLinks.
+    const newNode = this.nodes.get(parsedFile.id)
+    // WB-3 (M5): record the NEW tag membership (adds the node to the index and
+    // marks affected tags dirty for the lazy star-edge rebuild).
+    if (newNode) this.syncNodeTags(newNode, false)
+    const newKeys =
+      newNode && !newNode.isGhost && !newNode.isTag && !newNode.isAttachment
+        ? this.identityKeys(newNode)
+        : new Set<string>()
+
+    const affected = new Set<string>([parsedFile.id])
+    if (!wasReal || !setsEqual(oldKeys, newKeys)) {
+      const union = new Set(oldKeys)
+      for (const k of newKeys) union.add(k)
+      for (const id of this.collectAffectedByKeys(union, parsedFile.id)) affected.add(id)
+    }
+
+    const maps = this.buildLookupFromNodes()
+    this.rebuildWikiEdgesForNodes(affected, maps)
+    this.pruneOrphanGhostNodes()
+
     this.rebuildTagNodes()
-    if (this.includeCoTagEdges) this.rebuildTagEdges()
+    if (this.includeCoTagEdges) this.rebuildDirtyTagEdges()
     recomputeDegrees(this.nodes, this.edges)
   }
 
   removeNode(nodeId: string): void {
+    const node = this.nodes.get(nodeId)
+    if (node) this.syncNodeTags(node, true)
+    const keys =
+      node && !node.isGhost && !node.isTag && !node.isAttachment
+        ? this.identityKeys(node)
+        : new Set<string>()
     this.nodes.delete(nodeId)
     for (const [edgeId, edge] of this.edges.entries()) {
       if (edge.source === nodeId || edge.target === nodeId) this.edges.delete(edgeId)
     }
-    // Re-resolve remaining nodes — links that targeted the deleted note become unresolved;
-    // links that used ambiguous names may become unique again.
-    this.rebuildWikiEdgesFromOutLinks()
+    // WB-3: re-resolve only nodes that linked the removed note (their links
+    // become unresolved ghosts) instead of the whole graph. Links that used an
+    // ambiguous short name may also become uniquely resolvable again.
+    const affected = this.collectAffectedByKeys(keys, nodeId)
+    const maps = this.buildLookupFromNodes()
+    this.rebuildWikiEdgesForNodes(affected, maps)
+    this.pruneOrphanGhostNodes()
+
     this.rebuildTagNodes()
-    if (this.includeCoTagEdges) this.rebuildTagEdges()
+    if (this.includeCoTagEdges) this.rebuildDirtyTagEdges()
     recomputeDegrees(this.nodes, this.edges)
+  }
+
+  /**
+   * WA-2: cascade-remove every node (notes + attachments) whose path lives under
+   * dirPath — used when a whole folder is deleted (unlinkDir / file:delete on a
+   * directory). One pass + one re-resolve instead of N×removeNode.
+   * Returns the number of nodes removed.
+   */
+  removeNodesUnderPath(dirPath: string): number {
+    const prefix = dirPath.replace(/\\/g, '/').toLowerCase()
+    let count = 0
+    const removedKeys = new Set<string>()
+    for (const [id, n] of this.nodes.entries()) {
+      const p = (n.path || '').replace(/\\/g, '/').toLowerCase()
+      if (p === prefix || p.startsWith(prefix + '/')) {
+        if (!n.isGhost && !n.isTag && !n.isAttachment) {
+          for (const k of this.identityKeys(n)) removedKeys.add(k)
+        }
+        // WB-3 (M5): drop every removed node from the inverted tag index.
+        this.syncNodeTags(n, true)
+        this.nodes.delete(id)
+        count++
+      }
+    }
+    // Drop the attachment registry entries for the same subtree too.
+    this.attachments = this.attachments.filter((a) => {
+      const p = (a.path || '').replace(/\\/g, '/').toLowerCase()
+      return !(p === prefix || p.startsWith(prefix + '/'))
+    })
+    if (count > 0) {
+      for (const [edgeId, edge] of this.edges.entries()) {
+        if (!this.nodes.has(edge.source) || !this.nodes.has(edge.target)) this.edges.delete(edgeId)
+      }
+      // WB-3: re-resolve only nodes that linked into the removed subtree.
+      const affected = this.collectAffectedByKeys(removedKeys, '')
+      const maps = this.buildLookupFromNodes()
+      this.rebuildWikiEdgesForNodes(affected, maps)
+      this.pruneOrphanGhostNodes()
+
+      this.rebuildTagNodes()
+      if (this.includeCoTagEdges) this.rebuildDirtyTagEdges()
+      recomputeDegrees(this.nodes, this.edges)
+    }
+    return count
   }
 
   /**
@@ -934,20 +1265,22 @@ export class GraphEngine {
       .map((n) => n.id)
   }
 
-  /** High-degree hubs (wiki degree). Default threshold matches Obsidian-style “hairball” control. */
+  /** High-degree hubs (wiki degree only — WB-4: tag edges never inflate hubs). */
   getHubNodeIds(minDegree = 15): string[] {
     const thr = Math.max(1, Math.floor(minDegree))
+    const hubDegree = (n: GraphNode): number => n.wikiDegree ?? n.degree
     return Array.from(this.nodes.values())
-      .filter((n) => !n.isGhost && !n.isTag && !n.isAttachment && n.degree >= thr)
-      .sort((a, b) => b.degree - a.degree)
+      .filter((n) => !n.isGhost && !n.isTag && !n.isAttachment && hubDegree(n) >= thr)
+      .sort((a, b) => hubDegree(b) - hubDegree(a))
       .map((n) => n.id)
   }
 
   getHubNodes(minDegree = 15): GraphNode[] {
     const ids = new Set(this.getHubNodeIds(minDegree))
+    const hubDegree = (n: GraphNode): number => n.wikiDegree ?? n.degree
     return Array.from(this.nodes.values())
       .filter((n) => ids.has(n.id))
-      .sort((a, b) => b.degree - a.degree)
+      .sort((a, b) => hubDegree(b) - hubDegree(a))
   }
 
   /** Resolve node id from id or absolute/relative path */

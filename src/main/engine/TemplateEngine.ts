@@ -35,6 +35,19 @@ export interface TemplateVars {
   [key: string]: string | undefined
 }
 
+/** WB-11: frontmatter `type:` values → template kind (person normalizes to people). */
+const INFER_KIND_BY_TYPE: Record<string, TemplateKind> = {
+  project: 'project',
+  task: 'task',
+  people: 'people',
+  person: 'people',
+  daily: 'daily',
+  sop: 'sop',
+  document: 'document',
+  knowledge: 'knowledge',
+  meeting: 'meeting'
+}
+
 function today(): string {
   return new Date().toISOString().split('T')[0]
 }
@@ -350,6 +363,14 @@ updated: {{date}}
 ]
 
 export class TemplateEngine {
+  /**
+   * WB-6: per-workspace cache of the user-template scan. Keyed by a signature
+   * of dir file names + mtimes + sizes, so editing/adding/removing a template
+   * file invalidates it, while repeated calls (list, renderById, AI context)
+   * skip the directory read + full file reads.
+   */
+  private userTemplateCache = new Map<string, { sig: string; list: TemplateDef[] }>()
+
   getBuiltinTemplates(): TemplateDef[] {
     return BUILTIN.map((t) => ({ ...t, builtin: true }))
   }
@@ -357,19 +378,37 @@ export class TemplateEngine {
   /** List builtin + user templates from Templates/*.md */
   listTemplates(workspaceRoot: string | null): TemplateDef[] {
     const list = this.getBuiltinTemplates()
-    if (!workspaceRoot) return list
+    if (!workspaceRoot) {
+      this.userTemplateCache.clear()
+      return list
+    }
 
     const dir = path.join(workspaceRoot, 'Templates')
-    if (!fs.existsSync(dir)) return list
+    if (!fs.existsSync(dir)) {
+      this.userTemplateCache.delete(workspaceRoot)
+      return list
+    }
 
     try {
-      const files = fs.readdirSync(dir).filter((f) => f.toLowerCase().endsWith('.md'))
+      const files = fs
+        .readdirSync(dir)
+        .filter((f) => f.toLowerCase().endsWith('.md'))
+        .sort()
+      let sig = `${files.length}:`
+      for (const f of files) {
+        const st = fs.statSync(path.join(dir, f))
+        sig += `${f}|${st.mtimeMs}|${st.size};`
+      }
+      const cached = this.userTemplateCache.get(workspaceRoot)
+      if (cached && cached.sig === sig) return cached.list
+
+      const user: TemplateDef[] = []
       for (const f of files) {
         const full = path.join(dir, f)
         const body = fs.readFileSync(full, 'utf-8')
         const name = path.basename(f, '.md')
         const kind = this.inferKindFromName(name, body)
-        list.push({
+        user.push({
           id: `user-${name.toLowerCase().replace(/\s+/g, '-')}`,
           name,
           kind,
@@ -380,10 +419,13 @@ export class TemplateEngine {
           body
         })
       }
+      const result = [...list, ...user]
+      this.userTemplateCache.set(workspaceRoot, { sig, list: result })
+      return result
     } catch {
-      /* ignore */
+      this.userTemplateCache.delete(workspaceRoot)
+      return list
     }
-    return list
   }
 
   getTemplate(id: string, workspaceRoot: string | null): TemplateDef | null {
@@ -459,15 +501,32 @@ export class TemplateEngine {
     }
   }
 
+  /** WB-11: the `type:` value from the YAML frontmatter block only (never prose). */
+  private frontmatterType(body: string): string {
+    if (!body.startsWith('---')) return ''
+    const end = body.indexOf('\n---', 3)
+    const fm = end === -1 ? body.slice(3) : body.slice(3, end)
+    const m = fm.match(/^\s*type:\s*([a-zA-Z_-]+)/m)
+    return m ? m[1].toLowerCase() : ''
+  }
+
+  /**
+   * WB-11: classify from the frontmatter `type:` field first, then the file
+   * NAME. Free body prose is no longer scanned — a template whose body merely
+   * mentions "project" can no longer be misclassified.
+   */
   private inferKindFromName(name: string, body: string): TemplateKind {
-    const lower = (name + ' ' + body.slice(0, 200)).toLowerCase()
-    if (lower.includes('type: project') || lower.includes('project')) return 'project'
-    if (lower.includes('type: task') || lower.includes('task')) return 'task'
-    if (lower.includes('type: people') || lower.includes('person')) return 'people'
-    if (lower.includes('type: daily') || lower.includes('daily')) return 'daily'
-    if (lower.includes('type: sop') || lower.includes('sop')) return 'sop'
-    if (lower.includes('type: document') || lower.includes('document')) return 'document'
-    if (lower.includes('meeting')) return 'meeting'
+    const fromFm = INFER_KIND_BY_TYPE[this.frontmatterType(body)]
+    if (fromFm) return fromFm
+    const n = name.toLowerCase()
+    if (/project|proyek/.test(n)) return 'project'
+    if (/task|todo/.test(n)) return 'task'
+    if (/person|people|kontak/.test(n)) return 'people'
+    if (/daily|harian/.test(n)) return 'daily'
+    if (/\bsop\b/.test(n)) return 'sop'
+    if (/document|dokumen/.test(n)) return 'document'
+    if (/meeting|rapat|notulen/.test(n)) return 'meeting'
+    if (/knowledge|pengetahuan|catatan/.test(n)) return 'knowledge'
     return 'custom'
   }
 }

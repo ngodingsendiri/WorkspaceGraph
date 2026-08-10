@@ -98,6 +98,54 @@ describe('TemplateEngine', () => {
       // Idempotent — second seed writes nothing new
       expect(engine.seedBuiltinToVault(workspace)).toBe(0)
     })
+
+    it('caches the user template list until a file changes — WB-6', () => {
+      fs.mkdirSync(path.join(workspace, 'Templates'), { recursive: true })
+      fs.writeFileSync(path.join(workspace, 'Templates', 'A.md'), '# A\n')
+      const l1 = engine.listTemplates(workspace)
+      const l2 = engine.listTemplates(workspace)
+      expect(l1).toBe(l2) // cache hit — same array, no re-read of the dir/files
+
+      // Edit in place — signature changes via mtime + size, cache rebuilt.
+      fs.writeFileSync(path.join(workspace, 'Templates', 'A.md'), '# B\nchanged body\n')
+      const l3 = engine.listTemplates(workspace)
+      expect(l3).not.toBe(l1)
+      expect(l3.find((t) => t.id === 'user-a')?.body).toContain('changed body')
+    })
+
+    it('invalidates the cache when a template file is added — WB-6', () => {
+      fs.mkdirSync(path.join(workspace, 'Templates'), { recursive: true })
+      fs.writeFileSync(path.join(workspace, 'Templates', 'A.md'), '# A\n')
+      const l1 = engine.listTemplates(workspace)
+      fs.writeFileSync(path.join(workspace, 'Templates', 'B.md'), '# B\n')
+      const l2 = engine.listTemplates(workspace)
+      expect(l2).not.toBe(l1)
+      expect(l2.some((t) => t.id === 'user-b')).toBe(true)
+    })
+
+    it('classifies from frontmatter type + filename, never body prose — WB-11', () => {
+      fs.mkdirSync(path.join(workspace, 'Templates'), { recursive: true })
+      // Prose mentions "project" but neither name nor frontmatter type do.
+      fs.writeFileSync(
+        path.join(workspace, 'Templates', 'Generic.md'),
+        '---\ntitle: {{title}}\n---\n# {{title}}\n\nProyek ini adalah project besar yang perlu dikelola.\n'
+      )
+      const generic = engine.listTemplates(workspace).find((t) => t.id === 'user-generic')
+      expect(generic?.kind).toBe('custom') // NOT 'project' — prose is ignored
+
+      // Frontmatter type wins over a generic filename.
+      fs.writeFileSync(
+        path.join(workspace, 'Templates', 'Notes.md'),
+        '---\ntitle: {{title}}\ntype: task\n---\n# {{title}}\n'
+      )
+      const notes = engine.listTemplates(workspace).find((t) => t.id === 'user-notes')
+      expect(notes?.kind).toBe('task')
+
+      // Filename convention when there is no frontmatter type.
+      fs.writeFileSync(path.join(workspace, 'Templates', 'Meeting-Notes.md'), '# {{title}}\n')
+      const meeting = engine.listTemplates(workspace).find((t) => t.id === 'user-meeting-notes')
+      expect(meeting?.kind).toBe('meeting')
+    })
   })
 
   describe('helpers', () => {
