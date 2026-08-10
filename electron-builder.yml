@@ -9,6 +9,11 @@ files:
   - '!src/*'
   - '!scripts/*'
   - '!docs/*'
+  # AG-1: dev-only artifacts must never ship inside the asar
+  - '!.freebuff/**'
+  - '!.github/**'
+  - '!perf-harness/**'
+  - '!test-fixtures/**'
   - '![0-9][0-9]_*.md'
   - '!electron.vite.config.{js,ts,mjs,cjs}'
   - '!{.eslintcache,eslint.config.mjs,.prettierignore,.prettierrc.yaml,dev-app-update.yml,CHANGELOG.md}'
