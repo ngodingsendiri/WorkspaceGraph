@@ -8,8 +8,8 @@ import type { WorkerMessage, WorkerResponse, IndexEntry, SearchResult } from './
 
 let fuse: Fuse<IndexEntry> | null = null
 
-function buildFuseIndex(entries: IndexEntry[]): void {
-  fuse = new Fuse(entries, {
+function newFuse(entries: IndexEntry[]): Fuse<IndexEntry> {
+  return new Fuse(entries, {
     keys: [
       { name: 'title', weight: 0.4 },
       { name: 'tags', weight: 0.2 },
@@ -21,7 +21,33 @@ function buildFuseIndex(entries: IndexEntry[]): void {
     threshold: 0.4,
     ignoreLocation: true
   })
+}
+
+function buildFuseIndex(entries: IndexEntry[]): void {
+  fuse = newFuse(entries)
   parentPort?.postMessage({ type: 'indexBuilt', size: entries.length } as WorkerResponse)
+}
+
+/**
+ * WB-2: incremental upsert — remove matching docs (one pass), then add the new
+ * entries. Avoids re-posting the ENTIRE index over the IPC boundary on every
+ * single-file edit.
+ */
+function applyUpdates(entries: IndexEntry[]): void {
+  if (!fuse) {
+    buildFuseIndex(entries)
+    return
+  }
+  const ids = new Set(entries.map((e) => e.id))
+  fuse.remove((doc) => ids.has(doc.id))
+  for (const e of entries) fuse.add(e)
+}
+
+/** WB-2: incremental removal by id. */
+function applyRemoves(ids: string[]): void {
+  if (!fuse || ids.length === 0) return
+  const idSet = new Set(ids)
+  fuse.remove((doc) => idSet.has(doc.id))
 }
 
 function fuzzySearch(query: string, limit: number): SearchResult[] {
@@ -71,6 +97,14 @@ parentPort?.on('message', (msg: WorkerMessage) => {
       }
       case 'buildIndex': {
         buildFuseIndex(msg.entries)
+        break
+      }
+      case 'updateEntries': {
+        applyUpdates(msg.entries)
+        break
+      }
+      case 'removeEntries': {
+        applyRemoves(msg.ids)
         break
       }
       case 'fuzzySearch': {

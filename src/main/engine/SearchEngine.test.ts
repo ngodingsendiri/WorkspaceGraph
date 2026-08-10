@@ -160,6 +160,41 @@ describe('SearchEngine', () => {
       searchSpy.mockRestore()
     })
 
+    it('WB-12: a strong semantic hit outranks a weak keyword tail hit (absolute blend)', async () => {
+      const isReadySpy = vi.spyOn(embeddingEngine, 'isReady', 'get').mockReturnValue(true)
+      const searchSpy = vi
+        .spyOn(embeddingEngine, 'search')
+        .mockResolvedValue([{ filePath: '/vault/B.md', chunk: 'vector hit on B', score: 0.98 }])
+
+      // 'TypeScrpt' only fuzzy-matches A (fuse ≈ 0.78 → keyword ≈ 21/100 →
+      // 0.6·21 ≈ 13 blended) while B's strong vector hit (0.98 → 0.4·98 ≈ 39)
+      // must LEAD. Under the old min-max normalization every keyword score was
+      // flattened to 1.0 (0.6) and would have outranked B (0.39) — WB-12 fix.
+      const results = await search.search({ query: 'TypeScrpt', limit: 10 })
+      expect(results[0]?.title).toBe('B')
+      expect(results.some((r) => r.title === 'A')).toBe(true)
+      isReadySpy.mockRestore()
+      searchSpy.mockRestore()
+    })
+
+    it('WB-12: a weak keyword hit with a strong semantic hit keeps its semantic score (per-doc max merge)', async () => {
+      const isReadySpy = vi.spyOn(embeddingEngine, 'isReady', 'get').mockReturnValue(true)
+      // A is a weak fuzzy keyword hit ('TypeScrpt' → fuse ≈ 0.78 → ≈13 blended)
+      // AND the strongest vector match. Its semantic score must rescue it to the
+      // top — the old keyword-first dedupe discarded it entirely (vault
+      // validation finding: 'plugin sdk development' sank 28_Plugin_SDK to last).
+      const searchSpy = vi.spyOn(embeddingEngine, 'search').mockResolvedValue([
+        { filePath: '/vault/A.md', chunk: 'vector hit on A', score: 0.98 },
+        { filePath: '/vault/B.md', chunk: 'vector hit on B', score: 0.9 }
+      ])
+
+      const results = await search.search({ query: 'TypeScrpt', limit: 10 })
+      expect(results[0]?.title).toBe('A')
+      expect(results[1]?.title).toBe('B')
+      isReadySpy.mockRestore()
+      searchSpy.mockRestore()
+    })
+
     afterEach(() => {
       vi.restoreAllMocks()
     })
@@ -180,6 +215,62 @@ describe('SearchEngine', () => {
 
       search.removeFromIndex('A-id') // won't match but tests API
       // Actual removal requires correct ID
+    })
+  })
+
+  describe('WB-2 Fuse delta (worker path)', () => {
+    it('batches pending edits into delta messages instead of full-index rebuilds', async () => {
+      const s = new SearchEngine()
+      const a = parse('/vault/A.md', '# A\ncontent A')
+      const b = parse('/vault/B.md', '# B\ncontent B')
+      const posted: { type: string; entries?: unknown[]; ids?: string[] }[] = []
+      const fakeWorker = {
+        post: async (msg: { type: string; entries?: unknown[]; ids?: string[] }) => {
+          posted.push(msg)
+          if (msg.type === 'fuzzySearch') return { type: 'fuzzyResult', results: [] }
+          return { type: 'indexBuilt', size: 0 }
+        }
+      }
+      ;(s as unknown as { searchWorker: unknown; useWorker: boolean }).searchWorker = fakeWorker
+      ;(s as unknown as { searchWorker: unknown; useWorker: boolean }).useWorker = true
+
+      s.addToIndex(a)
+      s.addToIndex(b)
+      s.removeFromIndex(a.id)
+
+      // Debounced — nothing posted to the worker yet.
+      expect(posted).toHaveLength(0)
+
+      await s.flushFuseDelta()
+
+      const updateMsg = posted.find((m) => m.type === 'updateEntries') as { entries: unknown[] }
+      const removeMsg = posted.find((m) => m.type === 'removeEntries') as { ids: string[] }
+      expect(updateMsg).toBeDefined()
+      // A's upsert was superseded by its removal — only B remains as an update.
+      expect(updateMsg.entries).toHaveLength(1)
+      expect(removeMsg).toBeDefined()
+      expect(removeMsg.ids).toEqual([a.id])
+    })
+
+    it('flushes pending deltas before an async search sees stale results', async () => {
+      const s = new SearchEngine()
+      const a = parse('/vault/A.md', '# A\nunique-keyword-xyz')
+      const posted: { type: string; entries?: unknown[]; ids?: string[] }[] = []
+      const fakeWorker = {
+        post: async (msg: { type: string; entries?: unknown[]; ids?: string[] }) => {
+          posted.push(msg)
+          if (msg.type === 'fuzzySearch') return { type: 'fuzzyResult', results: [] }
+          return { type: 'indexBuilt', size: 0 }
+        }
+      }
+      ;(s as unknown as { searchWorker: unknown; useWorker: boolean }).searchWorker = fakeWorker
+      ;(s as unknown as { searchWorker: unknown; useWorker: boolean }).useWorker = true
+
+      s.addToIndex(a) // pending, not yet flushed
+      await s.search({ query: 'unique-keyword-xyz', limit: 10 })
+      // The search itself triggered the flush before querying the worker.
+      expect(posted.some((m) => m.type === 'updateEntries')).toBe(true)
+      expect(posted.some((m) => m.type === 'fuzzySearch')).toBe(true)
     })
   })
 

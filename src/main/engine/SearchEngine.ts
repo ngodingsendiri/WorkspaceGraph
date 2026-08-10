@@ -1,4 +1,4 @@
-import Fuse from 'fuse.js'
+import Fuse, { type FuseResult } from 'fuse.js'
 import type { ParsedMarkdown } from './MarkdownEngine'
 import { indexDatabase } from './IndexDatabase'
 import { graphEngine } from './GraphEngine'
@@ -12,22 +12,6 @@ export interface SearchOptions {
   filterType?: string
   filterTag?: string
   searchIn?: ('title' | 'content' | 'tags' | 'path')[]
-}
-
-/**
- * Scale a score list onto 0..1 (best → 1, worst → 0) so keyword (0-100) and
- * semantic (cosine 0..1) results can be blended fairly in hybrid search.
- */
-function minMaxNormalize(scores: number[]): number[] {
-  if (scores.length === 0) return []
-  let min = Infinity
-  let max = -Infinity
-  for (const s of scores) {
-    if (s < min) min = s
-    if (s > max) max = s
-  }
-  if (max === min) return scores.map(() => 1)
-  return scores.map((s) => (s - min) / (max - min))
 }
 
 export class SearchEngine {
@@ -45,10 +29,24 @@ export class SearchEngine {
     this.fuse = null
     this.searchWorker = null
     this.orphanIds = new Set()
+    this.pendingFuseUpdates.clear()
+    this.pendingFuseRemoves.clear()
+    if (this.fuseFlushTimer) {
+      clearTimeout(this.fuseFlushTimer)
+      this.fuseFlushTimer = null
+    }
   }
 
   private searchWorker: Awaited<ReturnType<typeof getSearchIndexWorker>> | null = null
-  private useWorker = true
+  // WG_NO_SEARCH_WORKER=1 forces local Fuse (no worker thread) — used by the
+  // one-off WB-12 validation script and handy for perf A/B in plain node.
+  private useWorker = process.env.WG_NO_SEARCH_WORKER !== '1'
+
+  // WB-2: pending Fuse deltas — flushed to the worker (debounced) instead of
+  // re-posting the entire index on every single-file edit.
+  private pendingFuseUpdates: Map<string, IndexEntry> = new Map()
+  private pendingFuseRemoves: Set<string> = new Set()
+  private fuseFlushTimer: NodeJS.Timeout | null = null
 
   private async ensureWorker(): Promise<boolean> {
     if (this.searchWorker) return true
@@ -82,27 +80,73 @@ export class SearchEngine {
     })
   }
 
-  private rebuildWorkerIndex(): void {
-    const hasWorker = this.searchWorker !== null || this.useWorker
-    if (hasWorker) {
-      this.ensureWorker().then((ok) => {
-        if (ok && this.searchWorker) {
-          this.searchWorker
-            .post({ type: 'buildIndex', entries: Array.from(this.index.values()) })
-            .catch(() => {
-              this.initFuseLocal()
-            })
-        } else {
-          this.initFuseLocal()
+  /** WB-2: schedule a (debounced) flush of pending Fuse deltas to the worker. */
+  private scheduleFuseFlush(): void {
+    if (this.fuseFlushTimer) clearTimeout(this.fuseFlushTimer)
+    this.fuseFlushTimer = setTimeout(() => {
+      this.fuseFlushTimer = null
+      void this.flushFuseDelta()
+    }, 250)
+  }
+
+  /**
+   * WB-2: push pending updates/removes to the worker index (delta), or fall
+   * back to the local Fuse instance when no worker is available. Called by the
+   * debounce timer AND by search() so a query never misses pending edits.
+   */
+  async flushFuseDelta(): Promise<void> {
+    if (this.fuseFlushTimer) {
+      clearTimeout(this.fuseFlushTimer)
+      this.fuseFlushTimer = null
+    }
+    if (this.pendingFuseUpdates.size === 0 && this.pendingFuseRemoves.size === 0) return
+    const updates = Array.from(this.pendingFuseUpdates.values())
+    const removes = Array.from(this.pendingFuseRemoves)
+    this.pendingFuseUpdates.clear()
+    this.pendingFuseRemoves.clear()
+
+    const hasWorker = await this.ensureWorker()
+    if (hasWorker && this.searchWorker) {
+      try {
+        if (removes.length > 0) {
+          await this.searchWorker.post({ type: 'removeEntries', ids: removes })
         }
-      })
-    } else {
+        if (updates.length > 0) {
+          await this.searchWorker.post({ type: 'updateEntries', entries: updates })
+        }
+        return
+      } catch {
+        // Fall through to local rebuild
+      }
+    }
+    this.applyFuseDeltaLocal(updates, removes)
+  }
+
+  /** Apply deltas to the in-process Fuse instance (tests / worker unavailable). */
+  private applyFuseDeltaLocal(updates: IndexEntry[], removes: string[]): void {
+    if (!this.fuse) {
       this.initFuseLocal()
+      return
+    }
+    if (removes.length > 0) {
+      const idSet = new Set(removes)
+      this.fuse.remove((doc) => idSet.has(doc.id))
+    }
+    if (updates.length > 0) {
+      const idSet = new Set(updates.map((u) => u.id))
+      this.fuse.remove((doc) => idSet.has(doc.id))
+      for (const u of updates) this.fuse.add(u)
     }
   }
 
   async buildIndex(parsedFiles: ParsedMarkdown[]): Promise<void> {
     this.index.clear()
+    this.pendingFuseUpdates.clear()
+    this.pendingFuseRemoves.clear()
+    if (this.fuseFlushTimer) {
+      clearTimeout(this.fuseFlushTimer)
+      this.fuseFlushTimer = null
+    }
     const entries: IndexEntry[] = []
     for (const file of parsedFiles) {
       const entry: IndexEntry = {
@@ -171,7 +215,16 @@ export class SearchEngine {
       indexDatabase.upsertNote(file)
     }
     if (rebuildFuse) {
-      this.rebuildWorkerIndex()
+      if (this.searchWorker && this.useWorker) {
+        // WB-2: delta to the worker (debounced) — no full-index re-post per edit.
+        this.pendingFuseUpdates.set(file.id, entry)
+        this.pendingFuseRemoves.delete(file.id)
+        this.scheduleFuseFlush()
+      } else {
+        // No worker (tests / worker unavailable): apply immediately so
+        // synchronous callers see fresh results right away.
+        this.applyFuseDeltaLocal([entry], [])
+      }
     }
   }
 
@@ -180,7 +233,14 @@ export class SearchEngine {
     if (indexDatabase.isOpen()) {
       indexDatabase.removeById(fileId)
     }
-    this.rebuildWorkerIndex()
+    // WB-2: delta removal; supersedes any pending upsert for the same id.
+    if (this.searchWorker && this.useWorker) {
+      this.pendingFuseUpdates.delete(fileId)
+      this.pendingFuseRemoves.add(fileId)
+      this.scheduleFuseFlush()
+    } else {
+      this.fuse?.remove((doc) => doc.id === fileId)
+    }
   }
 
   rebuildSqliteFromMemory(): number {
@@ -204,36 +264,18 @@ export class SearchEngine {
     return indexDatabase.rebuild(files as ParsedMarkdown[])
   }
 
-  /** Synchronous search using local Fuse + FTS — for backward compat with sync call sites. */
-  searchSync(options: SearchOptions): SearchResult[] {
-    const { query, limit = 20, filterType, filterTag } = options
-    const q = (query || '').trim()
-
-    if (!q) {
-      return this.getRecentFiles(limit)
-    }
-
-    const lower = q.toLowerCase()
-
-    if (lower === 'orphan:true' || lower === 'is:orphan') {
-      return this.searchOrphans(limit)
-    }
-
-    const backMatch = q.match(/^backlinks?:(.+)$/i)
-    if (backMatch) {
-      return this.searchBacklinks(backMatch[1].trim(), limit)
-    }
-
-    const pathMatch = q.match(/^path:(.+)$/i)
-    if (pathMatch) {
-      return this.searchByPathFragment(pathMatch[1].trim(), limit)
-    }
-
-    const tagMatch = q.match(/^#([a-zA-Z0-9_/-]+)$/)
-    if (tagMatch) {
-      return this.searchByTagExact(tagMatch[1], limit)
-    }
-
+  /**
+   * WB-5: single keyword-search core shared by searchSync and search — FTS +
+   * Fuse merge with filters. Fuse hits arrive pre-built (local Fuse or worker)
+   * so both call sites stay in lockstep instead of duplicating this logic.
+   */
+  private keywordResults(
+    q: string,
+    limit: number,
+    filterType: string | undefined,
+    filterTag: string | undefined,
+    fuseResults: SearchResult[]
+  ): SearchResult[] {
     const results: SearchResult[] = []
     const seen = new Set<string>()
 
@@ -260,53 +302,105 @@ export class SearchEngine {
       }
     }
 
-    if (results.length < limit && this.fuse) {
-      const fuseResults = this.fuse.search(q)
-      for (const res of fuseResults) {
-        const entry = res.item
-        if (seen.has(entry.id)) continue
-        if (filterType && entry.type !== filterType) continue
-        if (filterTag && !entry.tags.some((t) => t.toLowerCase() === filterTag.toLowerCase()))
-          continue
-
-        let preview: string | undefined
-        let matchedField: SearchResult['matchedField'] = 'content'
-
-        if (res.matches && res.matches.length > 0) {
-          const match = res.matches[0]
-          if (match.key === 'title') matchedField = 'title'
-          else if (match.key === 'tags') matchedField = 'tag'
-          else if (match.key === 'relativePath') matchedField = 'path'
-
-          if (match.key === 'content' && match.indices && match.indices.length > 0) {
-            const matchStart = match.indices[0][0]
-            const start = Math.max(0, matchStart - 60)
-            const end = Math.min(entry.rawContent.length, matchStart + q.length + 60)
-            preview = '...' + entry.rawContent.slice(start, end).replace(/\n/g, ' ').trim() + '...'
-          }
-        }
-        if (!preview) {
-          preview = entry.rawContent.slice(0, 120).replace(/\n/g, ' ').trim()
-        }
-
-        results.push({
-          id: entry.id,
-          title: entry.title,
-          path: entry.path,
-          relativePath: entry.relativePath,
-          score: (1 - (res.score || 0)) * 100,
-          type: entry.type,
-          tags: entry.tags,
-          preview,
-          matchedField,
-          source: 'fuse'
-        })
-        seen.add(entry.id)
-        if (results.length >= limit) break
-      }
+    for (const r of fuseResults) {
+      if (seen.has(r.id)) continue
+      if (filterType && r.type !== filterType) continue
+      if (filterTag && !r.tags.some((t) => t.toLowerCase() === filterTag.toLowerCase())) continue
+      results.push(r)
+      seen.add(r.id)
+      if (results.length >= limit) break
     }
 
     return results.slice(0, limit)
+  }
+
+  /** WB-5: special query syntax (orphan/backlink/path/#tag) shared by both entry points. */
+  private specialSearch(q: string, limit: number): SearchResult[] | null {
+    const lower = q.toLowerCase()
+    if (lower === 'orphan:true' || lower === 'is:orphan') {
+      return this.searchOrphans(limit)
+    }
+    const backMatch = q.match(/^backlinks?:(.+)$/i)
+    if (backMatch) {
+      return this.searchBacklinks(backMatch[1].trim(), limit)
+    }
+    const pathMatch = q.match(/^path:(.+)$/i)
+    if (pathMatch) {
+      return this.searchByPathFragment(pathMatch[1].trim(), limit)
+    }
+    const tagMatch = q.match(/^#([a-zA-Z0-9_/-]+)$/)
+    if (tagMatch) {
+      return this.searchByTagExact(tagMatch[1], limit)
+    }
+    return null
+  }
+
+  /** WB-5: build SearchResult[] from raw Fuse hits (preview + matched field). */
+  private fuseHitsToResults(
+    fuseResults: FuseResult<IndexEntry>[],
+    query: string,
+    limit: number
+  ): SearchResult[] {
+    const out: SearchResult[] = []
+    for (const res of fuseResults) {
+      const entry = res.item
+      let preview: string | undefined
+      let matchedField: SearchResult['matchedField'] = 'content'
+
+      if (res.matches && res.matches.length > 0) {
+        const match = res.matches[0]
+        if (match.key === 'title') matchedField = 'title'
+        else if (match.key === 'tags') matchedField = 'tag'
+        else if (match.key === 'relativePath') matchedField = 'path'
+
+        if (match.key === 'content' && match.indices && match.indices.length > 0) {
+          const matchStart = match.indices[0][0]
+          const start = Math.max(0, matchStart - 60)
+          const end = Math.min(entry.rawContent.length, matchStart + query.length + 60)
+          preview = '...' + entry.rawContent.slice(start, end).replace(/\n/g, ' ').trim() + '...'
+        }
+      }
+      if (!preview) {
+        preview = entry.rawContent.slice(0, 120).replace(/\n/g, ' ').trim()
+      }
+
+      out.push({
+        id: entry.id,
+        title: entry.title,
+        path: entry.path,
+        relativePath: entry.relativePath,
+        score: (1 - (res.score || 0)) * 100,
+        type: entry.type,
+        tags: entry.tags,
+        preview,
+        matchedField,
+        source: 'fuse'
+      })
+      if (out.length >= limit) break
+    }
+    return out
+  }
+
+  /** Synchronous search using local Fuse + FTS — for backward compat with sync call sites. */
+  searchSync(options: SearchOptions): SearchResult[] {
+    const { query, limit = 20, filterType, filterTag } = options
+    const q = (query || '').trim()
+
+    if (!q) {
+      return this.getRecentFiles(limit)
+    }
+
+    const special = this.specialSearch(q, limit)
+    if (special) return special
+
+    const fuseHits = this.fuse ? this.fuse.search(q) : []
+    return this.keywordResults(
+      q,
+      limit,
+      filterType,
+      filterTag,
+      this.fuseHitsToResults(fuseHits, q, limit)
+    )
   }
 
   async search(options: SearchOptions): Promise<SearchResult[]> {
@@ -317,64 +411,13 @@ export class SearchEngine {
       return this.getRecentFiles(limit)
     }
 
-    const lower = q.toLowerCase()
+    const special = this.specialSearch(q, limit)
+    if (special) return special
 
-    if (lower === 'orphan:true' || lower === 'is:orphan') {
-      return this.searchOrphans(limit)
-    }
-
-    const backMatch = q.match(/^backlinks?:(.+)$/i)
-    if (backMatch) {
-      return this.searchBacklinks(backMatch[1].trim(), limit)
-    }
-
-    const pathMatch = q.match(/^path:(.+)$/i)
-    if (pathMatch) {
-      return this.searchByPathFragment(pathMatch[1].trim(), limit)
-    }
-
-    const tagMatch = q.match(/^#([a-zA-Z0-9_/-]+)$/)
-    if (tagMatch) {
-      return this.searchByTagExact(tagMatch[1], limit)
-    }
-
-    const results: SearchResult[] = []
-    const seen = new Set<string>()
-
-    if (this.useFts && indexDatabase.isOpen()) {
-      const ftsHits = indexDatabase.searchFts(q, limit)
-      for (const hit of ftsHits) {
-        if (filterType && hit.type !== filterType) continue
-        if (filterTag && !hit.tags.some((t) => t.toLowerCase() === filterTag.toLowerCase()))
-          continue
-        seen.add(hit.id)
-        const score = Math.max(0, Math.min(100, 80 + hit.rank * -2))
-        results.push({
-          id: hit.id,
-          title: hit.title,
-          path: hit.path,
-          relativePath: hit.relativePath,
-          score,
-          type: hit.type,
-          tags: hit.tags,
-          preview: hit.snippet || undefined,
-          matchedField: 'content',
-          source: 'fts'
-        })
-      }
-    }
-
-    if (results.length < limit) {
-      const workerResults = await this.searchFuseWorker(q, limit)
-      for (const r of workerResults) {
-        if (seen.has(r.id)) continue
-        if (filterType && r.type !== filterType) continue
-        if (filterTag && !r.tags.some((t) => t.toLowerCase() === filterTag.toLowerCase())) continue
-        results.push(r)
-        seen.add(r.id)
-        if (results.length >= limit) break
-      }
-    }
+    // WB-2: never query a stale worker index — flush pending deltas first.
+    await this.flushFuseDelta()
+    const fuseResults = await this.searchFuseWorker(q, limit)
+    const results = this.keywordResults(q, limit, filterType, filterTag, fuseResults)
 
     // Hybrid: blend keyword (FTS/Fuse) results with semantic hits so a strong
     // vector match can surface even when the keyword signal is weak — including
@@ -384,30 +427,53 @@ export class SearchEngine {
       try {
         const semHits = await embeddingEngine.search(q, limit)
         const semResults: SearchResult[] = []
+        // WB-12 follow-up (vault validation): a doc that is BOTH a weak keyword
+        // hit and a strong semantic hit must keep its BEST signal. The old
+        // keyword-first dedupe discarded the semantic score for docs already in
+        // `results`, sinking the most relevant doc to the bottom (validated:
+        // 'plugin sdk development' put 28_Plugin_SDK last). Merge per-doc with
+        // max() instead — semantic rescues weak keyword hits without letting a
+        // marginal semantic match leapfrog strong keyword matches.
+        const semBoost = new Map<string, number>()
+        const seen = new Set(results.map((r) => r.id))
         for (const hit of semHits) {
           const entry = this.getEntryByPath(hit.filePath)
-          if (!entry || seen.has(entry.id)) continue
-          semResults.push({
-            id: entry.id,
-            title: entry.title,
-            path: entry.path,
-            relativePath: entry.relativePath,
-            score: hit.score,
-            type: entry.type,
-            tags: entry.tags,
-            preview: hit.chunk.slice(0, 220).replace(/\n/g, ' ').trim(),
-            matchedField: 'content',
-            source: 'semantic'
-          })
-          seen.add(entry.id)
+          if (!entry) continue
+          const s = 0.4 * Math.max(0, Math.min(1, hit.score)) * 100
+          if (seen.has(entry.id)) {
+            const prev = semBoost.get(entry.id)
+            if (prev === undefined || s > prev) semBoost.set(entry.id, s)
+          } else {
+            semResults.push({
+              id: entry.id,
+              title: entry.title,
+              path: entry.path,
+              relativePath: entry.relativePath,
+              score: hit.score,
+              type: entry.type,
+              tags: entry.tags,
+              preview: hit.chunk.slice(0, 220).replace(/\n/g, ' ').trim(),
+              matchedField: 'content',
+              source: 'semantic'
+            })
+            seen.add(entry.id)
+          }
         }
-        if (semResults.length > 0) {
-          const kwNorm = minMaxNormalize(results.map((r) => r.score))
-          const semNorm = minMaxNormalize(semResults.map((r) => r.score))
-          const pool = [
-            ...results.map((r, i) => ({ r, s: 0.6 * kwNorm[i] })),
-            ...semResults.map((r, i) => ({ r, s: 0.4 * semNorm[i] }))
-          ].sort((a, b) => b.s - a.s)
+        if (semResults.length > 0 || semBoost.size > 0) {
+          // WB-12: min-max normalization flattened every keyword score to 1.0
+          // (FTS rank scores are compressed into a narrow band), so even a weak
+          // tail keyword hit outranked a strong vector match. Blend on ABSOLUTE
+          // scales instead — keyword keeps its 0-100 rank/Fuse score, semantic
+          // cosine maps to 0-100. A strong semantic hit (≥~0.9) now surfaces
+          // over weak keyword tail hits while exact keyword matches still lead.
+          const pool = results.map((r) => ({ r, s: 0.6 * r.score }))
+          for (const r of semResults)
+            pool.push({ r, s: 0.4 * Math.max(0, Math.min(1, r.score)) * 100 })
+          for (const [id, s] of semBoost) {
+            const found = pool.find((p) => p.r.id === id)
+            if (found && s > found.s) found.s = s
+          }
+          pool.sort((a, b) => b.s - a.s)
           return pool.slice(0, limit).map((p) => p.r)
         }
       } catch {
@@ -429,40 +495,7 @@ export class SearchEngine {
       }
     }
     if (!this.fuse) return []
-    const fuseResults = this.fuse.search(query)
-    const out: SearchResult[] = []
-    for (const res of fuseResults) {
-      const entry = res.item
-      let preview: string | undefined
-      let matchedField: SearchResult['matchedField'] = 'content'
-      if (res.matches && res.matches.length > 0) {
-        const match = res.matches[0]
-        if (match.key === 'title') matchedField = 'title'
-        else if (match.key === 'tags') matchedField = 'tag'
-        else if (match.key === 'relativePath') matchedField = 'path'
-        if (match.key === 'content' && match.indices && match.indices.length > 0) {
-          const matchStart = match.indices[0][0]
-          const start = Math.max(0, matchStart - 60)
-          const end = Math.min(entry.rawContent.length, matchStart + query.length + 60)
-          preview = '...' + entry.rawContent.slice(start, end).replace(/\n/g, ' ').trim() + '...'
-        }
-      }
-      if (!preview) preview = entry.rawContent.slice(0, 120).replace(/\n/g, ' ').trim()
-      out.push({
-        id: entry.id,
-        title: entry.title,
-        path: entry.path,
-        relativePath: entry.relativePath,
-        score: (1 - (res.score || 0)) * 100,
-        type: entry.type,
-        tags: entry.tags,
-        preview,
-        matchedField,
-        source: 'fuse'
-      })
-      if (out.length >= limit) break
-    }
-    return out
+    return this.fuseHitsToResults(this.fuse.search(query), query, limit)
   }
 
   searchBacklinks(targetTitle: string, limit = 50): SearchResult[] {

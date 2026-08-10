@@ -14,6 +14,8 @@ export type WorkerMessage =
   | { type: 'embed'; texts: string[] }
   | { type: 'search'; queryVector: Float32Array; topK: number; indexSnapshot: ChunkEntry[] }
   | { type: 'buildIndex'; entries: IndexEntry[] }
+  | { type: 'updateEntries'; entries: IndexEntry[] }
+  | { type: 'removeEntries'; ids: string[] }
   | { type: 'fuzzySearch'; query: string; limit: number }
   | { type: 'shutdown' }
 

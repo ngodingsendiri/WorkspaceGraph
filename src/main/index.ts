@@ -4,6 +4,11 @@ import { electronApp, optimizer, is } from '@electron-toolkit/utils'
 import icon from '../../resources/icon.png?asset'
 import { registerIPCHandlers } from './ipc'
 import { workspaceEngine } from './engine/WorkspaceEngine'
+import { installProcessSafetyNet } from './processSafety'
+
+// AD-1: defensive net BEFORE any async work starts — a stray rejection must
+// never take down the main process (and the user's unsaved work) silently.
+installProcessSafetyNet()
 
 /* Global graph now uses SVG for display; GPU flag left optional only. */
 
