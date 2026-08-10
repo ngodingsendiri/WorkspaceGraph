@@ -72,6 +72,18 @@ import { workspaceEngine } from '../engine/WorkspaceEngine'
 import { indexDatabase } from '../engine/IndexDatabase'
 import { aiMiddleware } from '../ai/AIMiddleware'
 import { readProviderDefs } from '../ai/providerRegistry'
+import type { AIProviderDef } from '../ai/providerRegistry'
+
+/** Raw settings.json shape narrowed for the deep reads this test performs. */
+type TestSettings = {
+  ai?: Record<
+    string,
+    { apiKey?: string; baseUrl?: string; defaultModel?: string; [k: string]: unknown }
+  >
+  aiProviders?: Array<AIProviderDef & { apiKey?: string; baseUrl?: string; defaultModel?: string }>
+  activeProvider?: string
+  [key: string]: unknown
+}
 
 /** Invoke a registered handler exactly like ipcRenderer.invoke would. */
 async function invoke(channel: string, ...args: unknown[]): Promise<unknown> {
@@ -251,7 +263,7 @@ describe('IPC handlers end-to-end', () => {
 
   it('dynamic provider registry: get configs → add custom → delete → key cleanup (R2-4)', async () => {
     // Seeds: nothing saved yet → the classic six built-ins as data
-    const initial = (await invoke('ai:getProviderConfigs')) as { defs: any[] }
+    const initial = (await invoke('ai:getProviderConfigs')) as { defs: AIProviderDef[] }
     expect(initial.defs.map((d: { id: string }) => d.id)).toEqual([
       'grok',
       'gemini',
@@ -278,7 +290,7 @@ describe('IPC handlers end-to-end', () => {
     const saved = (await invoke('ai:saveProviderConfigs', [
       custom,
       ...initial.defs.filter((d: { id: string }) => d.id !== 'grok')
-    ])) as { ok: boolean; defs?: any[] }
+    ])) as { ok: boolean; defs?: AIProviderDef[] }
     expect(saved.ok).toBe(true)
     expect(saved.defs?.map((d) => d.id)).toEqual([
       'my-mistral',
@@ -290,7 +302,7 @@ describe('IPC handlers end-to-end', () => {
     ])
 
     // Persisted + the deleted provider's key is gone; active fell back off grok
-    const after = (await invoke('ai:getProviderConfigs')) as { defs: any[] }
+    const after = (await invoke('ai:getProviderConfigs')) as { defs: AIProviderDef[] }
     expect(after.defs.map((d: { id: string }) => d.id)).toContain('my-mistral')
     const persisted = workspaceEngine.getSettings() as Record<string, unknown>
     const persistedAi = (persisted.ai as Record<string, unknown>) || {}
@@ -300,7 +312,7 @@ describe('IPC handlers end-to-end', () => {
     // Delete the custom provider too → list shrinks, no orphan key
     const del = (await invoke('ai:saveProviderConfigs', [
       ...after.defs.filter((d: { id: string }) => d.id !== 'my-mistral')
-    ])) as { ok: boolean; defs?: any[] }
+    ])) as { ok: boolean; defs?: AIProviderDef[] }
     expect(del.ok).toBe(true)
     expect(del.defs?.some((d: { id: string }) => d.id === 'my-mistral')).toBe(false)
     const finalSettings = workspaceEngine.getSettings() as Record<string, unknown>
@@ -317,7 +329,7 @@ describe('IPC handlers end-to-end', () => {
     workspaceEngine.saveSettings(reset)
 
     // 1. Baseline: nothing saved → the six built-in seeds as data
-    const initial = (await invoke('ai:getProviderConfigs')) as { defs: any[] }
+    const initial = (await invoke('ai:getProviderConfigs')) as { defs: AIProviderDef[] }
     expect(initial.defs.map((d: { id: string }) => d.id)).toEqual([
       'grok',
       'gemini',
@@ -332,7 +344,7 @@ describe('IPC handlers end-to-end', () => {
     const add = (await invoke('ai:saveProviderConfigs', [
       ...initial.defs,
       { id: 'grok', name: 'Grok', kind: 'openai-compat', baseUrl: 'https://grok.local/v1' }
-    ])) as { ok: boolean; defs?: any[] }
+    ])) as { ok: boolean; defs?: AIProviderDef[] }
     expect(add.ok).toBe(true)
     const custom = add.defs?.find((d) => d.kind === 'openai-compat')
     // The server dedupes: the custom row must NOT steal the builtin 'grok' id
@@ -346,7 +358,7 @@ describe('IPC handlers end-to-end', () => {
       baseUrl: 'https://grok.local/v1'
     })) as { ok: boolean }
     expect(cfg.ok).toBe(true)
-    const s1 = workspaceEngine.getSettings() as Record<string, any>
+    const s1 = workspaceEngine.getSettings() as TestSettings
     expect(s1.ai?.['grok-2']?.apiKey).toBe('sk-collision-test')
     expect(s1.ai?.['grok']).toBeUndefined() // key never leaked into the builtin
 
@@ -357,16 +369,19 @@ describe('IPC handlers end-to-end', () => {
       )
     ])) as { ok: boolean }
     expect(edit.ok).toBe(true)
-    const s2 = workspaceEngine.getSettings() as Record<string, any>
+    const s2 = workspaceEngine.getSettings() as TestSettings
     // The def holds the new URL...
-    const def2 = s2.aiProviders.find((d: { id: string }) => d.id === 'grok-2')
+    const def2 = s2.aiProviders!.find((d: { id: string }) => d.id === 'grok-2')
     expect(def2?.baseUrl).toBe('https://grok-new.local/v1')
     // ...and the key entry must follow, or loadSettingsIntoProviders would
     // re-apply the STALE url onto the live provider until the next restart
     expect(s2.ai?.['grok-2']?.baseUrl).toBe('https://grok-new.local/v1')
 
     // 5. Delete ALL providers — explicit empty must persist (no seed resurrection)
-    const del = (await invoke('ai:saveProviderConfigs', [])) as { ok: boolean; defs?: any[] }
+    const del = (await invoke('ai:saveProviderConfigs', [])) as {
+      ok: boolean
+      defs?: AIProviderDef[]
+    }
     expect(del.ok).toBe(true)
     expect(del.defs).toEqual([])
     const s3 = workspaceEngine.getSettings() as Record<string, unknown>
@@ -379,7 +394,7 @@ describe('IPC handlers end-to-end', () => {
     // restored), no custom rows, keys still empty
     const resetDefs = (await invoke('ai:resetProviderConfigs')) as {
       ok: boolean
-      defs?: any[]
+      defs?: AIProviderDef[]
     }
     expect(resetDefs.ok).toBe(true)
     expect(resetDefs.defs?.map((d) => d.id)).toEqual([
@@ -399,10 +414,10 @@ describe('IPC handlers end-to-end', () => {
       error?: string
     }
     expect(pick.ok).toBe(true)
-    const s4 = workspaceEngine.getSettings() as Record<string, any>
-    expect(s4.ai.gemini.defaultModel).toBe('gemini-2.5-flash')
-    const def4 = s4.aiProviders.find((d: { id: string }) => d.id === 'gemini')
-    expect(def4.defaultModel).toBe('gemini-2.5-flash')
+    const s4 = workspaceEngine.getSettings() as TestSettings
+    expect(s4.ai?.gemini?.defaultModel).toBe('gemini-2.5-flash')
+    const def4 = s4.aiProviders!.find((d: { id: string }) => d.id === 'gemini')
+    expect(def4?.defaultModel).toBe('gemini-2.5-flash')
     // Unknown provider → clean error, nothing persisted
     const bad = (await invoke('ai:setProviderDefaultModel', 'nope', 'x')) as {
       ok: boolean
@@ -413,7 +428,7 @@ describe('IPC handlers end-to-end', () => {
 
   it('auto-verify chain after Save: key survives test+refresh+getProviders (paste→Save→"tes otomatis")', async () => {
     // Clean slate → builtin seeds, no keys, gemini active
-    const reset = workspaceEngine.getSettings() as Record<string, any>
+    const reset = workspaceEngine.getSettings() as TestSettings
     reset.aiProviders = undefined
     delete reset.ai
     reset.activeProvider = 'gemini'
@@ -428,7 +443,7 @@ describe('IPC handlers end-to-end', () => {
     vi.stubGlobal('fetch', net)
     try {
       // 1. Renderer row-Save step 1: persist defs (handleSaveProviderRow → persistDefs)
-      const defsBefore = (await invoke('ai:getProviderConfigs')) as { defs: any[] }
+      const defsBefore = (await invoke('ai:getProviderConfigs')) as { defs: AIProviderDef[] }
       const saved = (await invoke('ai:saveProviderConfigs', defsBefore.defs)) as { ok: boolean }
       expect(saved.ok).toBe(true)
 
@@ -442,7 +457,7 @@ describe('IPC handlers end-to-end', () => {
         defaultModel: gemini?.defaultModel || 'gemini-2.5-flash'
       })) as { ok: boolean; error?: string }
       expect(cfg.ok).toBe(true)
-      const afterSave = workspaceEngine.getSettings() as Record<string, any>
+      const afterSave = workspaceEngine.getSettings() as TestSettings
       expect(afterSave.ai?.gemini?.apiKey).toBe('sk-auto-verify-123')
 
       // 3. Auto-verify chain — what runs after the "…tes otomatis…" flash:
@@ -465,16 +480,14 @@ describe('IPC handlers end-to-end', () => {
       // 4. The card can truthfully show "Key saved" — key still on disk after
       //    the whole verify chain, and a LATER def re-save keeps it too (a
       //    row edit without re-typing the key must not wipe it).
-      const afterVerify = workspaceEngine.getSettings() as Record<string, any>
+      const afterVerify = workspaceEngine.getSettings() as TestSettings
       expect(afterVerify.ai?.gemini?.apiKey).toBe('sk-auto-verify-123')
       const resave = (await invoke('ai:saveProviderConfigs', defsBefore.defs)) as { ok: boolean }
       expect(resave.ok).toBe(true)
-      const afterResave = workspaceEngine.getSettings() as Record<string, any>
+      const afterResave = workspaceEngine.getSettings() as TestSettings
       expect(afterResave.ai?.gemini?.apiKey).toBe('sk-auto-verify-123')
       // The def list itself never carries the key (defs are key-free by design)
-      expect((afterResave.aiProviders as any[]).find((d) => d.id === 'gemini')?.apiKey).toBe(
-        undefined
-      )
+      expect(afterResave.aiProviders!.find((d) => d.id === 'gemini')?.apiKey).toBe(undefined)
 
       // 5. SAVE WITH A FAILING CONFIGURE (mock main throwing): ai:configure
       //    must return {ok:false} with the error AND persist nothing — so the
@@ -491,7 +504,7 @@ describe('IPC handlers end-to-end', () => {
       expect(failCfg.error).toContain('boom')
       // Nothing persisted by the failed save — and the previously saved key is
       // untouched (a failed configure must never corrupt or wipe it)
-      const afterFail = workspaceEngine.getSettings() as Record<string, any>
+      const afterFail = workspaceEngine.getSettings() as TestSettings
       expect(afterFail.ai?.gemini?.apiKey).toBe('sk-auto-verify-123')
       expect(afterFail.ai?.gemini?.apiKey).not.toBe('sk-fail-test')
     } finally {
@@ -503,14 +516,14 @@ describe('IPC handlers end-to-end', () => {
   it('malformed IPC payloads degrade to clean errors — never wipe or crash state', async () => {
     // A non-array defs payload must NOT wipe the saved provider list (a legit
     // delete-all is an explicit []); unknown/null/object forms are rejected
-    const before = (await invoke('ai:getProviderConfigs')) as { defs: any[] }
+    const before = (await invoke('ai:getProviderConfigs')) as { defs: AIProviderDef[] }
     const bad = (await invoke('ai:saveProviderConfigs', 'not-an-array')) as {
       ok: boolean
       error?: string
     }
     expect(bad.ok).toBe(false)
     expect(bad.error).toContain('array')
-    const after = (await invoke('ai:getProviderConfigs')) as { defs: any[] }
+    const after = (await invoke('ai:getProviderConfigs')) as { defs: AIProviderDef[] }
     expect(after.defs.map((d: { id: string }) => d.id)).toEqual(
       before.defs.map((d: { id: string }) => d.id)
     )

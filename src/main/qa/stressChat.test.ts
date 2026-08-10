@@ -345,7 +345,7 @@ describe('stress: chat resume path at vault scale', () => {
     const base = measureList()
     expect(base.convs).toBe(BASELINE)
     expect(base.cps).toBe(BASELINE)
-    // eslint-disable-next-line no-console
+
     console.log(
       `[stress-chat] baseline ${BASELINE} convs @ big vault: save=${tSaveBase}ms listConv=${base.convsMs}ms listCp=${base.cpsMs}ms`
     )
@@ -354,14 +354,14 @@ describe('stress: chat resume path at vault scale', () => {
     const tSave0 = Date.now()
     for (let i = BASELINE; i < CONVERSATION_COUNT; i++) saveSession(i)
     const tSave = Date.now() - tSave0
-    // eslint-disable-next-line no-console
+
     console.log(`[stress-chat] save ${CONVERSATION_COUNT} conv + cps @ big vault: ${tSave}ms`)
     expect(tSave).toBeLessThan(90_000)
 
     const big = measureList()
     expect(big.convs).toBe(CONVERSATION_COUNT)
     expect(big.cps).toBe(CONVERSATION_COUNT)
-    // eslint-disable-next-line no-console
+
     console.log(
       `[stress-chat] list @ big vault (${CONVERSATION_COUNT}): listConv=${big.convsMs}ms listCp=${big.cpsMs}ms`
     )
@@ -381,7 +381,7 @@ describe('stress: chat resume path at vault scale', () => {
     const tLoadBig0 = Date.now()
     loadConversation(sessionId(CONVERSATION_COUNT - 1))
     const tLoadBig = Date.now() - tLoadBig0
-    // eslint-disable-next-line no-console
+
     console.log(
       `[stress-chat] loadConversation: @${BASELINE}≈${tLoadBase}ms @${CONVERSATION_COUNT}=${tLoadBig}ms`
     )
@@ -450,7 +450,7 @@ describe('stress: chat resume path at vault scale', () => {
     const tResume0 = Date.now()
     const resumeChunks = await runResumeStream(mid2, provider2, 'req-big-resume', cp)
     const tResume = Date.now() - tResume0
-    // eslint-disable-next-line no-console
+
     console.log(`[stress-chat] resume stream @ big vault: ${tResume}ms`)
     expect(tResume).toBeLessThan(30_000)
 
@@ -529,11 +529,10 @@ describe('stress: chat resume path at vault scale', () => {
     await runResumeStream(bm2, bp2, 'req-big-resume2', bCp)
     const bResume = Date.now() - bResumeT
 
-    // eslint-disable-next-line no-console
     console.log(
       `[stress-chat] small (${SMALL_NOTES} notes): interrupt=${sInterrupt}ms save=${sSave}ms load=${sLoad}ms list=${sList}ms resume=${sResume}ms`
     )
-    // eslint-disable-next-line no-console
+
     console.log(
       `[stress-chat] big   (${BIG_NOTES} notes): interrupt=${bInterrupt}ms save=${bSave}ms load=${bLoad}ms list=${bList}ms resume=${bResume}ms`
     )

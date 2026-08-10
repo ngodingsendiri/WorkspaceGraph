@@ -347,7 +347,6 @@ describe('LIVE resume flow — cancel mid-tool-round → Lanjutkan (renderer sto
       'Selesai: resume tuntas'
     )
 
-    // eslint-disable-next-line no-console
     console.log(`[resume-live] interrupt=${tInterrupt}ms resume=${tResume}ms`)
     expect(tResume).toBeLessThan(2_000)
   }, 60_000)

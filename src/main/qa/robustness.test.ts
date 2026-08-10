@@ -15,7 +15,7 @@ import { tmpdir } from 'os'
  * exactly like the real binding does with a garbage db (SQLITE_NOTADB).
  */
 const dbMock = vi.hoisted(() => ({ failNext: false }))
-// eslint-disable-next-line @typescript-eslint/no-require-imports
+
 vi.mock('better-sqlite3', () => {
   const m = {
     prepare: vi.fn(() => ({ run: vi.fn(), get: vi.fn(), all: vi.fn(() => []) })),

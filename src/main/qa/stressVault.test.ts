@@ -70,7 +70,7 @@ describe('stress: thousands of files + giant binaries open without hang/crash', 
       state = workspaceEngine.openWorkspace(vault)
     }).not.toThrow()
     const elapsed = Date.now() - t0
-    // eslint-disable-next-line no-console
+
     console.log(`[stress] openWorkspace: ${elapsed}ms — ${state.totalFiles} files`)
     expect(state.totalFiles).toBeGreaterThanOrEqual(NOTE_COUNT + BINARY_COUNT)
     expect(state.totalNotes).toBeGreaterThanOrEqual(NOTE_COUNT)
@@ -84,7 +84,7 @@ describe('stress: thousands of files + giant binaries open without hang/crash', 
     const elapsed = Date.now() - t0
     // totalFiles is the recursive count (files are nested in subfolders)
     const total = workspaceEngine.getState().totalFiles
-    // eslint-disable-next-line no-console
+
     console.log(`[stress] refreshFiles: ${elapsed}ms — ${total} files`)
     expect(total).toBeGreaterThanOrEqual(NOTE_COUNT + BINARY_COUNT)
     expect(elapsed).toBeLessThan(30_000)
@@ -93,7 +93,7 @@ describe('stress: thousands of files + giant binaries open without hang/crash', 
   it('index db opens against the big vault (SQLite or Fuse fallback, never a crash)', () => {
     const t0 = Date.now()
     expect(() => indexDatabase.open(vault)).not.toThrow()
-    // eslint-disable-next-line no-console
+
     console.log(`[stress] indexDatabase.open: ${Date.now() - t0}ms`)
   }, 60_000)
 

@@ -1,2 +1,5 @@
-# Auto detect text files and perform LF normalization
-* text=auto
+# Auto detect text files and perform LF normalization (decision AG-2, 2026-08-10)
+* text=auto eol=lf
+
+# Windows batch scripts: keep CRLF (cmd.exe label/goto parsing)
+*.bat text eol=crlf
