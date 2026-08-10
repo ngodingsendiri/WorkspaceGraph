@@ -504,7 +504,11 @@ export function parseToolActions(text: string): ToolAction[] {
     }
   }
 
-  // Dedupe consecutive identical tool+args
+  // Dedupe identical tool+args GLOBALLY (AD-2): `seen` spans the whole list,
+  // so a repeated action collapses even when other tools sit between the two
+  // copies. Intentional — the model occasionally re-emits the same write or
+  // read; keeping both would surface duplicate write proposals / duplicate
+  // citations. (Not just consecutive on purpose.)
   const seen = new Set<string>()
   return actions.filter((a) => {
     const key = `${a.tool}:${JSON.stringify(a.args || {})}`

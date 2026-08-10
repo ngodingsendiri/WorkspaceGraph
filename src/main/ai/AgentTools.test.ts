@@ -79,11 +79,34 @@ Then create a note.
       expect(actions.some((a) => a.tool === 'search')).toBe(true)
     })
 
-    it('dedupes consecutive identical actions', () => {
+    it('dedupes identical actions', () => {
       const actions = parseToolActions(
         '```wg-action\n{"tool":"search","args":{"query":"x"}}\n```\n```wg-action\n{"tool":"search","args":{"query":"x"}}\n```'
       )
       expect(actions).toHaveLength(1)
+    })
+
+    // AD-2: dedup is GLOBAL, not consecutive — a repeated action collapses even
+    // when other tools sit between the two copies
+    // (the model re-issues the same write/read mid-stream).
+    it('dedupes identical actions globally (not only when adjacent)', () => {
+      const actions = parseToolActions(
+        '```wg-action\n{"tool":"search","args":{"query":"x"}}\n```\n' +
+          '```wg-action\n{"tool":"list_dir","args":{}}\n```\n' +
+          '```wg-action\n{"tool":"search","args":{"query":"x"}}\n```'
+      )
+      expect(actions).toEqual([
+        { tool: 'search', args: { query: 'x' } },
+        { tool: 'list_dir', args: {} }
+      ])
+    })
+
+    it('keeps distinct actions that only overlap in tool name', () => {
+      const actions = parseToolActions(
+        '```wg-action\n{"tool":"search","args":{"query":"x"}}\n```\n' +
+          '```wg-action\n{"tool":"search","args":{"query":"y"}}\n```'
+      )
+      expect(actions).toHaveLength(2)
     })
 
     it('returns empty for no tool blocks', () => {
