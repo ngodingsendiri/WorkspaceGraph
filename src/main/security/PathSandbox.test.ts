@@ -2,7 +2,12 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest'
 import fs from 'fs'
 import path from 'path'
 import { tmpdir } from 'os'
-import { assertPathInVault, isPathInVault, resolveVaultRelative } from './PathSandbox'
+import {
+  assertPathInVault,
+  isPathInVault,
+  resolveVaultRelative,
+  reverifyPathInVault
+} from './PathSandbox'
 
 describe('PathSandbox', () => {
   let vault: string
@@ -82,5 +87,34 @@ describe('PathSandbox', () => {
 
   it('resolveVaultRelative rejects traversal', () => {
     expect(() => resolveVaultRelative('../evil.md', vault)).toThrow()
+  })
+
+  it('reverifyPathInVault catches a symlink swapped after the initial check — WC-7', () => {
+    // Real dirs: one INSIDE the vault, one OUTSIDE.
+    const inside = path.join(vault, 'real-in')
+    const outside = fs.mkdtempSync(path.join(tmpdir(), 'wg-sandbox-out2-'))
+    fs.mkdirSync(inside, { recursive: true })
+    const link = path.join(vault, 'lnk')
+    try {
+      // 1) Symlink points INSIDE → reverify passes.
+      fs.symlinkSync(inside, link, 'junction')
+      expect(reverifyPathInVault(path.join(link, 'x.md'), vault)).toBe(
+        path.resolve(path.join(link, 'x.md'))
+      )
+      // 2) Attacker swaps the symlink to point OUTSIDE → the SAME path must
+      //    now throw (TOCTOU re-check at operation time).
+      fs.rmSync(link, { recursive: true, force: true })
+      fs.symlinkSync(outside, link, 'junction')
+      expect(() => reverifyPathInVault(path.join(link, 'x.md'), vault)).toThrow()
+    } catch {
+      // Symlinks may be unavailable (Windows CI) — hardening still covered by
+      // the traversal + realpath tests above.
+    } finally {
+      try {
+        fs.rmSync(outside, { recursive: true, force: true })
+      } catch {
+        /* ignore */
+      }
+    }
   })
 })

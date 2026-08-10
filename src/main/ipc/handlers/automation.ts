@@ -23,8 +23,16 @@ export function registerAutomationHandlers(): void {
   })
 
   ipcMain.handle('automation:setEnabled', async (_, enabled: boolean) => {
+    // AE-3: gate enabling on the Automation permission, consistent with
+    // automation:save / automation:runRule. Turning OFF is always allowed.
+    // The Settings toggle grants the permission itself (WC-4 default-off), so
+    // a real user flipping the switch is never blocked by this gate.
+    const perms = readPermissions(workspaceEngine.getSettings())
+    if (Boolean(enabled) && !perms.automation) {
+      return { ok: false, error: 'Automation permission disabled (Settings → Security)' }
+    }
     automationEngine.setEnabled(Boolean(enabled))
-    return true
+    return { ok: true }
   })
 
   ipcMain.handle('automation:runRule', async (_, ruleId: string) => {

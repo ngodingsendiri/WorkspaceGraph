@@ -10,16 +10,16 @@ export interface AppPermissions {
   automation: boolean
   /** Load declarative plugins */
   plugins: boolean
-  /** Allow write proposals from AI without extra UI gate is never true — always confirm */
-  aiAutoWrite: boolean
 }
 
 export const DEFAULT_PERMISSIONS: AppPermissions = {
   aiAccess: true,
   aiTools: true,
-  automation: true,
-  plugins: true,
-  aiAutoWrite: false
+  // WC-4 decision (2026-08-10): plugins (code execution) and automation (file
+  // actions) are OPT-IN — a fresh vault / untrusted folder must never auto-load
+  // either. Users enable them explicitly in Settings → Security.
+  automation: false,
+  plugins: false
 }
 
 export function readPermissions(settings: Record<string, unknown>): AppPermissions {
@@ -27,8 +27,8 @@ export function readPermissions(settings: Record<string, unknown>): AppPermissio
   return {
     aiAccess: p.aiAccess !== false,
     aiTools: p.aiTools !== false,
-    automation: p.automation !== false,
-    plugins: p.plugins !== false,
-    aiAutoWrite: p.aiAutoWrite === true
+    // Explicit opt-in: absent/undefined → OFF (default-off posture).
+    automation: p.automation === true,
+    plugins: p.plugins === true
   }
 }

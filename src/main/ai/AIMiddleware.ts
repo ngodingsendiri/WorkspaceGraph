@@ -1341,10 +1341,11 @@ export class AIMiddleware {
       return
     }
 
-    // Ensure model is set — avoid empty / accidental pro on free tier
-    if (!request.model || request.model === 'undefined') {
-      request.model = provider.getDefaultModel()
-    }
+    // Ensure model is set — avoid empty / accidental pro on free tier. AD-4:
+    // the effective model rides a LOCAL — never mutate the caller's request
+    // (the failover loop relies on request.model keeping the caller's intent).
+    const model =
+      request.model && request.model !== 'undefined' ? request.model : provider.getDefaultModel()
     // P-A1: providers with native function calling get the tools array;
     // everyone else (Claude/Gemini/Ollama) falls back to the wg-action fence.
     const nativeTools = enableTools && provider.capabilities.toolCalling
@@ -1357,7 +1358,7 @@ export class AIMiddleware {
     // Soft guard: gemini-2.5-pro often has free-tier limit 0
     if (
       provider.id === 'gemini' &&
-      /gemini-2\.5-pro|gemini-1\.5-pro/i.test(request.model) &&
+      /gemini-2\.5-pro|gemini-1\.5-pro/i.test(model) &&
       process.env.WG_ALLOW_GEMINI_PRO !== '1'
     ) {
       // Don't force-switch (user may have paid tier) — just note in first chunk if fails
@@ -1395,7 +1396,7 @@ export class AIMiddleware {
     // [Compacted] block — the recent tail survives, so a 200-message chat
     // never stalls on provider limits. No extra model call (extractive).
     const compactBudget =
-      (await this.resolveCompactionBudget(provider, request.model)) -
+      (await this.resolveCompactionBudget(provider, model)) -
       (contextTokens ?? 0) -
       RESERVED_OUTPUT_TOKENS
     const compact = compactMessages(messages, Math.max(4096, compactBudget))
@@ -1455,10 +1456,10 @@ export class AIMiddleware {
     // under-count output cost when the provider sends a real usage chunk.
     const streamCostUsd = (): number =>
       estimateStreamCostUsd(
-        request.model || provider.getDefaultModel(),
+        model,
         contextTokens ?? 0,
         estimatedTokens,
-        provider.modelPricing(request.model || provider.getDefaultModel())
+        provider.modelPricing(model)
       )
 
     // P1-4: count provider calls actually made so the terminal chunk can report
@@ -1507,7 +1508,10 @@ export class AIMiddleware {
         // prompt (tool results carry the material; the full context would be
         // re-billed on every continuation of a multi-round stream).
         systemPrompt: round === 0 ? systemPrompt : leanSystemPrompt,
-        stream: true
+        stream: true,
+        // AD-4: carry the locally-resolved effective model (never mutating
+        // the caller's request object)
+        model
       }
       if (nativeTools) {
         // P1 / R1-3: advertise the tools this role may call under the current

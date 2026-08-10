@@ -3,7 +3,7 @@ import { workspaceEngine } from '../../engine/WorkspaceEngine'
 import { pluginHost } from '../../plugin/PluginHost'
 import { InternalAPI } from '../../api/InternalAPI'
 import { readPermissions } from '../../security/Permissions'
-import { isEncryptedForm } from '../../security/SecretsStore'
+import { isEncryptedForm, decryptSecret } from '../../security/SecretsStore'
 
 export function registerPluginsHandlers(): void {
   ipcMain.handle('plugins:list', async () => {
@@ -49,8 +49,11 @@ export function registerPluginsHandlers(): void {
     const keyStatus: Record<string, string> = {}
     for (const [id, cfg] of Object.entries(ai)) {
       if (!cfg?.apiKey) keyStatus[id] = 'empty'
-      else if (isEncryptedForm(cfg.apiKey)) keyStatus[id] = 'encrypted'
-      else if (String(cfg.apiKey).startsWith('plain:')) keyStatus[id] = 'plaintext-fallback'
+      // WA-8: an enc:v1 key that no longer decrypts (keychain/device changed)
+      // is reported explicitly instead of masquerading as a healthy key.
+      else if (isEncryptedForm(cfg.apiKey)) {
+        keyStatus[id] = decryptSecret(cfg.apiKey) ? 'encrypted' : 'decrypt-failed'
+      } else if (String(cfg.apiKey).startsWith('plain:')) keyStatus[id] = 'plaintext-fallback'
       else keyStatus[id] = 'legacy-plaintext'
     }
     return {

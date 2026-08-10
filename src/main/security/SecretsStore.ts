@@ -6,6 +6,19 @@ import { safeStorage } from 'electron'
 
 const ENC_PREFIX = 'enc:v1:'
 
+// WA-8: warn ONCE per stored value — a permanently undecryptable key (device /
+// keychain changed) must never look like a silent "empty key" on every read.
+const warnedDecryptFailures = new Set<string>()
+
+function warnDecryptFailure(stored: string, reason: string): void {
+  if (warnedDecryptFailures.has(stored)) return
+  warnedDecryptFailures.add(stored)
+  console.warn(
+    `[SecretsStore] API key cannot be decrypted (${reason}) — treated as missing. ` +
+      'Re-enter the key in Settings to restore it.'
+  )
+}
+
 export function encryptSecret(plain: string): string {
   if (!plain) return plain
   try {
@@ -26,11 +39,15 @@ export function decryptSecret(stored: string): string {
     try {
       if (safeStorage.isEncryptionAvailable()) {
         const buf = Buffer.from(stored.slice(ENC_PREFIX.length), 'base64')
-        return safeStorage.decryptString(buf)
+        const plain = safeStorage.decryptString(buf)
+        if (plain) return plain
+        throw new Error('decrypted value is empty')
       }
-    } catch {
+    } catch (_err) {
+      warnDecryptFailure(stored, 'safeStorage error')
       return ''
     }
+    warnDecryptFailure(stored, 'safeStorage unavailable')
     return ''
   }
   if (stored.startsWith('plain:')) return stored.slice(6)

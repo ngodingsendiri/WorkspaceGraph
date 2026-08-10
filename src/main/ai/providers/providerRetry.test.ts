@@ -11,8 +11,12 @@ describe('isRetryableProviderError (R0-3)', () => {
     expect(isRetryableProviderError(Object.assign(new Error('limit'), { status: 429 }))).toBe(true)
     expect(isRetryableProviderError(Object.assign(new Error('boom'), { status: 503 }))).toBe(true)
     expect(isRetryableProviderError(Object.assign(new Error('boom'), { status: 500 }))).toBe(true)
-    expect(isRetryableProviderError(Object.assign(new Error('bad key'), { status: 401 }))).toBe(false)
-    expect(isRetryableProviderError(Object.assign(new Error('bad req'), { status: 400 }))).toBe(false)
+    expect(isRetryableProviderError(Object.assign(new Error('bad key'), { status: 401 }))).toBe(
+      false
+    )
+    expect(isRetryableProviderError(Object.assign(new Error('bad req'), { status: 400 }))).toBe(
+      false
+    )
   })
 
   it('falls back to the message text when the SDK does not set .status', () => {

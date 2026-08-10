@@ -23,29 +23,13 @@ export function registerMcpHandlers(): void {
   })
 
   /**
-   * Live-test a candidate server (add/edit form): registers it temporarily,
-   * connects (handshake + tools/list), reports tool count / error, then
-   * restores the previous config — the vault config is only touched on Save.
+   * Live-test a candidate server (add/edit form): AE-6 — registers it in
+   * memory only via mcpManager.testServer (no persist+restore round-trip of
+   * mcp.json), connects (handshake + tools/list), reports tool count / error,
+   * then restores the previous config. The vault config is only touched on Save.
    */
   ipcMain.handle('mcp:testServer', async (_, server: McpServerConfig) => {
-    const prev = mcpManager.getServers()
-    const id = server.id
-    try {
-      const save = mcpManager.saveServers([...prev.filter((s) => s.id !== id), server])
-      if (!save.ok) return { ok: false, error: save.error }
-      await mcpManager.ensureConnected([id])
-      const status = mcpManager.getStatus().find((s) => s.id === id)
-      return {
-        ok: status?.connected === true,
-        tools: status?.tools ?? 0,
-        error: status?.error
-      }
-    } catch (err) {
-      return { ok: false, error: err instanceof Error ? err.message : String(err) }
-    } finally {
-      await mcpManager.disconnect(id)
-      mcpManager.saveServers(prev)
-    }
+    return mcpManager.testServer(server)
   })
 
   /** All discovered tools across connected servers (flattened, for display). */

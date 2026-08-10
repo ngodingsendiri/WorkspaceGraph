@@ -21,6 +21,7 @@
 import fs from 'fs'
 import path from 'path'
 import { workspaceEngine } from '../engine/WorkspaceEngine'
+import { atomicWriteJson } from '../utils/quarantine'
 
 export type PromptId = 'kernel' | 'bootstrap' | 'toolsHead' | 'toolsTail'
 export type PromptCategory = 'system' | 'user'
@@ -125,9 +126,11 @@ export function loadPromptEntries(root?: string | null): Record<PromptId, Prompt
   const file = promptsFilePath(root)
   try {
     if (!fs.existsSync(file)) {
-      // Materialize once — prompts are visible, editable assets (like AI Memory)
+      // Materialize once — prompts are visible, editable assets (like AI Memory).
+      // AD-3: atomic write (same pattern as settings/recent) — a crash mid-write
+      // leaves the previous file intact instead of a truncated prompts.json.
       fs.mkdirSync(promptsDir(root), { recursive: true })
-      fs.writeFileSync(file, JSON.stringify(PROMPT_DEFAULTS, null, 2), 'utf-8')
+      atomicWriteJson(file, PROMPT_DEFAULTS)
     }
     const parsed = JSON.parse(fs.readFileSync(file, 'utf-8')) as Partial<
       Record<PromptId, PromptEntry>

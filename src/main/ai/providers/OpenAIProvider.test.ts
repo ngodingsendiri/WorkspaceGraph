@@ -90,7 +90,9 @@ describe('OpenAIProvider.ensureChatBase (lazy base adoption on chat path)', () =
     }
     const p = new OpenAIProvider() as unknown as WithRetry
     p.configure({ apiKey: 'sk-x', baseUrl: 'https://host/v1' })
-    const create = vi.fn().mockRejectedValue(Object.assign(new Error('401 Unauthorized'), { status: 401 }))
+    const create = vi
+      .fn()
+      .mockRejectedValue(Object.assign(new Error('401 Unauthorized'), { status: 401 }))
     p.client.chat.completions.create = create as never
 
     await expect(
@@ -123,12 +125,16 @@ describe('OpenAIProvider.ensureChatBase (lazy base adoption on chat path)', () =
     p.client.chat.completions.create = create as never
 
     const chunks: AIStreamChunk[] = []
-    await p.streamMessage(
-      { messages: [{ role: 'user', content: 'hi' }], model: 'm1' },
-      (c) => chunks.push(c)
+    await p.streamMessage({ messages: [{ role: 'user', content: 'hi' }], model: 'm1' }, (c) =>
+      chunks.push(c)
     )
     // Content from the SUCCESSFUL attempt only — nothing duplicated from the retried create
-    expect(chunks.filter((c) => c.content).map((c) => c.content).join('')).toBe('hello')
+    expect(
+      chunks
+        .filter((c) => c.content)
+        .map((c) => c.content)
+        .join('')
+    ).toBe('hello')
     expect(create).toHaveBeenCalledTimes(2)
   })
 
