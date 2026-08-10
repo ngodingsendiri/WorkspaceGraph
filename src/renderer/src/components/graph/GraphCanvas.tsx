@@ -5,15 +5,7 @@
  * Physics goal (Obsidian benchmark): alive but stable — soft settle, hubs
  * breathe, filter/data updates soft-merge positions (no full explode).
  */
-import React, {
-  useEffect,
-  useRef,
-  useState,
-  useMemo,
-  useCallback,
-  useLayoutEffect,
-  memo
-} from 'react'
+import React, { useEffect, useRef, useState, useMemo, useCallback } from 'react'
 import * as d3 from 'd3'
 import {
   useGraphStore,
@@ -34,13 +26,11 @@ import {
   resolveObsidianNodeFill,
   labelDrawBudget,
   resolveLod,
-  applyForceLayout,
   edgeKey,
   smooth01,
   lerp,
   easeOutCubic,
   FORCE_PRESETS,
-  type LodLevel,
   canvasSafeColor,
   readPalette,
   nid,
@@ -63,7 +53,6 @@ import {
   baseEdgeWidth,
   edgeColorFor,
   shouldThrottleSvgPush,
-  SVG_PUSH_THROTTLE_MS,
   NODE_ENTRY_MS,
   NODE_ENTRY_STAGGER_MS,
   nodeEntryProgress,
@@ -80,14 +69,20 @@ import {
   labelBelowNode
 } from './graphRenderTokens'
 import {
-  RollingPerfStats,
-  AdaptiveThrottle,
+  useGraphPerf,
   THROTTLE_TARGET_P95_MS,
   THROTTLE_MIN_MS,
-  THROTTLE_MAX_MS,
-  type PerfSnapshot
-} from './graphPerfStats'
-import { drawSparkBars, sparkLayout, SPARK_BARS } from './graphPerfSpark'
+  THROTTLE_MAX_MS
+} from './graphPerfOverlay'
+import { RollingPerfStats } from './graphPerfStats'
+import { SvgEdgeItem, SvgNodeItem, SvgLabelItem, PerfSparkChart } from './graphSvgItems'
+import {
+  DEFAULT_DISPLAY_OPTS,
+  resolveGroupColors,
+  lodLabel,
+  applyForces,
+  spiralSeed
+} from './graphQuery'
 import {
   SpatialHash2D,
   diagnoseEmptyFilter,
@@ -115,113 +110,6 @@ import {
 import type { GraphSearchMode } from '../../store/graphStore'
 
 /**
- * G-perf: memoized SVG element components. Each takes the element object as a
- * single prop; React.memo's default shallow compare turns into a reference
- * check, so elements whose object identity is stable across frames (delta
- * merge) bail out without re-rendering or DOM diffing. Defined at module scope
- * so the component identity is stable across GraphCanvas renders.
- */
-const SvgEdgeItem = memo(function SvgEdgeItem({ e }: { e: SvgEdge }) {
-  return (
-    <line
-      x1={e.x1}
-      y1={e.y1}
-      x2={e.x2}
-      y2={e.y2}
-      stroke={e.stroke}
-      strokeWidth={e.sw}
-      strokeOpacity={e.op}
-      strokeLinecap="round"
-      strokeDasharray={e.dash}
-    />
-  )
-})
-
-const SvgNodeItem = memo(function SvgNodeItem({ n }: { n: SvgNode }) {
-  return (
-    <circle
-      cx={n.cx}
-      cy={n.cy}
-      r={n.r}
-      fill={n.fill === 'none' ? 'none' : n.fill}
-      stroke={n.stroke}
-      strokeWidth={n.sw}
-      fillOpacity={n.fill === 'none' ? 0 : n.fillOp}
-      strokeOpacity={n.strokeOp ?? (n.fill === 'none' ? n.fillOp : 1)}
-      strokeDasharray={n.kind === 'ghost' ? '2 2' : n.dash}
-    />
-  )
-})
-
-const SvgLabelItem = memo(function SvgLabelItem({ lab }: { lab: SvgLabel }) {
-  return (
-    <text
-      x={lab.x}
-      y={lab.y}
-      fill={lab.fill}
-      fillOpacity={lab.op}
-      fontSize={11}
-      fontFamily='Inter, "Segoe UI", system-ui, sans-serif'
-      fontWeight={lab.bold ? 600 : 400}
-      textAnchor="middle"
-      dominantBaseline="middle"
-    >
-      {lab.text}
-    </text>
-  )
-})
-
-/**
- * G-perf overlay spark chart: last SPARK_BARS commit durations as bars on a
- * tiny canvas. Theme-aware via CSS vars (read once per draw — cheap, and the
- * chart only draws while the overlay is visible). Renders empty until samples
- * arrive; bars over the target p95 are tinted to flag throttling spikes.
- */
-function readThemeVar(name: string, fallback: string): string {
-  if (typeof document === 'undefined') return fallback
-  return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fallback
-}
-
-const PerfSparkChart = memo(function PerfSparkChart({
-  samples,
-  width = 200,
-  height = 30
-}: {
-  samples: number[]
-  width?: number
-  height?: number
-}) {
-  const ref = useRef<HTMLCanvasElement | null>(null)
-  useEffect(() => {
-    const cv = ref.current
-    if (!cv) return
-    const dpr = Math.min(window.devicePixelRatio || 1, 2)
-    cv.width = width * dpr
-    cv.height = height * dpr
-    const ctx = cv.getContext('2d')
-    if (!ctx) return
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
-    drawSparkBars(ctx, sparkLayout(samples, width, height, THROTTLE_TARGET_P95_MS), {
-      bar: readThemeVar('--color-info', '#4cc9f0'),
-      over: readThemeVar('--color-error', '#f0567c'),
-      targetLine: readThemeVar('--color-warning', '#f5a623')
-    })
-  }, [samples, width, height])
-  return <canvas ref={ref} className="graph-perf-spark" />
-})
-
-/** Obsidian-like display defaults (text fade soft at distance).
- *  textFade 0.75 (G6): labels reach solid earlier on zoom-in than 0.9. */
-// eslint-disable-next-line react-refresh/only-export-components -- shared const, not a component
-export const DEFAULT_DISPLAY_OPTS: GraphDisplayOpts = {
-  arrows: false,
-  textFade: 0.75,
-  nodeSize: 1,
-  lineThickness: 1,
-  edgeColorBy: 'default'
-}
-
-/**
  * Interactive overlays rendered inside .graph-stage that must keep their own
  * clicks. .graph-svg-host and .graph-canvas are pointer-events:none, so pointer
  * events on the graph surface arrive with target = .graph-stage itself — only
@@ -233,93 +121,6 @@ const ZOOM_EASE_MS = 150
 
 const GRAPH_OVERLAY_UI =
   '.graph-zoom-controls, .graph-filter-live-chip, .graph-diag-banner, .graph-empty'
-
-/**
- * Obsidian-like group query matcher.
- * Space-separated terms, AND semantics; `-term` negates.
- * Prefixes: tag:, path:, file:, type: — bare term matches title/path/tag.
- */
-function matchGroupQuery(query: string, n: GraphNodeData): boolean {
-  const terms = query.trim().toLowerCase().split(/\s+/).filter(Boolean)
-  if (terms.length === 0) return false
-  const title = (n.title || '').toLowerCase()
-  const path = (n.relativePath || '').toLowerCase().replace(/\\/g, '/')
-  const tags = safeTags(n).map((t) => t.toLowerCase())
-  return terms.every((raw) => {
-    let term = raw
-    let neg = false
-    if (term.startsWith('-')) {
-      neg = true
-      term = term.slice(1)
-    }
-    if (!term) return true
-    let hit: boolean
-    if (term.startsWith('tag:')) {
-      const q = term.slice(4).replace(/^#/, '')
-      hit = q.length > 0 && tags.some((t) => t === q || t.startsWith(q + '/'))
-    } else if (term.startsWith('path:')) {
-      hit = term.length > 5 && path.includes(term.slice(5))
-    } else if (term.startsWith('file:')) {
-      hit = term.length > 5 && title.includes(term.slice(5))
-    } else if (term.startsWith('type:')) {
-      hit = term.length > 5 && n.type.toLowerCase() === term.slice(5)
-    } else {
-      hit = title.includes(term) || path.includes(term) || tags.some((t) => t.includes(term))
-    }
-    return neg ? !hit : hit
-  })
-}
-
-/** First matching group wins (Obsidian semantics) */
-function resolveGroupColors(
-  nodes: GraphNodeData[],
-  groups: GraphColorGroup[]
-): Map<string, string> | null {
-  if (!groups.length || !nodes.length) return null
-  const map = new Map<string, string>()
-  for (const n of nodes) {
-    for (const g of groups) {
-      if (matchGroupQuery(g.query, n)) {
-        map.set(n.id, g.color)
-        break
-      }
-    }
-  }
-  return map.size > 0 ? map : null
-}
-
-function lodLabel(lod: LodLevel, n: number, mode: GraphPerfMode): string {
-  return `${lod} · ${n} nodes · ${mode}`
-}
-
-/**
- * Apply Obsidian-like force settings onto a live d3 simulation.
- * Delegates to the shared applyForceLayout (graphShared) so Global and Local
- * graphs use identical physics / presets / softened hub charge.
- */
-function applyForces(
-  sim: d3.Simulation<SimNode, undefined>,
-  forces: GraphForceSettings,
-  width: number,
-  height: number,
-  large: boolean,
-  sizeMul = 1
-): void {
-  applyForceLayout(sim, forces, { width, height, large, sizeMul })
-}
-
-/**
- * Obsidian-like opening layout: golden-angle spiral around the center.
- * First render looks organized (ring/cluster feel) instead of a random blob;
- * the force simulation then refines it. (Obsidian opens graphs circularly.)
- */
-function spiralSeed(i: number, n: number, w: number, h: number): { x: number; y: number } {
-  if (n <= 0) return { x: w / 2, y: h / 2 }
-  const golden = Math.PI * (3 - Math.sqrt(5)) // ~2.39996 rad
-  const r = Math.min(w, h) * 0.44 * Math.sqrt(i / n)
-  const theta = i * golden
-  return { x: w / 2 + Math.cos(theta) * r, y: h / 2 + Math.sin(theta) * r }
-}
 
 export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false }) => {
   const {
@@ -377,23 +178,18 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
    * adaptive throttle window reads the same p95 even while the overlay is
    * hidden; the overlay only adds a 250 ms panel refresh tick.
    */
-  const [perfOverlay, setPerfOverlay] = useState(false)
-  const perfOverlayRef = useRef(false)
-  perfOverlayRef.current = perfOverlay
-  const perfStatsRef = useRef<RollingPerfStats | null>(null)
-  const perfCommitStartRef = useRef(0)
-  /** Pushes deferred by the throttle (frames that never reached React). */
-  const perfThrottledRef = useRef(0)
-  const [perfSnap, setPerfSnap] = useState<ReturnType<RollingPerfStats['snapshot']> | null>(null)
-  /** Canvas2D gesture-path draw stats (sampled only while the overlay is on). */
-  const canvasStatsRef = useRef<RollingPerfStats | null>(null)
-  const [canvasSnap, setCanvasSnap] = useState<PerfSnapshot | null>(null)
-  /** Last SPARK_BARS SVG commit durations — fed to the overlay spark chart. */
-  const [sparkSamples, setSparkSamples] = useState<number[]>([])
-  const perfTickRef = useRef<ReturnType<typeof setInterval> | null>(null)
-  /** Current adaptive throttle window (ms) — pushSvgFrame reads this each commit. */
-  const throttleWindowMsRef = useRef(SVG_PUSH_THROTTLE_MS)
-  const adaptiveThrottleRef = useRef<AdaptiveThrottle | null>(null)
+  const {
+    perfOverlay,
+    setPerfOverlay,
+    perfOverlayRef,
+    perfCommitStartRef,
+    perfThrottledRef,
+    perfSnap,
+    canvasStatsRef,
+    canvasSnap,
+    sparkSamples,
+    throttleWindowMsRef
+  } = useGraphPerf(svgFrame, activeView)
   /**
    * Drop prev-frame references at structural rebuilds (filter change, empty,
    * error path). deltaMerge is value-safe (equal fields ⇒ same rendering), but
@@ -413,18 +209,23 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
    * frame object is still rebuilt every paint (cheap, ~0.2ms), but React does
    * not reconcile thousands of elements every sim tick.
    */
-  const pushSvgFrame = useCallback((frame: SvgFrame, throttle = false) => {
-    const now = performance.now()
-    if (shouldThrottleSvgPush(now, lastSvgPushRef.current, throttle, throttleWindowMsRef.current)) {
-      if (perfOverlayRef.current) perfThrottledRef.current++
-      pendingSvgFrameRef.current = frame
-      return
-    }
-    pendingSvgFrameRef.current = null
-    lastSvgPushRef.current = now
-    perfCommitStartRef.current = now
-    setSvgFrame(frame)
-  }, [])
+  const pushSvgFrame = useCallback(
+    (frame: SvgFrame, throttle = false) => {
+      const now = performance.now()
+      if (
+        shouldThrottleSvgPush(now, lastSvgPushRef.current, throttle, throttleWindowMsRef.current)
+      ) {
+        if (perfOverlayRef.current) perfThrottledRef.current++
+        pendingSvgFrameRef.current = frame
+        return
+      }
+      pendingSvgFrameRef.current = null
+      lastSvgPushRef.current = now
+      perfCommitStartRef.current = now
+      setSvgFrame(frame)
+    },
+    [perfCommitStartRef, perfOverlayRef, perfThrottledRef, throttleWindowMsRef]
+  )
   /** Force-commit any throttled pending frame (sim settle / gesture start). */
   const flushSvgFrame = useCallback(() => {
     const pending = pendingSvgFrameRef.current
@@ -433,94 +234,10 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
     lastSvgPushRef.current = performance.now()
     perfCommitStartRef.current = performance.now()
     setSvgFrame(pending)
-  }, [])
+  }, [perfCommitStartRef])
   const flushSvgFrameRef = useRef(flushSvgFrame)
   flushSvgFrameRef.current = flushSvgFrame
 
-  /**
-   * Real-browser commit measurement: stamp before setState (done in
-   * pushSvgFrame/flushSvgFrame), then useLayoutEffect fires synchronously after
-   * the DOM mutation — the delta is React render + reconciliation + DOM diff
-   * for exactly this frame, no rAF jitter. Sampled only when overlay is on.
-   */
-  /** Always-on commit sampler (cheap; feeds the adaptive throttle + overlay). */
-  useLayoutEffect(() => {
-    if (!svgFrame) return
-    if (!perfStatsRef.current) perfStatsRef.current = new RollingPerfStats()
-    const stats = perfStatsRef.current
-    const start = perfCommitStartRef.current
-    stats.push({
-      commitMs: start > 0 ? Math.max(0, performance.now() - start) : 0,
-      edges: svgFrame.edges.length,
-      nodes: svgFrame.nodes.length,
-      labels: svgFrame.labels.length,
-      totalEdges: svgFrame.culled?.totalEdges ?? 0,
-      totalNodes: svgFrame.culled?.totalNodes ?? 0,
-      renderedEdges: svgFrame.culled?.renderedEdges ?? 0,
-      renderedNodes: svgFrame.culled?.renderedNodes ?? 0,
-      ts: performance.now()
-    })
-  }, [svgFrame])
-
-  /**
-   * While the overlay is on, refresh the HUD panel a few times per second
-   * (the panel is a tiny React node — cheap; it never touches the SVG tree).
-   */
-  /**
-   * While the overlay is on, refresh the HUD panel a few times per second
-   * (the panel is a tiny React node — cheap; it never touches the SVG tree).
-   * Paused when the graph view is hidden (no commits happen anyway).
-   * NOTE: does NOT null perfStatsRef — the sampler stays alive for the
-   * adaptive throttle; the overlay just gets a fresh window on enable.
-   */
-  useEffect(() => {
-    if (!perfOverlay || activeView !== 'graph') return
-    // Fresh window for the panel. The adaptive controller keeps its own
-    // windowMs, so only its ≥10-sample gate restarts (~1s of sim motion) —
-    // acceptable, adaptation recovers quickly.
-    perfStatsRef.current = new RollingPerfStats()
-    perfThrottledRef.current = 0
-    perfCommitStartRef.current = 0
-    canvasStatsRef.current = new RollingPerfStats()
-    setPerfSnap(perfStatsRef.current.snapshot())
-    setCanvasSnap(null)
-    setSparkSamples([])
-    perfTickRef.current = setInterval(() => {
-      if (perfStatsRef.current) {
-        setPerfSnap(perfStatsRef.current.snapshot())
-        setSparkSamples(perfStatsRef.current.recent(SPARK_BARS))
-      }
-      if (canvasStatsRef.current) setCanvasSnap(canvasStatsRef.current.snapshot())
-    }, 250)
-    return () => {
-      if (perfTickRef.current) clearInterval(perfTickRef.current)
-      perfTickRef.current = null
-    }
-  }, [perfOverlay, activeView])
-
-  /**
-   * Adaptive throttle: sample commit p95 once per second while the graph is
-   * visible and let the controller widen/narrow the window (hard bounds
-   * THROTTLE_MIN/MAX_MS). pushSvgFrame reads throttleWindowMsRef live, so the
-   * very next commit uses the new window.
-   */
-  useEffect(() => {
-    if (activeView !== 'graph') return
-    if (!adaptiveThrottleRef.current) {
-      adaptiveThrottleRef.current = new AdaptiveThrottle(SVG_PUSH_THROTTLE_MS)
-    }
-    const id = setInterval(() => {
-      const stats = perfStatsRef.current
-      const ctrl = adaptiveThrottleRef.current
-      if (!stats || !ctrl) return
-      const snap = stats.snapshot()
-      // Gate on recent activity: a stale p95 from a long-past busy phase must
-      // not silently widen/narrow the window while the user is idle.
-      if (snap.fps === 0) return
-      throttleWindowMsRef.current = ctrl.consider(snap.p95CommitMs, snap.count, performance.now())
-    }, 1000)
-    return () => clearInterval(id)
-  }, [activeView])
   const simRef = useRef<d3.Simulation<SimNode, SimLink> | null>(null)
   const nodesRef = useRef<SimNode[]>([])
   const linksRef = useRef<SimLink[]>([])
@@ -1352,6 +1069,18 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
   // Obsidian-like color groups: node id → group color (first match wins)
   const groupColorById = useMemo(() => resolveGroupColors(nodes, colorGroups), [nodes, colorGroups])
 
+  /**
+   * AF-1 a11y: accessible fallback — a keyboard/screen-reader reachable list of
+   * the visible notes (the canvas itself is not keyboard-navigable as a list).
+   * Rendered sr-only; capped so a huge vault doesn't emit thousands of buttons.
+   */
+  const a11yNodeList = useMemo(() => {
+    return nodes
+      .filter((n) => n.path && !n.isGhost && !n.isTag && !n.isAttachment)
+      .sort((a, b) => (a.title || '').localeCompare(b.title || ''))
+      .slice(0, 150)
+  }, [nodes])
+
   // Keep paint flags in sync — mutate existing ref to avoid recreation
   viewFlagsRef.current.searchMatchIds = searchMatchIds
   viewFlagsRef.current.dimHubs = hubMode === 'dim'
@@ -1804,7 +1533,8 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
               stroke,
               sw,
               fillOp,
-              strokeOp: isGhost ? Math.min(1, fillOp + 0.25) : fillOp
+              strokeOp: isGhost ? Math.min(1, fillOp + 0.25) : fillOp,
+              title: n.title || n.relativePath || n.id
             })
             if (isSel) {
               nodesOut.push({
@@ -2135,7 +1865,7 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
       const svgHost = wrapRef.current?.querySelector('.graph-svg-host') as HTMLElement | null
       if (svgHost) svgHost.style.display = ''
     }
-  }, [])
+  }, [canvasStatsRef, perfOverlayRef])
 
   drawCanvas2DRef.current = drawCanvas2D
 
@@ -4714,6 +4444,31 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
 
   return (
     <div className="graph-container" role="application" aria-label="Knowledge graph" tabIndex={0}>
+      <ul className="sr-only" aria-label="Notes in this graph (accessible list)">
+        {a11yNodeList.map((n) => (
+          <li key={n.id}>
+            <button
+              type="button"
+              onClick={() => {
+                if (n.isAttachment && n.path && window.api?.openFileExternal) {
+                  void window.api.openFileExternal(n.path)
+                } else if (
+                  n.path &&
+                  !n.isGhost &&
+                  !n.isAttachment &&
+                  !n.isTag &&
+                  n.type !== 'tag'
+                ) {
+                  void openTab(n.path)
+                  setActiveView('editor')
+                }
+              }}
+            >
+              {n.title}
+            </button>
+          </li>
+        ))}
+      </ul>
       <div className="graph-toolbar">
         <span className="graph-toolbar-stats">
           {stats.nodes} notes · {stats.edges} links

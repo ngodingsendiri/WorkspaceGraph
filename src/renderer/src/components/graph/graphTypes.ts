@@ -66,6 +66,8 @@ export type SvgNode = {
   strokeOp?: number
   /** stroke-dasharray in world units (P2-8 focus ring, ghost handled by kind) */
   dash?: string
+  /** AF-1 a11y: node title exposed to assistive tech via aria-label. */
+  title?: string
 }
 
 export type SvgLabel = {

@@ -13,10 +13,11 @@ import type {
 import type { SimNode } from './graphTypes'
 import { safeTags, applyForceLayout, type LodLevel } from './graphShared'
 
-/** Obsidian-like display defaults (text fade soft at distance). */
+/** Obsidian-like display defaults (text fade soft at distance).
+ *  textFade 0.75 (G6): labels reach solid earlier on zoom-in than 0.9. */
 export const DEFAULT_DISPLAY_OPTS: GraphDisplayOpts = {
   arrows: false,
-  textFade: 0.9,
+  textFade: 0.75,
   nodeSize: 1,
   lineThickness: 1,
   edgeColorBy: 'default'
