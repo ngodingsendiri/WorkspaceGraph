@@ -121,6 +121,15 @@ describe('IPC surface (whole src/main/ipc dir)', () => {
     expect(hasAny(ipc, 'assertPathInVault', 'isPathInVault')).toBe(true)
     expect(has(ipc, 'file:openExternal', 'shell.openPath')).toBe(true)
   })
+  it('no IPC handler returns decrypted settings raw to the renderer (WC-6)', () => {
+    // A handler returning workspaceEngine.getSettings() directly would ship
+    // decrypted API keys to the renderer. Every settings read must go through
+    // settings:get (which scrubs) or security:status (raw ENCRYPTED only).
+    expect(ipc).not.toMatch(/return\s+workspaceEngine\.getSettings\s*\(\)/)
+    expect(ipc).not.toMatch(/return\s+this\.getSettings\s*\(\)/)
+    // The scrub path must stay wired: settings:get → scrubSettingsSecrets(...)
+    expect(ipc).toContain('scrubSettingsSecrets(workspaceEngine.getSettings())')
+  })
   it('create vault name guard', () => {
     expect(hasAny(ipc, "name === '.'", 'Invalid workspace name')).toBe(true)
   })
@@ -260,9 +269,14 @@ describe('Renderer wiring', () => {
     // failed persist flashes the real error instead of a fake "disimpan".
     expect(set.includes('setApiKeys({})')).toBe(false)
     expect(has(set, 'delete next[def.id]', 'buildRowSaveFlash')).toBe(true)
-    expect(set.includes('intentionally NOT cleared')).toBe(true)
+    // LOW-4: contract on CODE tokens, not comment words — typed-but-unsaved
+    // keys are merged into apiKeys via the functional updater (never wiped).
+    expect(set.includes('setApiKeys((prev)')).toBe(true)
     // Test verifies a TYPED key (in-memory override), not the stale saved one
-    expect(has(set, 'window.api.testAIProvider(', 'typedKey ? { apiKey: typedKey')).toBe(true)
+    expect(has(set, 'window.api.testAIProvider(', 'apiKey: typedKey || undefined')).toBe(true)
+    // LOW-1: the override is ALWAYS sent (not gated on a typed key) so a
+    // baseUrl edited in the card but not yet saved is what Test pings.
+    expect(set.includes('typedKey ? { apiKey: typedKey')).toBe(false)
     expect(has(set, 'await autoVerifyProvider(def.id)', 'await autoVerifyProvider(finalId)')).toBe(
       true
     )
@@ -281,7 +295,16 @@ describe('Renderer wiring', () => {
     const flash = read('src/renderer/src/components/settings/providerSaveKeyConfirm.ts')
     expect(has(flash, 'buildRowSaveFlash', 'Gagal menyimpan key', 'tes otomatis')).toBe(true)
     expect(
-      has(set, 'buildRowSaveFlash(def, true, cfg)', 'buildRowSaveFlash(def, Boolean(key)')
+      has(
+        set,
+        // MED-1: the save flash fires AFTER the silent auto-verify — success
+        // and failure branches are distinct, never the fake "disimpan" on fail.
+        // NIT-1: the success branch passes the REAL configure result (cfg),
+        // not a fabricated { ok: true } literal.
+        'buildRowSaveFlash(def, true, cfg)',
+        'buildRowSaveFlash(def, true, {',
+        'buildRowSaveFlash(def, false, undefined)'
+      )
     ).toBe(true)
   })
   it('Welcome screen create vault + no bad demo path', () => {
@@ -623,13 +646,14 @@ describe('Renderer wiring', () => {
   })
   it('perf overlay shows LOD culling pre→post counts (D)', () => {
     const gc = read('src/renderer/src/components/graph/GraphCanvas.tsx')
+    const po = read('src/renderer/src/components/graph/graphPerfOverlay.ts')
     const ps = read('src/renderer/src/components/graph/graphPerfStats.ts')
     const gt = read('src/renderer/src/components/graph/graphTypes.ts')
-    // Frame carries culling stats; the sampler records them; overlay derives culled
+    // Frame carries culling stats; the hook sampler records them; overlay derives culled
     expect(has(gc, 'culled: {')).toBe(true)
     expect(has(gc, 'renderedEdges: edgeList.length')).toBe(true)
     expect(has(gc, 'renderedNodes: nodesRendered')).toBe(true)
-    expect(has(gc, 'totalEdges: svgFrame.culled?.totalEdges ?? 0')).toBe(true)
+    expect(has(po, 'totalEdges: svgFrame.culled?.totalEdges ?? 0')).toBe(true)
     expect(has(gc, 'totalEdges - perfSnap.renderedEdges')).toBe(true)
     expect(has(ps, 'totalEdges: number')).toBe(true)
     expect(has(ps, 'renderedNodes: number')).toBe(true)
@@ -644,22 +668,26 @@ describe('Renderer wiring', () => {
   })
   it('real-browser perf overlay wired in GraphCanvas (G-perf)', () => {
     const gc = read('src/renderer/src/components/graph/GraphCanvas.tsx')
+    const po = read('src/renderer/src/components/graph/graphPerfOverlay.ts')
     const ps = read('src/renderer/src/components/graph/graphPerfStats.ts')
-    // Toggle key D + overlay panel + rolling stats module + layout-effect timing
+    // Toggle key D + overlay panel live in the component; the hook owns the
+    // rolling-stats sampler + layout-effect commit timing (AF-1 slice)
     expect(has(gc, "e.key === 'd' || e.key === 'D'")).toBe(true)
     expect(has(gc, 'graph-perf-overlay')).toBe(true)
-    expect(has(gc, 'RollingPerfStats')).toBe(true)
-    expect(has(gc, 'useLayoutEffect')).toBe(true)
-    expect(has(gc, 'SVG_PUSH_THROTTLE_MS')).toBe(true)
+    expect(has(po, 'RollingPerfStats')).toBe(true)
+    expect(has(po, 'useLayoutEffect')).toBe(true)
+    expect(has(po, 'SVG_PUSH_THROTTLE_MS')).toBe(true)
     expect(has(ps, 'export class RollingPerfStats')).toBe(true)
     expect(has(ps, 'p95CommitMs')).toBe(true)
   })
   it('adaptive throttle window wired in GraphCanvas (G-perf)', () => {
     const gc = read('src/renderer/src/components/graph/GraphCanvas.tsx')
+    const po = read('src/renderer/src/components/graph/graphPerfOverlay.ts')
     const ps = read('src/renderer/src/components/graph/graphPerfStats.ts')
     const rt = read('src/renderer/src/components/graph/graphRenderTokens.ts')
-    // Controller + live window feed pushSvgFrame each commit
-    expect(has(gc, 'new AdaptiveThrottle(SVG_PUSH_THROTTLE_MS)')).toBe(true)
+    // Controller + live window feed pushSvgFrame each commit (controller lives
+    // in the perf hook; the frame push stays in the component)
+    expect(has(po, 'new AdaptiveThrottle(SVG_PUSH_THROTTLE_MS)')).toBe(true)
     expect(has(gc, 'throttleWindowMsRef.current')).toBe(true)
     expect(
       has(
@@ -667,7 +695,7 @@ describe('Renderer wiring', () => {
         'shouldThrottleSvgPush(now, lastSvgPushRef.current, throttle, throttleWindowMsRef.current)'
       )
     ).toBe(true)
-    expect(has(gc, 'ctrl.consider(snap.p95CommitMs, snap.count, performance.now())')).toBe(true)
+    expect(has(po, 'ctrl.consider(snap.p95CommitMs, snap.count, performance.now())')).toBe(true)
     expect(has(ps, 'export class AdaptiveThrottle')).toBe(true)
     expect(has(ps, 'THROTTLE_MIN_MS')).toBe(true)
     expect(has(ps, 'THROTTLE_MAX_MS')).toBe(true)
@@ -675,6 +703,8 @@ describe('Renderer wiring', () => {
   })
   it('canvas2D gesture draw-time + spark chart wired (G-perf)', () => {
     const gc = read('src/renderer/src/components/graph/GraphCanvas.tsx')
+    const po = read('src/renderer/src/components/graph/graphPerfOverlay.ts')
+    const si = read('src/renderer/src/components/graph/graphSvgItems.tsx')
     const ps = read('src/renderer/src/components/graph/graphPerfStats.ts')
     const sp = read('src/renderer/src/components/graph/graphPerfSpark.ts')
     // Canvas2D gesture path timed only while the overlay is on, into its own stats
@@ -682,9 +712,10 @@ describe('Renderer wiring', () => {
     expect(has(gc, 'perfOverlayRef.current ? performance.now() : 0')).toBe(true)
     expect(has(gc, 'canvasStatsRef.current.push')).toBe(true)
     // Spark chart: last SPARK_BARS commit durations rendered on a mini canvas
+    // (chart component in graphSvgItems; sample feed in the perf hook)
     expect(has(gc, 'PerfSparkChart')).toBe(true)
-    expect(has(gc, 'sparkLayout(samples, width, height, THROTTLE_TARGET_P95_MS)')).toBe(true)
-    expect(has(gc, 'perfStatsRef.current.recent(SPARK_BARS)')).toBe(true)
+    expect(has(si, 'sparkLayout(samples, width, height, THROTTLE_TARGET_P95_MS)')).toBe(true)
+    expect(has(po, 'perfStatsRef.current.recent(SPARK_BARS)')).toBe(true)
     expect(has(ps, 'recent(n: number): number[]')).toBe(true)
     expect(has(sp, 'export function sparkLayout')).toBe(true)
     expect(has(sp, 'export function drawSparkBars')).toBe(true)
@@ -700,10 +731,12 @@ describe('Renderer wiring', () => {
     expect(has(gc, 'deltaMerge(prevNodesRef.current, nodesOut, sameSvgNode)')).toBe(true)
     expect(has(gc, 'deltaMerge(prevLabelsRef.current, labelsOut, sameSvgLabel)')).toBe(true)
     expect(has(gc, 'resetFrameCache()')).toBe(true)
-    // Memoized per-element components bail on stable object references
-    expect(has(gc, 'const SvgEdgeItem = memo(')).toBe(true)
-    expect(has(gc, 'const SvgNodeItem = memo(')).toBe(true)
-    expect(has(gc, 'const SvgLabelItem = memo(')).toBe(true)
+    // Memoized per-element components bail on stable object references (AF-1:
+    // the components now live in the render-concern module graphSvgItems)
+    const si = read('src/renderer/src/components/graph/graphSvgItems.tsx')
+    expect(has(si, 'SvgEdgeItem = memo(function SvgEdgeItem')).toBe(true)
+    expect(has(si, 'SvgNodeItem = memo(function SvgNodeItem')).toBe(true)
+    expect(has(si, 'SvgLabelItem = memo(function SvgLabelItem')).toBe(true)
   })
   it('tooltip hover-delay goes through the shared scheduler (P1-2)', () => {
     const gc = read('src/renderer/src/components/graph/GraphCanvas.tsx')
@@ -765,8 +798,10 @@ describe('Renderer wiring', () => {
     expect(has(rt, 'export function labelBelowNode', 'LABEL_BELOW_GAP')).toBe(true)
     expect(has(gc, 'labelBelowNode(sx, sy, rWorld)')).toBe(true)
     expect(has(c2d, 'labelBelowNode(sx, sy, rWorld)')).toBe(true)
-    // Text is centered on the node's x (SVG anchor + canvas align)
-    expect(has(gc, 'textAnchor="middle"')).toBe(true)
+    // Text is centered on the node's x (SVG anchor + canvas align; the SVG
+    // label item lives in the render-concern module — AF-1 slice)
+    const si = read('src/renderer/src/components/graph/graphSvgItems.tsx')
+    expect(has(si, 'textAnchor="middle"')).toBe(true)
     expect(has(c2d, "ctx.textAlign = 'center'")).toBe(true)
     // The old beside-node literals are gone (no handoff drift)
     expect(has(gc, 'x: sx + rWorld * kSafe + 5')).toBe(false)
@@ -1719,7 +1754,9 @@ describe('AI system contracts', () => {
         mid,
         "from './contextCompaction'",
         'compactMessages(messages,',
-        'resolveCompactionBudget(provider, request.model)'
+        // AD-4: the effective model is resolved to a LOCAL (never mutating the
+        // caller's request) and feeds the compaction budget
+        'resolveCompactionBudget(provider, model)'
       )
     ).toBe(true)
     expect(

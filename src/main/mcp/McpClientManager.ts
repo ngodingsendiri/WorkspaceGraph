@@ -487,6 +487,33 @@ export class McpClientManager {
     }
   }
 
+  /**
+   * AE-6: live-test a candidate server WITHOUT touching the persisted config.
+   * Registers it in memory only, connects (handshake + tools/list), reports
+   * tool count / error, then restores the previous list. The vault config is
+   * only written on Save — this used to persist-then-restore, which wrote
+   * mcp.json twice per Test click (write amplification + settings churn).
+   */
+  async testServer(
+    server: McpServerConfig
+  ): Promise<{ ok: boolean; tools: number; error?: string }> {
+    this.ensureLoaded()
+    const prev = this.servers
+    const id = sanitizeServerId(server.id)
+    try {
+      this.servers = [...prev.filter((s) => s.id !== id), normalizeServer({ ...server, id })]
+      await this.connect(id)
+      const status = this.getStatus().find((s) => s.id === id)
+      return { ok: status?.connected === true, tools: status?.tools ?? 0, error: status?.error }
+    } catch (err) {
+      return { ok: false, tools: 0, error: err instanceof Error ? err.message : String(err) }
+    } finally {
+      await this.disconnect(id)
+      this.servers = prev
+      this.errors.delete(id)
+    }
+  }
+
   /** Wire vault lifecycle: fire-and-forget connect of every enabled server. */
   connectAll(): void {
     this.ensureLoaded()

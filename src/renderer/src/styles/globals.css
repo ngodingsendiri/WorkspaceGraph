@@ -43,6 +43,19 @@ body {
     color var(--duration-fast) var(--ease-default);
 }
 
+/* Visually hidden but present for screen readers (LOW-3 aria-live announcements). */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
 /* Force UI chrome to inherit Inter / Segoe UI Variable (except Material Icons) */
 button,
 input,

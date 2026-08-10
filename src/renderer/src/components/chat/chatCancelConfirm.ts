@@ -45,8 +45,14 @@ export function nextCancelClick(
   return 'cancel'
 }
 
-/** Short label for the armed button — "Stop? 3", "Stop? 2", "Stop? 1". */
+/**
+ * Short label for the armed button — "Stop? 3", "Stop? 2", "Stop? 1".
+ * At 0ms (window edge, one tick before disarm) the label is plain "Stop?"
+ * (NIT-2) — a ticking "Stop? 1" that is about to vanish reads as a broken
+ * countdown; a bare confirmation is stable and never implies a second left.
+ */
 export function cancelConfirmLabel(remainingMs: number): string {
-  const sec = Math.max(1, Math.ceil(remainingMs / 1000))
+  if (remainingMs <= 0) return 'Stop?'
+  const sec = Math.ceil(remainingMs / 1000)
   return `Stop? ${sec}`
 }

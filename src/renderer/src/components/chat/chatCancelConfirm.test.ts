@@ -54,6 +54,11 @@ describe('chatCancelConfirm — two-step stop gate', () => {
     expect(cancelConfirmLabel(1000)).toBe('Stop? 1')
   })
 
+  it('label at 0ms is a stable bare "Stop?" (NIT-2 — no misleading "Stop? 1")', () => {
+    expect(cancelConfirmLabel(0)).toBe('Stop?')
+    expect(cancelConfirmLabel(-5)).toBe('Stop?')
+  })
+
   it('full flow: arm → wait past window → rearm → cancel on the second click', () => {
     // t0: first click arms
     expect(nextCancelClick(false, null, t0)).toBe('arm')

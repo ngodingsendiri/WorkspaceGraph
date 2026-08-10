@@ -637,6 +637,17 @@ export const ChatPanel: React.FC = () => {
     }
   }, [])
 
+  // LOW-2: Esc always disarms the armed stop confirmation (same pattern as the
+  // picker / ⋮-menu Esc handlers) — an armed gate must never trap the user.
+  useEffect(() => {
+    if (!stopArmed) return
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') disarmStop()
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [stopArmed, disarmStop])
+
   // P2-3: anchor the slash popover above the textarea (bottom of the panel)
   const updateSlashPos = (): void => {
     const el = inputRef.current
@@ -1566,8 +1577,16 @@ export const ChatPanel: React.FC = () => {
                 }
               >
                 <Icon name="stop" size={13} />
-                <span className="chat-stop-label" aria-live="polite">
+                {/* LOW-3: the ticking label is visual-only — the arm is
+                    announced ONCE via the sr-only status region below, so a
+                    150ms countdown never spams the screen-reader queue. */}
+                <span className="chat-stop-label">
                   {stopArmed ? cancelConfirmLabel(stopRemaining) : 'Stop'}
+                </span>
+                <span className="sr-only" role="status" aria-live="polite">
+                  {stopArmed
+                    ? 'Stop — klik lagi untuk berhenti. Progres & checkpoint tersimpan.'
+                    : ''}
                 </span>
               </button>
             ) : (
