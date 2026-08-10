@@ -480,7 +480,7 @@ export interface API {
     schedule: { running: boolean; nextFire: string | null }
   }>
   saveAutomation: (config: unknown) => Promise<{ ok: boolean; error?: string }>
-  setAutomationEnabled: (enabled: boolean) => Promise<boolean>
+  setAutomationEnabled: (enabled: boolean) => Promise<{ ok: boolean; error?: string }>
   runAutomationRule: (ruleId: string) => Promise<{ ok: boolean; error?: string }>
 
   // MCP (R0-1) — Model Context Protocol server registry
@@ -574,6 +574,17 @@ export interface WriteProposal {
   createdAt: string
 }
 
+/**
+ * AE-4 — `window.electron` (the @electron-toolkit ElectronAPI) exposes the
+ * RAW `ipcRenderer` to the renderer. This is the standard electron-vite
+ * pattern, and the typed `window.api` surface above is the supported contract.
+ *
+ * Security posture: the renderer is TRUSTED (same-origin app code), so the raw
+ * bridge is advisory, not a security boundary — any renderer code could call
+ * `window.electron.ipcRenderer.invoke(channel, …)` directly. All vault-level
+ * protection therefore lives in MAIN (PathSandbox, Permissions, SecretsStore)
+ * and must never rely on the renderer only calling the typed API.
+ */
 declare global {
   interface Window {
     electron: ElectronAPI

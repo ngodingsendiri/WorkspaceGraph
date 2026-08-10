@@ -179,12 +179,26 @@ export function registerAIHandlers(): void {
         // A key typed in the card but not yet saved: patch the in-memory config
         // (never persisted by a Test) so the ping verifies the NEW key instead of
         // the stale saved one — the natural paste → Test → Save flow stays honest.
-        if (overrides?.apiKey && String(overrides.apiKey).trim() && providerId) {
-          const patch: { apiKey?: string; baseUrl?: string } = {
-            apiKey: String(overrides.apiKey).trim()
-          }
+        // LOW-1: patch fires for a baseUrl-only override too (a baseUrl edited
+        // but not yet saved must be what the ping verifies — same in-memory
+        // rule as the key: configureProvider never persists).
+        if (providerId && (overrides?.apiKey || overrides?.baseUrl)) {
+          const patch: { apiKey?: string; baseUrl?: string } = {}
+          if (overrides.apiKey) patch.apiKey = String(overrides.apiKey).trim()
           if (overrides.baseUrl) patch.baseUrl = overrides.baseUrl
-          aiMiddleware.configureProvider(providerId, patch)
+          // LOW-6: a PATCH failure (unknown provider id, adapter error) is not
+          // a credential failure — return it distinctly instead of letting the
+          // outer catch label it as a generic test error.
+          try {
+            aiMiddleware.configureProvider(providerId, patch)
+          } catch (err) {
+            console.error('[ai:testProvider] configure/patch failed:', err)
+            return {
+              ok: false,
+              configureError: true,
+              error: err instanceof Error ? err.message : String(err)
+            }
+          }
         }
         return await aiMiddleware.testProvider(providerId)
       } catch (err) {

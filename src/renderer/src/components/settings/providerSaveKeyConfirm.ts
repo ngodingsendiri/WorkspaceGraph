@@ -16,6 +16,11 @@ export interface SaveKeyOutcome {
   error?: string
 }
 
+/** LOW-5: single shared label for a provider def — name when present, else id. */
+export function providerLabel(def: { id: string; name?: string }): string {
+  return def.name?.trim() ? def.name.trim() : def.id
+}
+
 /**
  * The flash message for a row Save.
  * - No key typed            → plain "disimpan" (nothing to verify)
@@ -28,7 +33,7 @@ export function buildRowSaveFlash(
   hadKey: boolean,
   outcome: SaveKeyOutcome | undefined
 ): string {
-  const label = def.name?.trim() ? def.name.trim() : def.id
+  const label = providerLabel(def)
   if (!hadKey) return `Provider ${label} disimpan`
   if (!outcome || !outcome.ok) {
     return `Gagal menyimpan key ${label}: ${outcome?.error || 'unknown'}`

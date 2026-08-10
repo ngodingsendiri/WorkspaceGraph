@@ -3,7 +3,7 @@ import { applyTheme, getCachedThemePref, type ThemePreference } from '../../util
 import { buildFailoverCandidates, moveInOrder } from './failoverOrder'
 import { confirmDialog } from '../ui/Dialog'
 import { confirmProviderDelete } from './providerDeleteConfirm'
-import { buildRowSaveFlash } from './providerSaveKeyConfirm'
+import { buildRowSaveFlash, providerLabel } from './providerSaveKeyConfirm'
 
 type Section =
   'ai' | 'appearance' | 'index' | 'security' | 'automation' | 'plugins' | 'mcp' | 'logs' | 'about'
@@ -159,9 +159,10 @@ export const SettingsView: React.FC = () => {
   const [permissions, setPermissions] = useState({
     aiAccess: true,
     aiTools: true,
-    automation: true,
-    plugins: true,
-    aiAutoWrite: false
+    // WC-4 decision (2026-08-10): plugins/automation default OFF — opt-in.
+    // loadAll merges an explicit settings.permissions over these defaults.
+    automation: false,
+    plugins: false
   })
   const [secStatus, setSecStatus] = useState<{
     encryptionAvailable?: boolean
@@ -434,8 +435,14 @@ export const SettingsView: React.FC = () => {
     return unsub
   }, [])
 
-  const handleTest = async (providerId: string): Promise<void> => {
-    flash(`Testing ${providerId}…`)
+  /**
+   * Live ping for a provider. `silent` suppresses the success flash so callers
+   * that verify AFTER their own flash (Save auto-verify, MED-1) don't have the
+   * banner overwritten in the same batch; failures always flash (never silent).
+   * Returns whether the ping succeeded.
+   */
+  const handleTest = async (providerId: string, silent = false): Promise<boolean> => {
+    if (!silent) flash(`Testing ${providerId}…`)
     try {
       // BUGFIX: testProvider(id) already targets that provider — don't mutate global active
       // A key typed but not yet saved must be what Test verifies (in-memory only,
@@ -443,18 +450,22 @@ export const SettingsView: React.FC = () => {
       // the natural paste→Test→Save flow looks broken.
       const def = defs.find((d) => d.id === providerId)
       const typedKey = apiKeys[providerId]?.trim()
-      const res = await window.api.testAIProvider(
-        providerId,
-        typedKey ? { apiKey: typedKey, baseUrl: def?.baseUrl || undefined } : undefined
-      )
+      // LOW-1: ALWAYS send the override — a baseUrl edited in the card but not
+      // yet saved must be what Test pings (same in-memory-only rule as the key).
+      const res = await window.api.testAIProvider(providerId, {
+        apiKey: typedKey || undefined,
+        baseUrl: def?.baseUrl || undefined
+      })
       if (res.ok) {
-        flash(`OK ${providerId}: ${res.sample || 'connected'}`)
+        if (!silent) flash(`OK ${providerId}: ${res.sample || 'connected'}`)
       } else {
         flash(`FAIL ${providerId}: ${res.error || 'unknown'}`)
       }
       await loadAll()
+      return Boolean(res.ok)
     } catch (e) {
       flash(e instanceof Error ? e.message : 'Test failed')
+      return false
     }
   }
 
@@ -469,13 +480,13 @@ export const SettingsView: React.FC = () => {
   }
 
   /** Bypass the 5-min model cache: pull the live list from the API now. */
-  const handleRefreshModels = async (providerId: string): Promise<void> => {
+  const handleRefreshModels = async (providerId: string, silent = false): Promise<void> => {
     // Spinner on this card while the cache-busting fetch runs
     setLoadingProviders((prev) => ({ ...prev, [providerId]: true }))
     try {
       const res = await window.api.refreshProviderModels(providerId)
       if (res.ok) {
-        flash(`${providerId}: ${res.models.length} model dimuat ulang`)
+        if (!silent) flash(`${providerId}: ${res.models.length} model dimuat ulang`)
       } else {
         flash(res.error || `Refresh ${providerId} gagal`)
       }
@@ -500,9 +511,19 @@ export const SettingsView: React.FC = () => {
    * handler ends in loadAll, so the card's status — OK, or an invalid-key
    * error with "Ganti key" — lands on the card automatically.
    */
-  const autoVerifyProvider = async (providerId: string): Promise<void> => {
-    await handleTest(providerId)
-    await handleRefreshModels(providerId)
+  /**
+   * After a NEW key is saved (row Save or add), verify it live without extra
+   * clicks: ping the API (Test) then force a fresh model list (Refresh). Each
+   * handler ends in loadAll, so the card's status — OK, or an invalid-key
+   * error with "Ganti key" — lands on the card automatically.
+   * Runs SILENT (MED-1): the caller flashes its own save message AFTER this
+   * returns — flash() replaces, so a "Testing…" banner would swallow it.
+   * Returns whether the live ping succeeded.
+   */
+  const autoVerifyProvider = async (providerId: string): Promise<boolean> => {
+    const ok = await handleTest(providerId, true)
+    await handleRefreshModels(providerId, true)
+    return ok
   }
 
   /** Persist the provider def list (add/edit/delete) — main rebuilds the live
@@ -547,8 +568,11 @@ export const SettingsView: React.FC = () => {
       const key = apiKeys[def.id]?.trim()
       const saved = await persistDefs(defs.map((d) => (d.id === def.id ? def : d)))
       if (!saved.ok) return
+      // NIT-1: hoisted so the save-flash branch below can pass the REAL
+      // configure result instead of fabricating { ok: true }.
+      let cfg: { ok?: boolean; error?: string } | undefined
       if (key) {
-        const cfg = (await window.api.configureAIProvider(
+        cfg = (await window.api.configureAIProvider(
           def.id,
           key,
           def.baseUrl || undefined,
@@ -567,11 +591,24 @@ export const SettingsView: React.FC = () => {
         })
       }
       await loadAll()
-      // A newly typed key gets verified automatically — live ping + fresh
-      // model list — so the card shows the new status without "klik Test".
-      flash(buildRowSaveFlash(def, Boolean(key), key ? { ok: true } : undefined))
+      // MED-1: verify SILENTLY first, then flash the save result — flash() is
+      // replace, so a "Testing…" banner would overwrite "disimpan" in the same
+      // render batch. A failed auto-verify flashes the real failure instead.
       if (key) {
-        await autoVerifyProvider(def.id)
+        const verified = await autoVerifyProvider(def.id)
+        // NIT-1: pass the REAL configure result (cfg), not a fabricated
+        // { ok: true } literal — cfg.ok was already confirmed above, so the
+        // flash is identical, but the code no longer lies about its source.
+        flash(
+          verified
+            ? buildRowSaveFlash(def, true, cfg)
+            : buildRowSaveFlash(def, true, {
+                ok: false,
+                error: 'Key tersimpan, tapi verifikasi otomatis gagal — lihat status kartu'
+              })
+        )
+      } else {
+        flash(buildRowSaveFlash(def, false, undefined))
       }
     } catch (e) {
       flash(e instanceof Error ? e.message : 'Save failed')
@@ -668,10 +705,14 @@ export const SettingsView: React.FC = () => {
       if (!cfg || !cfg.ok) {
         // Def already persisted — close the form and tell the user the key
         // needs a retry via the row's Save (honest, not "ditambahkan ✓").
+        // MED-3: keep the typed key in apiKeys[finalId] so the row's Save can
+        // retry it WITHOUT re-typing — the old "buka kartu & Save untuk ulang"
+        // message was misleading because Save had no key to persist.
+        setApiKeys((prev) => ({ ...prev, [finalId]: providerDraft.apiKey.trim() }))
         setShowAddProvider(false)
         setProviderDraft({ name: '', baseUrl: '', apiKey: '' })
         flash(
-          `Provider ${name} ditambahkan, tapi key GAGAL disimpan: ${cfg?.error || 'unknown'} — buka kartu & Save untuk ulang`
+          `Provider ${name} ditambahkan, tapi key GAGAL disimpan: ${cfg?.error || 'unknown'} — key disalin ke kartu, klik Save untuk ulang`
         )
         await loadAll()
         return
@@ -1062,7 +1103,7 @@ export const SettingsView: React.FC = () => {
                     <input
                       type="text"
                       className="input provider-name-input"
-                      aria-label={`Nama ${def.name || def.id}`}
+                      aria-label={`Nama ${providerLabel(def)}`}
                       value={def.name}
                       onChange={(e) =>
                         setDefs((prev) =>
@@ -1086,6 +1127,20 @@ export const SettingsView: React.FC = () => {
                           {statusText}
                           {p?.modelsFetchedAt ? ` · ${formatRefreshedAt(p.modelsFetchedAt)}` : ''}
                           {keySaved ? ` · key:${secStatus?.secrets?.[def.id]}` : ''}
+                          {/* MED-2 (b): a key typed but not yet saved is ACTIVE in
+                              memory (Test override) — label it so the card never
+                              looks like the key is persisted when it isn't. */}
+                          {apiKeys[def.id]?.trim() ? (
+                            <span
+                              style={{
+                                color: 'var(--color-warning)',
+                                fontWeight: 600
+                              }}
+                            >
+                              {' '}
+                              · key baru — belum disimpan
+                            </span>
+                          ) : null}
                         </>
                       )}
                     </div>
@@ -1170,7 +1225,7 @@ export const SettingsView: React.FC = () => {
                     <button
                       className="btn btn-ghost btn-sm provider-delete-btn"
                       onClick={() => void handleDeleteProvider(def.id)}
-                      title={`Hapus provider ${def.name || def.id}`}
+                      title={`Hapus provider ${providerLabel(def)}`}
                     >
                       Hapus
                     </button>
@@ -1578,8 +1633,9 @@ export const SettingsView: React.FC = () => {
               </label>
             ))}
             <p style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 12 }}>
-              AI write selalu butuh konfirmasi Apply (aiAutoWrite tetap off). Path di luar vault
+              AI write selalu butuh konfirmasi Apply (tidak ada auto-write). Path di luar vault
               ditolak. Plugin JS jalan di sandbox vm + worker; operasi tulis butuh prompt izin.
+              Automation & Plugins default nonaktif (WC-4) — aktifkan di sini jika dipakai.
             </p>
           </div>
         )}
@@ -1609,7 +1665,20 @@ export const SettingsView: React.FC = () => {
                 type="checkbox"
                 checked={automation?.enabled ?? false}
                 onChange={async (e) => {
-                  await window.api.setAutomationEnabled(e.target.checked)
+                  const want = e.target.checked
+                  // AE-3/WC-4: the engine-toggle grants the Automation permission
+                  // when turning ON (default-off) — otherwise the main gate would
+                  // reject the enable and the switch would silently fail.
+                  if (want && !permissions.automation) {
+                    await savePermissions({ ...permissions, automation: true })
+                  }
+                  const res = (await window.api.setAutomationEnabled(want)) as {
+                    ok?: boolean
+                    error?: string
+                  }
+                  if (res && res.ok === false) {
+                    flash(res.error || 'Gagal mengaktifkan automation')
+                  }
                   setAutomation(await window.api.getAutomation())
                 }}
               />
