@@ -6,7 +6,8 @@ import {
   DEFAULT_FORCE_SETTINGS,
   chargeFor,
   OBSIDIAN_SIM,
-  easeOutCubic
+  easeOutCubic,
+  easeOutBack
 } from './graphShared'
 import {
   nodeRadiusFor,
@@ -631,6 +632,22 @@ describe('Obsidian rubber-band drag physics', () => {
     })
   })
 
+  describe('easeOutBack (A-1 node entry spring)', () => {
+    it('lands exactly at 1 and clamps out-of-range t', () => {
+      expect(easeOutBack(0)).toBe(0)
+      expect(easeOutBack(1)).toBe(1)
+      expect(easeOutBack(-1)).toBe(0)
+      expect(easeOutBack(2)).toBe(1)
+    })
+
+    it('overshoots past 1 mid-flight then settles (elastic pop)', () => {
+      const peak = Math.max(easeOutBack(0.5), easeOutBack(0.7), easeOutBack(0.8))
+      expect(peak).toBeGreaterThan(1)
+      // After the peak it must return to exactly 1, not stay above it
+      expect(easeOutBack(0.99)).toBeCloseTo(1, 3)
+    })
+  })
+
   it('releasing the grab leaves a soft recoil instead of a dead stop', () => {
     const { sim, hub } = settledGraph()
     hub.fx = (hub.x ?? 0) + 260
@@ -727,9 +744,12 @@ describe('node entry animation (G19)', () => {
     it('uses the SLOWEST endpoint (min progress) — parity rule for both renderers', () => {
       const born = 5000
       const mid = born + NODE_ENTRY_MS / 2
-      // New (order 0) + old → edge follows the new node exactly
+      // New (order 0) + old → edge follows the new node's progress, capped at 1:
+      // the spring overshoots the node's scale past 1 (elastic pop), but opacity
+      // cannot exceed 1, so the steady-state endpoint wins the min once the new
+      // node passes 1 (mid-flight overshoot).
       const withOld = edgeEntryOpacity(mid, born, 0, undefined, undefined, 0)
-      expect(withOld).toBe(nodeEntryOpacity(nodeEntryProgress(mid, born, 0, 1)))
+      expect(withOld).toBe(nodeEntryOpacity(Math.min(1, nodeEntryProgress(mid, born, 0, 1))))
       // Two new nodes: slower one (higher order, later stagger) wins
       const a = nodeEntryProgress(mid, born, 0, 2)
       const b = nodeEntryProgress(mid, born, 1, 2)

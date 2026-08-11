@@ -7,7 +7,7 @@
  * Rule: if a visual value can be computed in BOTH renderers, it MUST live here
  * (or import from here) — never re-derive a per-renderer literal.
  */
-import { nodeRadius, lerp, smooth01, easeOutCubic, type LodLevel } from './graphShared'
+import { nodeRadius, lerp, smooth01, easeOutBack, type LodLevel } from './graphShared'
 
 /**
  * Minimum on-screen node radius (px) — both renderers keep nodes visible
@@ -196,7 +196,9 @@ export function nodeEntryProgress(
 ): number {
   if (born == null) return 1
   const delay = (NODE_ENTRY_STAGGER_MS * (enterOrder ?? 0)) / Math.max(1, maxOrder ?? 1)
-  return easeOutCubic((now - born - delay) / NODE_ENTRY_MS)
+  // A-1: easeOutBack overshoots (~1.09) then settles — node "pops" in with a
+  // spring instead of gliding (both renderers derive entry from this function).
+  return easeOutBack((now - born - delay) / NODE_ENTRY_MS)
 }
 
 /** Radius multiplier for an entry progress value. */

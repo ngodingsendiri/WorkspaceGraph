@@ -798,6 +798,8 @@ html:not([data-theme]) {
   display: flex;
   flex-direction: column;
   gap: 1px;
+  animation: scaleIn var(--duration-normal) var(--ease-spring);
+  transform-origin: top right;
 }
 .format-menu button {
   display: flex;
@@ -1499,7 +1501,7 @@ html:not([data-theme]) {
   overflow: hidden;
   text-overflow: ellipsis;
   pointer-events: none;
-  animation: graph-toast-in 0.15s ease;
+  animation: graph-toast-in var(--duration-normal) var(--ease-soft);
 }
 @keyframes graph-toast-in {
   from {
@@ -2307,7 +2309,7 @@ html:not([data-theme]) {
   flex-direction: column;
   overflow: hidden;
   flex: 0 1 auto;
-  animation: slideInRight var(--duration-normal) var(--ease-default);
+  animation: slideInRight var(--duration-normal) var(--ease-soft);
 }
 
 .chat-toolbar {
@@ -3622,10 +3624,10 @@ html:not([data-theme]) {
   align-items: flex-start;
   justify-content: center;
   padding-top: 80px;
-  background: color-mix(in srgb, #000 48%, transparent);
-  backdrop-filter: blur(4px);
-  animation: fadeIn var(--duration-fast);
+  background: color-mix(in srgb, #000 48%, transparent);  backdrop-filter: blur(4px);
+  animation: fadeIn var(--duration-normal) var(--ease-default);
 }
+
 [data-theme='light'] .search-overlay {
   /* Darker scrim so modal pops on light paper UI */
   background: color-mix(in srgb, hsl(220, 20%, 12%) 32%, transparent);
@@ -3642,7 +3644,7 @@ html:not([data-theme]) {
   box-shadow: var(--shadow-xl);
   display: flex;
   flex-direction: column;
-  animation: scaleIn var(--duration-fast) var(--ease-bounce);
+  animation: scaleIn var(--duration-slow) var(--ease-spring);
 }
 
 .search-input-wrap {
@@ -3975,7 +3977,7 @@ html:not([data-theme]) {
     background var(--duration-normal) var(--ease-default),
     border-color var(--duration-normal) var(--ease-default),
     box-shadow var(--duration-normal) var(--ease-default),
-    transform var(--duration-normal) var(--ease-default);
+    transform var(--duration-normal) var(--ease-spring);
 }
 .welcome-action-card:hover {
   background: var(--bg-hover);
@@ -4180,13 +4182,16 @@ html:not([data-theme]) {
   margin-bottom: var(--space-3);
   display: flex;
   align-items: flex-start;
-  flex-wrap: wrap;
-  gap: var(--space-3) var(--space-4);
-  transition: background var(--duration-fast);
+  flex-wrap: wrap;  gap: var(--space-3) var(--space-4);
+  transition:
+    background var(--duration-normal) var(--ease-default),
+    transform var(--duration-normal) var(--ease-soft),
+    box-shadow var(--duration-normal) var(--ease-default);
 }
-
 .provider-card:hover {
   background: var(--bg-hover);
+  transform: translateY(-1px);
+  box-shadow: var(--shadow-md);
 }
 
 .provider-card.active {
@@ -4379,6 +4384,8 @@ html:not([data-theme]) {
   display: flex;
   flex-direction: column;
   gap: 1px;
+  animation: scaleIn var(--duration-normal) var(--ease-spring);
+  transform-origin: top right;
 }
 .ctx-menu button {
   all: unset;
@@ -4519,7 +4526,7 @@ button {
   display: flex;
   align-items: center;
   justify-content: center;
-  animation: fadeIn 0.15s ease;
+  animation: fadeIn var(--duration-normal) var(--ease-default);
 }
 .merge-dialog {
   background: var(--bg-surface);
@@ -4531,7 +4538,8 @@ button {
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  animation: scaleIn 0.15s ease;
+  animation: scaleIn var(--duration-slow) var(--ease-spring);
+  transform-origin: center;
 }
 .merge-dialog-header {
   display: flex;
@@ -4766,9 +4774,9 @@ button {
   cursor: default;
   text-align: left;
   transition:
-    border-color var(--duration-fast) var(--ease-default),
-    transform var(--duration-fast) var(--ease-default),
-    box-shadow var(--duration-fast) var(--ease-default);
+    border-color var(--duration-normal) var(--ease-default),
+    transform var(--duration-normal) var(--ease-spring),
+    box-shadow var(--duration-normal) var(--ease-default);
 }
 /* Accent bar in the metric color (--metric-color set inline per card) */
 .dash-metric::before {
@@ -4856,7 +4864,7 @@ button {
   padding: var(--space-2) var(--space-3);
   border-radius: var(--radius-md);
   cursor: pointer;
-  transition: background var(--duration-fast);
+  transition: background var(--duration-normal) var(--ease-default);
 }
 .dash-list-item:hover {
   background: var(--bg-hover);
@@ -5139,7 +5147,7 @@ button {
   user-select: none;
   max-width: 380px;
   word-break: break-word;
-  animation: toast-slide-in 0.2s ease;
+  animation: toast-slide-in var(--duration-normal) var(--ease-spring);
   transition: opacity var(--duration-fast) var(--ease-default);
 }
 .toast:hover {
@@ -5209,7 +5217,7 @@ button {
   display: flex;
   align-items: center;
   justify-content: center;
-  animation: fadeIn 0.15s ease;
+  animation: fadeIn var(--duration-normal) var(--ease-default);
 }
 .wg-dialog {
   width: min(92vw, 420px);
@@ -5221,7 +5229,8 @@ button {
   display: flex;
   flex-direction: column;
   gap: var(--space-4);
-  animation: scaleIn 0.15s ease;
+  animation: scaleIn var(--duration-slow) var(--ease-spring);
+  transform-origin: center;
 }
 .wg-dialog-head {
   display: flex;
@@ -5423,8 +5432,7 @@ body.wg-resizing * {
   50% {
     opacity: 0.9;
   }
-}
-@media (prefers-reduced-motion: reduce) {
+}@media (prefers-reduced-motion: reduce) {
   .dash-skeleton-row {
     animation: none;
   }
@@ -5432,6 +5440,18 @@ body.wg-resizing * {
     animation: none;
   }
   .chat-stop-btn.is-armed {
+
+    animation: none;
+  }
+  /* A-1 entrance animations — decorative pop/slide skipped for reduced motion */
+  .search-modal,
+  .cmd-palette,
+  .wg-dialog,
+  .merge-dialog,
+  .ctx-menu,
+  .format-menu,
+  .chat-panel,
+  .toast {
     animation: none;
   }
 }
@@ -5496,6 +5516,34 @@ body.wg-resizing * {
   height: 100%;
 }
 
+/* Solo editor pane (split off) — reuse the split structure so MarkdownEditor
+   never remounts when toggling split (P-2). In block layout the editor pane's
+   flex basis is ignored, so it fills the container. */
+.split-view--solo {
+  display: block;
+}
+
+/* ================================================
+   Keep-alive view panes (P-2 navigation perf)
+   ================================================ */
+/* Every main view stays mounted; switching views toggles the `hidden`
+   attribute instead of unmounting. The pane must fill main-content for the
+   inner views' height:100% to resolve, and `position: relative` anchors the
+   absolutely-positioned graph container. */
+.view-keepalive {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  position: relative;
+}
+/* Author `display: flex` would override the UA [hidden] rule — force-hide. */
+.view-keepalive[hidden] {
+  display: none !important;
+}
+
 /* ================================================
    Command palette (F-3)
    ================================================ */
@@ -5508,7 +5556,7 @@ body.wg-resizing * {
   align-items: flex-start;
   justify-content: center;
   padding-top: 12vh;
-  animation: fade-in var(--duration-fast) var(--ease-default);
+  animation: fade-in var(--duration-normal) var(--ease-default);
 }
 .cmd-palette {
   width: min(620px, calc(100vw - 48px));
@@ -5520,6 +5568,8 @@ body.wg-resizing * {
   border-radius: 12px;
   box-shadow: 0 18px 50px rgba(0, 0, 0, 0.45);
   overflow: hidden;
+  animation: scaleIn var(--duration-slow) var(--ease-spring);
+  transform-origin: top center;
 }
 .cmd-input-wrap {
   display: flex;

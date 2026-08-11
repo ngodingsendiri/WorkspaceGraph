@@ -158,11 +158,17 @@
   /* Win caption strip reserved via env(titlebar-area-*); fallback ~3×46px */
   --titlebar-caption-fallback: 138px;
 
-  --duration-fast: 100ms;
-  --duration-normal: 200ms;
+  /* A-1 empuk-elastis: fast tetap responsif untuk micro-interaction (hover,
+     focus) — 250ms+ hanya untuk elemen besar (kartu, modal, panel, node). */
+  --duration-fast: 120ms;
+  --duration-normal: 250ms;
   --duration-slow: 350ms;
+  /* Fungsional (warna/bg/border): landing halus tanpa overshoot. */
   --ease-default: cubic-bezier(0.4, 0, 0.2, 1);
-  --ease-bounce: cubic-bezier(0.34, 1.56, 0.64, 1);
+  /* Panel/slide besar: easeOut kuat — berhenti lembut, tidak memantul. */
+  --ease-soft: cubic-bezier(0.22, 1, 0.36, 1);
+  /* Overshoot/spring: scale & pop (kartu, modal, dropdown, node entry). */
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
 
   --z-base: 1;
   --z-sidebar: 10;

@@ -334,6 +334,22 @@ export function easeOutCubic(t: number): number {
   return 1 - Math.pow(1 - x, 3)
 }
 
+/**
+ * A-1: overshoot ease (elastic pop) — accelerates, overshoots past 1, then
+ * settles back to exactly 1. Used for node entry so new nodes "spring" in
+ * instead of easing linearly. Clamped so t outside [0,1] lands on 0/1.
+ */
+export function easeOutBack(t: number): number {
+  const x = Math.max(0, Math.min(1, t))
+  // Exact endpoints — the polynomial only lands at ~2e-16 due to float error,
+  // and entry tests pin nodeEntryProgress(birth) === 0 / (done) === 1.
+  if (x === 0) return 0
+  if (x === 1) return 1
+  const c1 = 1.70158
+  const c3 = c1 + 1
+  return 1 + c3 * Math.pow(x - 1, 3) + c1 * Math.pow(x - 1, 2)
+}
+
 /** Stable pastel from folder name for color-by-folder mode */
 export function folderColor(relativePath: string, isLight: boolean): string {
   const folder = (relativePath || '').replace(/\\/g, '/').split('/').filter(Boolean)[0] || 'root'
