@@ -4,7 +4,10 @@ import {
   computeRealDegree,
   computeSearchMatchIds,
   computeFilteredNodes,
-  computeFilteredEdges
+  computeFilteredEdges,
+  countGraphNotes,
+  countGraphLinks,
+  graphCounts
 } from './graphViewData'
 import { matchGroupQuery, resolveGroupColors } from './graphQuery'
 
@@ -25,6 +28,41 @@ const e = (id: string, source: string, target: string, type = 'wiki_link'): Grap
   target,
   type,
   weight: 1
+})
+
+describe('F-5 graphCounts — one source of truth for dashboard card + graph header', () => {
+  it('counts real notes only, never tag/ghost/attachment nodes', () => {
+    const nodes: GraphNodeData[] = [
+      n('a'),
+      n('b'),
+      n('t1', { isTag: true, type: 'tag' }),
+      n('t2', { type: 'tag' }),
+      n('g', { isGhost: true, type: 'ghost' }),
+      n('att', { isAttachment: true, type: 'attachment' })
+    ]
+    expect(countGraphNotes(nodes)).toBe(2)
+  })
+
+  it('counts non-tag links only', () => {
+    const edges: GraphEdgeData[] = [e('1', 'a', 'b'), e('2', 'a', 't1', 'tag'), e('3', 'b', 'c')]
+    expect(countGraphLinks(edges)).toBe(2)
+  })
+
+  it('graphCounts matches the dashboard semantics for a tag-visible graph', () => {
+    // Graph renders 15 nodes (7 notes + 8 tags) and 13 edges (11 wiki + 2 tag)
+    // → header must say 7 notes · 11 links, identical to the dashboard card.
+    const nodes: GraphNodeData[] = [
+      ...Array.from({ length: 7 }, (_, i) => n(`note${i}`)),
+      ...Array.from({ length: 8 }, (_, i) => n(`tag${i}`, { isTag: true, type: 'tag' }))
+    ]
+    const edges: GraphEdgeData[] = [
+      ...Array.from({ length: 11 }, (_, i) => e(`w${i}`, `note${i % 7}`, `note${(i + 1) % 7}`)),
+      ...Array.from({ length: 2 }, (_, i) => e(`t${i}`, `note${i}`, `tag${i}`, 'tag'))
+    ]
+    const { notes, links } = graphCounts(nodes, edges)
+    expect(notes).toBe(7)
+    expect(links).toBe(11)
+  })
 })
 
 describe('computeRealDegree', () => {

@@ -20,6 +20,7 @@ import { useEditorStore } from '../../store/editorStore'
 import { useWorkspaceStore } from '../../store/workspaceStore'
 import type { SimNode, SimLink, SvgEdge, SvgNode, SvgLabel, SvgFrame } from './graphTypes'
 import { deltaMerge, sameSvgEdge, sameSvgNode, sameSvgLabel } from './graphFrameDelta'
+import { countGraphNotes, countGraphLinks, graphCounts } from './graphViewData'
 import {
   DEFAULT_FORCE_SETTINGS,
   OBSIDIAN_SIM,
@@ -1058,6 +1059,14 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
   filteredNodesRef.current = filteredNodes
   filteredEdgesRef.current = filteredEdges
 
+  // F-5: ONE source of truth for the "notes · links" header — counts real
+  // notes (never tag/ghost/attachment nodes) and non-tag links, exactly like
+  // the dashboard Graph card. Raw sim totals (stats) stay for LOD/perf.
+  const { notes: noteCount, links: linkCount } = useMemo(
+    () => graphCounts(filteredNodes, filteredEdges),
+    [filteredNodes, filteredEdges]
+  )
+
   // P2-7: never keep a selection on ids that left the visible graph (note
   // deleted, filter changed, rebuild) — Delete/O/arrows must not act on ghosts
   useEffect(() => {
@@ -1635,7 +1644,7 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
             })
           }
 
-          const hud = `${simNodes.length} notes · ${simLinks.length} links · k:${kSafe.toFixed(2)}`
+          const hud = `${countGraphNotes(simNodes)} notes · ${countGraphLinks(simLinks)} links · k:${kSafe.toFixed(2)}`
           // G-perf: structural sharing — reuse unchanged element references so
           // the memoized SVG components bail out (no DOM diff) for everything
           // that did not change this frame.
@@ -2014,8 +2023,11 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
    */
   useEffect(() => {
     // Embedded (split view) mounts the canvas while activeView is 'editor' —
-    // still run the seed/paint pipeline, just never steal global keys
-    if (activeView !== 'graph' && !embedded) return
+    // still run the seed/paint pipeline, just never steal global keys.
+    // Keep-alive (P-2): when the full graph view is open, the split pane is
+    // hidden — skip so a hidden embedded canvas never runs its own pipeline
+    // (double fetchGraph + sim while the full canvas is active).
+    if (activeView !== 'graph' && !(embedded && activeView === 'editor')) return
 
     // Fresh visit: allow vault restore; clear "user moved camera" for this enter
     userCameraTouchedRef.current = false
@@ -4471,7 +4483,7 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
       </ul>
       <div className="graph-toolbar">
         <span className="graph-toolbar-stats">
-          {stats.nodes} notes · {stats.edges} links
+          {noteCount} notes · {linkCount} links
           {searchQuery.trim() ? ` · “${searchQuery.trim()}”` : ''}
           {pathNodeIds ? ` · path ${pathNodeIds.size}` : ''}
           {focusNodeIds ? ` · focus` : ''}

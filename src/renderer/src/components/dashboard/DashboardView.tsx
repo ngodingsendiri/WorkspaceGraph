@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react'
 import { useWorkspaceStore } from '../../store/workspaceStore'
 import { useEditorStore } from '../../store/editorStore'
 import { useGraphStore } from '../../store/graphStore'
+import { countGraphNotes, countGraphLinks } from '../graph/graphViewData'
 import { TemplatePicker } from '../systems/TemplatePicker'
 import { Icon, type IconName } from '../ui/Icons'
 import { toast } from '../ui/Toast'
@@ -396,7 +397,8 @@ export const DashboardView: React.FC<{ onOpenSearch: () => void }> = ({ onOpenSe
   const orphanNodes = nodes.filter(
     (n) => !n.isGhost && !n.isTag && !n.isAttachment && n.degree === 0
   )
-  const realNoteCount = nodes.filter((n) => !n.isGhost && !n.isTag && !n.isAttachment).length
+  // F-5: shared graph counter — identical semantics to the graph view header
+  const realNoteCount = countGraphNotes(nodes)
 
   const metrics: {
     label: string
@@ -445,7 +447,7 @@ export const DashboardView: React.FC<{ onOpenSearch: () => void }> = ({ onOpenSe
     },
     {
       label: 'Graph',
-      value: `${realNoteCount}/${edges.filter((e) => e.type !== 'tag').length}`,
+      value: `${realNoteCount}/${countGraphLinks(edges)}`,
       color: 'var(--color-accent)',
       onClick: () => setActiveView('graph')
     },

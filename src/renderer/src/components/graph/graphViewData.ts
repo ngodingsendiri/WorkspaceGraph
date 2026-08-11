@@ -16,6 +16,51 @@ import type {
 import { safeTags } from './graphShared'
 import { resolveGroupColors } from './graphQuery'
 
+export interface GraphCounts {
+  /** Real notes only — tag/ghost/attachment nodes never counted as notes. */
+  notes: number
+  /** Wiki-style links only — tag edges never counted as links. */
+  links: number
+}
+
+/**
+ * F-5: ONE source of truth for the note/link counters shown by the dashboard
+ * Graph card AND the graph view header. Both displays must derive their
+ * numbers from these functions so they can never drift — e.g. a graph that
+ * renders tag nodes must not label them "notes" (that made the header say
+ * "15 notes" while the dashboard card said 7).
+ */
+export function countGraphNotes(nodes: readonly GraphNodeData[]): number {
+  let n = 0
+  for (const node of nodes) {
+    if (node.isTag || node.type === 'tag') continue
+    if (node.isGhost || node.type === 'ghost') continue
+    if (node.isAttachment || node.type === 'attachment') continue
+    n++
+  }
+  return n
+}
+
+/**
+ * Non-tag edges only — tag edges are metadata, not real links.
+ * Accepts the d3 sim-link shape (source may be a SimNode) — only `type` is read.
+ */
+export function countGraphLinks(edges: readonly { type?: string }[]): number {
+  let n = 0
+  for (const edge of edges) {
+    if (edge.type === 'tag') continue
+    n++
+  }
+  return n
+}
+
+export function graphCounts(
+  nodes: readonly GraphNodeData[],
+  edges: readonly GraphEdgeData[]
+): GraphCounts {
+  return { notes: countGraphNotes(nodes), links: countGraphLinks(edges) }
+}
+
 export type OrphanMode = 'all' | 'hide' | 'only'
 export type HubMode = 'all' | 'dim' | 'hide'
 
