@@ -8,6 +8,7 @@ import { DashboardView } from '../dashboard/DashboardView'
 import { MarkdownEditor } from '../editor/MarkdownEditor'
 import { GraphCanvas } from '../graph/GraphCanvas'
 import { ChatPanel } from '../chat/ChatPanel'
+import { ViewKeepAlive } from './ViewKeepAlive'
 import { SearchModal } from '../search/SearchModal'
 import { SettingsView } from '../settings/SettingsView'
 import { TemplatePicker } from '../systems/TemplatePicker'
@@ -346,33 +347,47 @@ date: ${today}
         <div className="main-content">
           {!isOpen || activeView === 'welcome' ? (
             <WelcomeScreen />
-          ) : activeView === 'dashboard' ? (
-            <DashboardView onOpenSearch={() => setIsSearchOpen(true)} />
-          ) : activeView === 'editor' && splitGraph ? (
-            <div className="split-view">
-              <div className="split-pane split-pane--editor">
-                <ErrorBoundary label="Editor">
-                  <MarkdownEditor />
-                </ErrorBoundary>
-              </div>
-              <div className="split-pane split-pane--graph">
-                <ErrorBoundary label="Graph">
-                  <GraphCanvas embedded />
-                </ErrorBoundary>
-              </div>
-            </div>
-          ) : activeView === 'editor' ? (
-            <ErrorBoundary label="Editor">
-              <MarkdownEditor />
-            </ErrorBoundary>
-          ) : activeView === 'graph' ? (
-            <ErrorBoundary label="Graph">
-              <GraphCanvas />
-            </ErrorBoundary>
-          ) : activeView === 'settings' ? (
-            <SettingsView />
           ) : (
-            <WelcomeScreen />
+            /*
+              P-2: keep-alive panes — every main view stays mounted and is only
+              hidden. Navigating between views is a display toggle, not a
+              remount, so the CodeMirror editor and graph canvas survive
+              navigation (and their scroll/undo/camera state with them).
+              The editor pane keeps MarkdownEditor's position stable so toggling
+              split view doesn't remount it either.
+            */
+            <>
+              <ViewKeepAlive active={activeView === 'dashboard'}>
+                <DashboardView onOpenSearch={() => setIsSearchOpen(true)} />
+              </ViewKeepAlive>
+              <ViewKeepAlive active={activeView === 'editor'}>
+                {/* Editor pane keeps MarkdownEditor at a stable position whether
+                    or not split view is on, so toggling split never remounts the
+                    editor (undo history, scroll, dirty buffers survive). */}
+                <div className={`split-view ${splitGraph ? '' : 'split-view--solo'}`}>
+                  <div className="split-pane split-pane--editor">
+                    <ErrorBoundary label="Editor">
+                      <MarkdownEditor />
+                    </ErrorBoundary>
+                  </div>
+                  {splitGraph && (
+                    <div className="split-pane split-pane--graph">
+                      <ErrorBoundary label="Graph">
+                        <GraphCanvas embedded />
+                      </ErrorBoundary>
+                    </div>
+                  )}
+                </div>
+              </ViewKeepAlive>
+              <ViewKeepAlive active={activeView === 'graph'}>
+                <ErrorBoundary label="Graph">
+                  <GraphCanvas />
+                </ErrorBoundary>
+              </ViewKeepAlive>
+              <ViewKeepAlive active={activeView === 'settings'}>
+                <SettingsView />
+              </ViewKeepAlive>
+            </>
           )}
         </div>
 
