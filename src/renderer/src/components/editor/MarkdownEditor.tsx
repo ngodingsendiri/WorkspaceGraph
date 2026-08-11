@@ -413,7 +413,7 @@ export const MarkdownEditor: React.FC = () => {
                     setFormatOpen(false)
                   }}
                 >
-                  <Icon name="bold" size={14} /> Bold
+                  <Icon name="bold" size={14} /> Tebal
                 </button>
                 <button
                   type="button"
@@ -422,7 +422,7 @@ export const MarkdownEditor: React.FC = () => {
                     setFormatOpen(false)
                   }}
                 >
-                  <Icon name="italic" size={14} /> Italic
+                  <Icon name="italic" size={14} /> Miring
                 </button>
                 <button
                   type="button"
@@ -431,7 +431,7 @@ export const MarkdownEditor: React.FC = () => {
                     setFormatOpen(false)
                   }}
                 >
-                  <Icon name="heading" size={14} /> Heading
+                  <Icon name="heading" size={14} /> Judul
                 </button>
                 <button
                   type="button"
@@ -449,7 +449,7 @@ export const MarkdownEditor: React.FC = () => {
                     setFormatOpen(false)
                   }}
                 >
-                  <Icon name="check" size={14} /> Task
+                  <Icon name="check" size={14} /> Tugas
                 </button>
                 <button
                   type="button"

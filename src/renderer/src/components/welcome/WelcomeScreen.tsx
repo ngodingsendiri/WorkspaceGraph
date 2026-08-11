@@ -93,7 +93,7 @@ export const WelcomeScreen: React.FC = () => {
             aria-busy={creating}
           >
             <Icon name="plus" size={28} strokeWidth={1.5} />
-            <h3>{creating ? 'Membuat…' : 'Create Vault'}</h3>
+            <h3>{creating ? 'Membuat…' : 'Buat Vault'}</h3>
             <p>Workspace baru + folder standar</p>
           </button>
         </div>

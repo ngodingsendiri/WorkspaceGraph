@@ -265,7 +265,7 @@ export const SettingsView: React.FC = () => {
       if (res.ok) {
         setMcpServers(servers)
         setMcpStatuses((res.statuses || []) as McpServerSt[])
-        flash('MCP servers saved — tools siap dipakai AI')
+        flash('Server MCP tersimpan — tools siap dipakai AI')
       } else {
         flash(res.error || 'MCP save gagal')
       }
@@ -475,7 +475,7 @@ export const SettingsView: React.FC = () => {
       flash(`Default provider: ${providerId}`)
       await loadAll()
     } catch (e) {
-      flash(e instanceof Error ? e.message : 'Set default failed')
+      flash(e instanceof Error ? e.message : 'Gagal setel default')
     }
   }
 
@@ -776,7 +776,7 @@ export const SettingsView: React.FC = () => {
     const settings = ((await window.api.getSettings()) as Record<string, unknown>) || {}
     settings.permissions = next
     await window.api.saveSettings(settings)
-    flash('Permissions saved')
+    flash('Izin tersimpan')
     await loadAll()
   }
 
@@ -959,7 +959,7 @@ export const SettingsView: React.FC = () => {
   return (
     <div className="settings-container">
       <div className="settings-nav">
-        <div className="section-title">Settings</div>
+        <div className="section-title">Pengaturan</div>
         {nav.map((n) => (
           <button
             key={n.id}
@@ -993,7 +993,7 @@ export const SettingsView: React.FC = () => {
 
         {section === 'ai' && (
           <div className="settings-section">
-            <h2>AI Provider Configurations</h2>
+            <h2>Konfigurasi Provider AI</h2>
             <p
               style={{
                 fontSize: 'var(--text-sm)',
@@ -1207,7 +1207,7 @@ export const SettingsView: React.FC = () => {
                       className="btn btn-surface btn-sm"
                       onClick={() => void handleSetDefault(def.id)}
                     >
-                      Set default
+                      Setel default
                     </button>
                     <button
                       className="btn btn-surface btn-sm"
@@ -1458,17 +1458,17 @@ export const SettingsView: React.FC = () => {
               </div>
             </div>
             <p style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 12, lineHeight: 1.5 }}>
-              Alur: tambah provider (nama + base URL + key) → <b>Save</b> → tes otomatis (ping API)
-              + daftar model dimuat ulang. Di Chat pilih model, atau <b>Set default</b>. Provider
-              custom memakai protokol OpenAI-compatible (butuh API key; Ollama lokal gratis tanpa
-              key). Menghapus provider juga menghapus key tersimpannya.
+              Alur: tambah provider (nama + base URL + key) → <b>Simpan</b> → tes otomatis (ping
+              API) + daftar model dimuat ulang. Di Chat pilih model, atau <b>Setel default</b>.
+              Provider custom memakai protokol OpenAI-compatible (butuh API key; Ollama lokal gratis
+              tanpa key). Menghapus provider juga menghapus key tersimpannya.
             </p>
           </div>
         )}
 
         {section === 'index' && (
           <div className="settings-section">
-            <h2>Search Index (cache)</h2>
+            <h2>Indeks Pencarian (cache)</h2>
             <div
               style={{
                 background: 'var(--bg-surface)',
@@ -1594,7 +1594,7 @@ export const SettingsView: React.FC = () => {
 
         {section === 'security' && (
           <div className="settings-section">
-            <h2>Security & permissions</h2>
+            <h2>Keamanan & izin</h2>
             <p
               style={{
                 fontSize: 'var(--text-sm)',
@@ -1644,7 +1644,7 @@ export const SettingsView: React.FC = () => {
 
         {section === 'automation' && (
           <div className="settings-section">
-            <h2>Automation</h2>
+            <h2>Otomasi</h2>
             <p
               style={{
                 fontSize: 'var(--text-sm)',
@@ -1936,7 +1936,7 @@ export const SettingsView: React.FC = () => {
               onClick={async () => {
                 await window.api.reloadPlugins()
                 await loadAll()
-                flash('Plugins reloaded')
+                flash('Plugin dimuat ulang')
               }}
             >
               Reload plugins
@@ -2292,7 +2292,7 @@ export const SettingsView: React.FC = () => {
               </div>
             )}
             <p style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 12, lineHeight: 1.5 }}>
-              Alur: tambah → <b>Test</b> (handshake + tools/list) → <b>Simpan</b>. Tool read selalu
+              Alur: tambah → <b>Tes</b> (handshake + tools/list) → <b>Simpan</b>. Tool read selalu
               dipakai AI; tool write butuh toggle <b>Izinkan tool write</b> + role berizin menulis
               (researcher hanya baca). Contoh server: filesystem, context7, memory, GitHub,
               Postgres.
@@ -2302,7 +2302,7 @@ export const SettingsView: React.FC = () => {
 
         {section === 'appearance' && (
           <div className="settings-section">
-            <h2>Appearance</h2>
+            <h2>Tampilan</h2>
             <p
               style={{
                 fontSize: 'var(--text-sm)',

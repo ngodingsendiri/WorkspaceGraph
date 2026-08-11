@@ -59,9 +59,9 @@ export const TemplatePicker: React.FC<{ open: boolean; onClose: () => void }> = 
     <div className="search-overlay" onClick={onClose}>
       <div className="search-modal" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 480 }}>
         <div style={{ padding: 'var(--space-4)', borderBottom: '1px solid var(--border-subtle)' }}>
-          <div style={{ fontWeight: 600, marginBottom: 4 }}>New from template</div>
+          <div style={{ fontWeight: 600, marginBottom: 4 }}>Dari template</div>
           <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
-            Project · Task · People · Knowledge · SOP · Daily
+            Proyek · Tugas · Orang · Pengetahuan · SOP · Harian
           </div>
         </div>
         <div
@@ -77,13 +77,13 @@ export const TemplatePicker: React.FC<{ open: boolean; onClose: () => void }> = 
             >
               {templates.map((t) => (
                 <option key={t.id} value={t.id}>
-                  {t.name} ({t.kind}) {t.builtin ? '' : '· user'}
+                  {t.name} ({t.kind}) {t.builtin ? '' : '· kustom'}
                 </option>
               ))}
             </select>
           </label>
           <label style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
-            Title
+            Judul
             <input
               className="input"
               style={{ width: '100%', marginTop: 4 }}
@@ -99,10 +99,10 @@ export const TemplatePicker: React.FC<{ open: boolean; onClose: () => void }> = 
           {error && <div style={{ fontSize: 12, color: 'var(--color-error)' }}>{error}</div>}
           <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
             <button className="btn btn-ghost btn-sm" onClick={onClose}>
-              Cancel
+              Batal
             </button>
             <button className="btn btn-primary btn-sm" onClick={() => void handleCreate()}>
-              Create
+              Buat
             </button>
           </div>
         </div>

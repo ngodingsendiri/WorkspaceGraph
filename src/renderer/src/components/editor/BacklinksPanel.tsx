@@ -30,14 +30,14 @@ export const BacklinksPanel: React.FC<{
     <div className="backlinks-panel">
       <div className="inspector-head">
         <span className="section-title" style={{ padding: 0, margin: 0 }}>
-          Inspector
+          Inspektor
         </span>
       </div>
 
       <div className="inspector-body">
-        <div className="inspector-label">Outline ({headings.length})</div>
+        <div className="inspector-label">Garis besar ({headings.length})</div>
         {headings.length === 0 ? (
-          <div className="inspector-empty">No headings</div>
+          <div className="inspector-empty">Tidak ada judul</div>
         ) : (
           headings.map((h, i) => (
             <button
@@ -54,10 +54,10 @@ export const BacklinksPanel: React.FC<{
         )}
 
         <div className="inspector-label" style={{ marginTop: 14 }}>
-          Backlinks ({backlinks.length})
+          Backlink ({backlinks.length})
         </div>
         {backlinks.length === 0 ? (
-          <div className="inspector-empty">No backlinks</div>
+          <div className="inspector-empty">Tidak ada backlink</div>
         ) : (
           backlinks.map((b) => (
             <button
@@ -72,10 +72,10 @@ export const BacklinksPanel: React.FC<{
         )}
 
         <div className="inspector-label" style={{ marginTop: 12 }}>
-          Outgoing ({outgoing.length})
+          Tautan keluar ({outgoing.length})
         </div>
         {outgoing.length === 0 ? (
-          <div className="inspector-empty">No outgoing links</div>
+          <div className="inspector-empty">Tidak ada tautan keluar</div>
         ) : (
           outgoing.map((b) => (
             <button

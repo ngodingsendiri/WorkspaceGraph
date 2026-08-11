@@ -327,7 +327,8 @@ describe('Renderer wiring', () => {
     const ed = read('src/renderer/src/store/editorStore.ts')
     expect(has(ed, 'refreshPreview', 'refreshLinks', 'saveTab')).toBe(true)
     const bl = read('src/renderer/src/components/editor/BacklinksPanel.tsx')
-    expect(has(bl, 'Outline', 'Backlinks')).toBe(true)
+    // F-6: labels unified to Indonesian (Garis besar / Backlink / Tautan keluar)
+    expect(has(bl, 'Garis besar', 'Backlink', 'Tautan keluar')).toBe(true)
     const prev = read('src/renderer/src/components/editor/MarkdownPreview.tsx')
     expect(prev.includes('resolveWikiLink')).toBe(true)
   })
@@ -1093,6 +1094,25 @@ describe('Engine source contracts', () => {
     expect(has(de, 'getOverview', 'parseCheckboxes', "type === 'project'", "type === 'task'")).toBe(
       true
     )
+  })
+  it('F-1: Templates/*.md are never indexed as notes (graph/domain/search/recent/dashboard)', () => {
+    // Single source of truth: WorkspaceEngine.isTemplateDir (top-level only)
+    const we = read('src/main/engine/WorkspaceEngine.ts')
+    expect(has(we, 'isTemplateDir', "'templates'", 'countNotes')).toBe(true)
+    // Every index path routes through it
+    const sh = read('src/main/ipc/shared.ts')
+    expect(
+      has(sh, 'isTemplateDir', 'collectVaultFiles', 'syncSingleFile', 'refreshDomainFromDisk')
+    ).toBe(true)
+    expect(sh.split('isTemplateDir').length - 1).toBeGreaterThanOrEqual(3)
+  })
+  it('F-2: template placeholders never mint ghost nodes', () => {
+    const eng = read('src/main/engine/GraphEngine.ts')
+    expect(has(eng, 'ensureGhostNode', '\\{\\{')).toBe(true)
+  })
+  it('F-3: seeded template files do not duplicate the builtin template list', () => {
+    const te = read('src/main/engine/TemplateEngine.ts')
+    expect(has(te, 'normalizeTemplateName', 'builtinNames', 'getBuiltinTemplates')).toBe(true)
   })
 })
 

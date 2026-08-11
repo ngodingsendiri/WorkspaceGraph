@@ -6,7 +6,7 @@
  *
  * Usage:
  *   import { toast } from "../components/ui/Toast"
- *   toast("Done!", { variant: "success", duration: 3000 })
+ *   toast("Selesai!", { variant: "success", duration: 3000 })
  *
  *   // Mount once in App root:
  *   <Toaster />
