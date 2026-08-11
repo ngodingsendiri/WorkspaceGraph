@@ -177,9 +177,11 @@ export function registerAIHandlers(): void {
     'ai:testProvider',
     async (_, providerId?: string, overrides?: { apiKey?: string; baseUrl?: string }) => {
       try {
-        // A key typed in the card but not yet saved: patch the in-memory config
-        // (never persisted by a Test) so the ping verifies the NEW key instead of
-        // the stale saved one — the natural paste → Test → Save flow stays honest.
+        // MED-2 (b) — ADR-0002: a key typed in the card but not yet saved is
+        // patched into the in-memory config (never persisted by a Test) so the
+        // ping verifies the NEW key instead of the stale saved one — the natural
+        // paste → Test → Save flow stays honest; Save without a key resets the
+        // override to the saved key (ADR-0002 decision b+c).
         // LOW-1: patch fires for a baseUrl-only override too (a baseUrl edited
         // but not yet saved must be what the ping verifies — same in-memory
         // rule as the key: configureProvider never persists).

@@ -39,7 +39,7 @@ export class SearchEngine {
 
   private searchWorker: Awaited<ReturnType<typeof getSearchIndexWorker>> | null = null
   // WG_NO_SEARCH_WORKER=1 forces local Fuse (no worker thread) — used by the
-  // one-off WB-12 validation script and handy for perf A/B in plain node.
+  // one-off WB-12 validation script (ADR-0005) and handy for perf A/B in plain node.
   private useWorker = process.env.WG_NO_SEARCH_WORKER !== '1'
 
   // WB-2: pending Fuse deltas — flushed to the worker (debounced) instead of
@@ -427,7 +427,7 @@ export class SearchEngine {
       try {
         const semHits = await embeddingEngine.search(q, limit)
         const semResults: SearchResult[] = []
-        // WB-12 follow-up (vault validation): a doc that is BOTH a weak keyword
+        // WB-12 — ADR-0005 (vault validation): a doc that is BOTH a weak keyword
         // hit and a strong semantic hit must keep its BEST signal. The old
         // keyword-first dedupe discarded the semantic score for docs already in
         // `results`, sinking the most relevant doc to the bottom (validated:
@@ -460,12 +460,13 @@ export class SearchEngine {
           }
         }
         if (semResults.length > 0 || semBoost.size > 0) {
-          // WB-12: min-max normalization flattened every keyword score to 1.0
-          // (FTS rank scores are compressed into a narrow band), so even a weak
-          // tail keyword hit outranked a strong vector match. Blend on ABSOLUTE
-          // scales instead — keyword keeps its 0-100 rank/Fuse score, semantic
-          // cosine maps to 0-100. A strong semantic hit (≥~0.9) now surfaces
-          // over weak keyword tail hits while exact keyword matches still lead.
+          // WB-12 — ADR-0005: min-max normalization flattened every keyword
+          // score to 1.0 (FTS rank scores are compressed into a narrow band), so
+          // even a weak tail keyword hit outranked a strong vector match. Blend
+          // on ABSOLUTE scales instead — keyword keeps its 0-100 rank/Fuse
+          // score, semantic cosine maps to 0-100. A strong semantic hit (≥~0.9)
+          // now surfaces over weak keyword tail hits while exact keyword matches
+          // still lead.
           const pool = results.map((r) => ({ r, s: 0.6 * r.score }))
           for (const r of semResults)
             pool.push({ r, s: 0.4 * Math.max(0, Math.min(1, r.score)) * 100 })

@@ -48,6 +48,7 @@ bukan hasil optimasi menyeluruh — dapat dituning ulang jika ranking berubah ke
 
 ## Referensi
 
+- Komentar inline di `SearchEngine.ts` (semBoost, blend, harness validasi) menyebut `ADR-0005` — sinkron (2026-08-11)
 - `src/main/engine/SearchEngine.ts` — blend hybrid (~line 437–470: `semBoost`, `0.4 * …`,
   `0.6 * r.score`)
 - `scripts/wb12-validation.ts` — harness validasi vault nyata (6 query, OLD vs NEW)

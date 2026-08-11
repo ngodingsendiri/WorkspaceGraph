@@ -57,6 +57,7 @@ setelah Save apa pun; tidak perlu IPC baru. Implementasi M1 cukup label jujur (b
 - `src/renderer/src/components/settings/SettingsView.tsx` — label `· key baru — belum disimpan`
 - `src/main/ipc/handlers/ai.ts` — `ai:testProvider` (override + `patched:true`)
 - `src/main/ipc/shared.ts` — `loadSettingsIntoProviders` (hanya key tersimpan yang diterapkan)
+- Komentar inline di `SettingsView.tsx` (label) & `ai.ts` (`ai:testProvider`) menyebut `ADR-0002` — sinkron (2026-08-11)
 - `docs/AUDIT_2026-08-10_save-stop.md` — temuan MED-2 (opsi a/b/c)
 - `docs/TODO_FIX_2026-08-10.md` — entri MED-2 (keputusan ✅, M1)
 - `docs/FIX_PLAN_2026-08-10.md` — tabel Gate 0 MED-2 ✅ **DIPUTUSKAN: (b)+(c)**

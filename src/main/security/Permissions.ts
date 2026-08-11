@@ -15,9 +15,10 @@ export interface AppPermissions {
 export const DEFAULT_PERMISSIONS: AppPermissions = {
   aiAccess: true,
   aiTools: true,
-  // WC-4 decision (2026-08-10): plugins (code execution) and automation (file
-  // actions) are OPT-IN — a fresh vault / untrusted folder must never auto-load
-  // either. Users enable them explicitly in Settings → Security.
+  // WC-4 decision (2026-08-10) — ADR-0003: plugins (code execution) and
+  // automation (file actions) are OPT-IN — a fresh vault / untrusted folder
+  // must never auto-load either. Users enable them explicitly in
+  // Settings → Security. (ADR-0003: default-off posture.)
   automation: false,
   plugins: false
 }
@@ -27,7 +28,7 @@ export function readPermissions(settings: Record<string, unknown>): AppPermissio
   return {
     aiAccess: p.aiAccess !== false,
     aiTools: p.aiTools !== false,
-    // Explicit opt-in: absent/undefined → OFF (default-off posture).
+    // Explicit opt-in: absent/undefined → OFF (default-off posture — ADR-0003).
     automation: p.automation === true,
     plugins: p.plugins === true
   }

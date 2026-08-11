@@ -1,10 +1,11 @@
 #!/usr/bin/env node
 /**
- * AG-2 guard: fail CI (and local `npm run check:crlf`) when any tracked text
- * file contains CRLF line endings. This keeps the 3342 prettier "Delete ␍"
- * warnings from ever returning — they fired on CRLF working-tree copies, and
- * only for src/ (docs, package.json, fixtures were outside lint scope, so a
- * lint-only gate would miss CRLF creeping back into those).
+ * AG-2 guard (ADR-0004): fail CI (and local `npm run check:crlf`) when any
+ * tracked text file contains CRLF line endings. This keeps the 3342 prettier
+ * "Delete ␍" warnings from ever returning — they fired on CRLF working-tree
+ * copies, and only for src/ (docs, package.json, fixtures were outside lint
+ * scope, so a lint-only gate would miss CRLF creeping back into those).
+ * (ADR-0004: LF policy — normalize once + .gitattributes eol=lf.)
  *
  * Intended exceptions (declared in .gitattributes):
  *  - *.bat  → cmd.exe label/goto parsing needs CRLF (START-APP.bat)

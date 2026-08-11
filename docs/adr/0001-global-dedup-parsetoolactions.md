@@ -67,5 +67,6 @@ Yang diperbaiki hanya **dokumentasi** (bukan perilaku):
 - `src/main/ai/AgentTools.ts` — `parseToolActions` (~line 470, blok dedup ~line 507)
 - `src/main/ai/AgentTools.test.ts` — test non-consecutive dedup
 - `src/main/ai/AIMiddleware.test.ts:551` — kontrak yang bergantung pada dedup global
+- `src/main/ai/AgentTools.ts` komentar dedup menyebut `(ADR-0001 / AD-2)` — sinkron dengan ADR ini (2026-08-11)
 - `docs/TODO_FIX_2026-08-10.md` — entri AD-2 (keputusan ✅)
 - `docs/FIX_PLAN_2026-08-10.md` — tabel Gate 0, AD-2 ✅ **DIPUTUSKAN: global adalah fitur**

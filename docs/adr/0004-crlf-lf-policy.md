@@ -54,6 +54,6 @@ Implementasi:
 ## Referensi
 
 - `.gitattributes` — `* text=auto eol=lf` + pengecualian `*.bat`
-- `scripts/check-crlf.mjs`, `package.json` (`check:crlf`), `.github/workflows/ci.yml` (job `crlf`)
+- `scripts/check-crlf.mjs`, `package.json` (`check:crlf`), `.github/workflows/ci.yml` (job `crlf`) — header script menyebut `ADR-0004` (2026-08-11)
 - `docs/TODO_FIX_2026-08-10.md` — entri AG-2 (keputusan ✅ + CI guard)
 - `docs/FIX_PLAN_2026-08-10.md` — tabel Gate 0 AG-2 ✅ **DIPUTUSKAN: (a)**

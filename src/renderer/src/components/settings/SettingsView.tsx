@@ -159,8 +159,8 @@ export const SettingsView: React.FC = () => {
   const [permissions, setPermissions] = useState({
     aiAccess: true,
     aiTools: true,
-    // WC-4 decision (2026-08-10): plugins/automation default OFF — opt-in.
-    // loadAll merges an explicit settings.permissions over these defaults.
+    // WC-4 decision (2026-08-10) — ADR-0003: plugins/automation default OFF —
+    // opt-in. loadAll merges an explicit settings.permissions over these defaults.
     automation: false,
     plugins: false
   })
@@ -1127,9 +1127,11 @@ export const SettingsView: React.FC = () => {
                           {statusText}
                           {p?.modelsFetchedAt ? ` · ${formatRefreshedAt(p.modelsFetchedAt)}` : ''}
                           {keySaved ? ` · key:${secStatus?.secrets?.[def.id]}` : ''}
-                          {/* MED-2 (b): a key typed but not yet saved is ACTIVE in
-                              memory (Test override) — label it so the card never
-                              looks like the key is persisted when it isn't. */}
+                          {/* MED-2 (b) — ADR-0002: a key typed but not yet saved is
+                              ACTIVE in memory (Test override) — label it so the
+                              card never looks like the key is persisted when it
+                              isn't. (ADR-0002: keep the override, label it, reset
+                              on Save.) */}
                           {apiKeys[def.id]?.trim() ? (
                             <span
                               style={{
