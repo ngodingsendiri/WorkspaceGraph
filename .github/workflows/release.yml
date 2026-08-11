@@ -50,6 +50,21 @@ jobs:
       - run: npm ci
       - run: npm run build
       - run: npx electron-builder --win --publish never
+      - name: Verify Windows artifact (name pattern + minimum size)
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          EXES=(dist/WorkspaceGraph-*.exe)
+          [ ${#EXES[@]} -eq 1 ] || { echo "expected exactly 1 installer, got ${#EXES[@]}"; exit 1; }
+          EXE="${EXES[0]}"
+          case "$EXE" in
+            *-setup.exe) echo "name OK: $EXE" ;;
+            *) echo "unexpected installer name: $EXE"; exit 1 ;;
+          esac
+          SIZE=$(wc -c < "$EXE")
+          echo "$EXE -> $SIZE bytes"
+          [ "$SIZE" -ge 52428800 ] || { echo "installer too small: $EXE"; exit 1; }
       - uses: actions/upload-artifact@v4
         with:
           name: installer-win
@@ -92,6 +107,38 @@ jobs:
             echo "Apple secrets absent → building un-notarized DMGs"
           fi
           npx electron-builder ${ARGS}
+      - name: Verify macOS artifacts (name pattern + size; stapler/spctl when notarized)
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          DMGS=(dist/WorkspaceGraph-*.dmg)
+          [ ${#DMGS[@]} -eq 2 ] || { echo "expected 2 DMGs (x64 + arm64), got ${#DMGS[@]}"; exit 1; }
+          for d in "${DMGS[@]}"; do
+            case "$d" in
+              *-x64.dmg|*-arm64.dmg) echo "name OK: $d" ;;
+              *) echo "unexpected DMG name: $d"; exit 1 ;;
+            esac
+            SIZE=$(wc -c < "$d")
+            echo "$d -> $SIZE bytes"
+            [ "$SIZE" -ge 52428800 ] || { echo "DMG too small: $d"; exit 1; }
+          done
+          if [ -n "${APPLE_ID}" ] && [ -n "${APPLE_APP_SPECIFIC_PASSWORD}" ] && [ -n "${APPLE_TEAM_ID}" ]; then
+            echo "Notarized build — verifying staple + Gatekeeper on each DMG"
+            for d in "${DMGS[@]}"; do
+              xcrun stapler validate "$d"
+              MOUNT=$(mktemp -d)
+              hdiutil attach "$d" -mountpoint "$MOUNT" -nobrowse -quiet
+              APP=$(find "$MOUNT" -maxdepth 1 -name '*.app' -print -quit)
+              if [ -z "$APP" ]; then
+                echo "no .app inside $d"; hdiutil detach "$MOUNT" -quiet; exit 1
+              fi
+              spctl -a -vv "$APP"
+              hdiutil detach "$MOUNT" -quiet
+            done
+          else
+            echo "Un-notarized build — skipping stapler/spctl"
+          fi
       - uses: actions/upload-artifact@v4
         with:
           name: installer-mac

@@ -18,6 +18,9 @@ mengaktifkan code signing Windows + notarisasi macOS.
      **dua** DMG: `WorkspaceGraph-<version>-x64.dmg` + `-arm64.dmg`
    - `release` (ubuntu-latest) → unduh semua artifact → publish **satu** GitHub
      Release dengan `generate_release_notes: true`
+
+   Kedua job build juga **memverifikasi artifact** sebelum di-upload (lihat
+   §7a) — build gagal otomatis bila installer tidak lolos cek.
 3. Installer ter-attach ke release, siap diunduh.
 
 **Aturan wajib:** tag **harus cocok** dengan `version` di `package.json` —
@@ -90,6 +93,12 @@ Notarisasi **hanya aktif bila ketiganya ada** — job `build-mac` mengecek
 ketiganya dan menambahkan `-c.mac.notarize=true` saat itu; `electron-builder.yml`
 tetap `notarize: false` sebagai default aman agar build tanpa secret tidak gagal.
 
+Saat ter-notarisasi, step verifikasi di CI **otomatis menjalankan
+`xcrun stapler validate`** pada tiap DMG dan **`spctl -a -vv`** pada `.app` di
+dalamnya (DMG di-mount dulu) — jadi release hanya terbit bila staple valid dan
+Gatekeeper lolos. Build un-notarized melewati cek ini (log: "skipping
+stapler/spctl").
+
 **Prasyarat teknis (sudah terpasang):**
 - `hardenedRuntime: true` di `electron-builder.yml` — wajib untuk notarisasi.
 - `build/entitlements.mac.plist` — entitlement JIT/unsigned-executable-memory
@@ -143,6 +152,17 @@ Catatan: `npm run build` (electron-vite) harus jalan dulu — output ada di
 ---
 
 ## 7. Rollback / troubleshooting
+
+### 7a. Verifikasi artifact di CI
+
+Sebelum upload, kedua job build memverifikasi artifact (gagal = job merah,
+release tidak terbit):
+
+| Cek | build-win | build-mac |
+|-----|-----------|-----------|
+| Nama sesuai pola | tepat 1 `WorkspaceGraph-*-setup.exe` | tepat 2 DMG: `WorkspaceGraph-*-x64.dmg` + `*-arm64.dmg` |
+| Ukuran minimum | ≥ 50 MB (`wc -c`) | ≥ 50 MB per DMG (`wc -c`) |
+| Stapler + Gatekeeper | — | hanya saat ter-notarisasi: `xcrun stapler validate` tiap DMG + `spctl -a -vv` pada `.app` dalam DMG ter-mount |
 
 - **Release salah** → hapus di GitHub (Releases → ⋯ → Delete); tag dihapus
   dengan `git push origin :refs/tags/vX.Y.Z` + `git tag -d vX.Y.Z`.
