@@ -26,6 +26,7 @@ import {
   getCoreMemoryRelPaths,
   AI_MEMORY_DIR
 } from '../../ai/WorkspaceMemory'
+import { notifyStreamCompleted } from '../../ai/autoIngest'
 import { readPermissions } from '../../security/Permissions'
 import { assertPathInVault } from '../../security/PathSandbox'
 import {
@@ -369,6 +370,11 @@ export function registerAIHandlers(): void {
           done: true,
           error: msg
         })
+      } finally {
+        // R2-4: episodic auto-ingest — count the completed stream and, on the
+        // cadence (N streams or daily), append a verified summary to
+        // AI Memory/Log Ingest.md. Fire-and-forget: never blocks the reply.
+        notifyStreamCompleted(workspaceEngine.getState().rootPath)
       }
     }
   )
