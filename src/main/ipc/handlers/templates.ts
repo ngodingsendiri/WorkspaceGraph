@@ -52,12 +52,16 @@ export function registerTemplateHandlers(): void {
       if (!tpl) return { ok: false, error: 'Template not found' }
 
       const safeTitle = (title || 'Untitled').replace(/[<>:"/\\|?*]/g, '-').trim() || 'Untitled'
-      const content = templateEngine.render(tpl.body, {
+      // F-4: preview (template:render) and create MUST share the exact same
+      // render path — renderById — so a note created from a template always
+      // carries the same frontmatter (type/status/created/…) as the preview.
+      const content = templateEngine.renderById(templateId, state.rootPath, {
         title: safeTitle,
         filename: safeTitle,
         workspace: path.basename(state.rootPath),
         ...(extraVars || {})
       })
+      if (content == null) return { ok: false, error: 'Template not found' }
 
       const destFolder = folder || tpl.defaultFolder
       const root = assertPathInVault(state.rootPath, state.rootPath)

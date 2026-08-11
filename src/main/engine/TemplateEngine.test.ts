@@ -71,6 +71,36 @@ describe('TemplateEngine', () => {
     })
   })
 
+  describe('F-4 regression — frontmatter survives template create', () => {
+    it('every builtin renders with the full frontmatter block (type/created kept)', () => {
+      for (const t of engine.getBuiltinTemplates()) {
+        const out = engine.renderById(t.id, workspace, { title: 'Note X', date: '2026-07-22' })
+        expect(out, `${t.id} should render`).not.toBeNull()
+        // File content must START with the frontmatter fence — the F-4 finding
+        // claimed created files lost it (opened with bare "# Title").
+        expect(out!.startsWith('---'), `${t.id} keeps leading frontmatter`).toBe(true)
+        expect(out!, `${t.id} keeps type:`).toContain('type:')
+        // Timestamp field is `created:` on most, `date:` on daily — either must survive
+        expect(out!.match(/\n(created|date):/), `${t.id} keeps its date field`).not.toBeNull()
+      }
+    })
+
+    it('create-note composition (title/filename/workspace vars) keeps frontmatter', () => {
+      const content = engine.renderById('builtin-project', workspace, {
+        title: 'ProyekUji',
+        filename: 'ProyekUji',
+        workspace: 'test-vault'
+      })
+      expect(content).not.toBeNull()
+      expect(content!.startsWith('---')).toBe(true)
+      expect(content).toContain('title: ProyekUji')
+      expect(content).toContain('type: project')
+      expect(content).toContain('status: planning')
+      // No unrendered placeholder left in the frontmatter block
+      expect(content).not.toMatch(/\{\{\s*(title|filename|date|workspace)\s*\}\}/)
+    })
+  })
+
   describe('vault templates', () => {
     it('lists user templates from Templates/*.md', () => {
       fs.mkdirSync(path.join(workspace, 'Templates'), { recursive: true })
@@ -97,6 +127,25 @@ describe('TemplateEngine', () => {
       expect(dir.some((f) => f.endsWith('.md'))).toBe(true)
       // Idempotent — second seed writes nothing new
       expect(engine.seedBuiltinToVault(workspace)).toBe(0)
+    })
+
+    it('F-3: seeded builtin files do NOT duplicate the builtin list', () => {
+      // openWorkspace seeds Templates/*.md named after the builtins
+      engine.seedBuiltinToVault(workspace)
+      const list = engine.listTemplates(workspace)
+      expect(list.length).toBe(engine.getBuiltinTemplates().length)
+      expect(list.filter((t) => t.builtin).length).toBe(engine.getBuiltinTemplates().length)
+      // no user-* entries shadowing the seeded builtins
+      expect(list.some((t) => t.id.startsWith('user-'))).toBe(false)
+    })
+
+    it('F-3: a genuinely custom template is still listed', () => {
+      fs.mkdirSync(path.join(workspace, 'Templates'), { recursive: true })
+      fs.writeFileSync(path.join(workspace, 'Templates', 'My-Custom.md'), '# {{title}}\n')
+      const list = engine.listTemplates(workspace)
+      const custom = list.find((t) => t.id === 'user-my-custom')
+      expect(custom).toBeDefined()
+      expect(custom?.builtin).toBe(false)
     })
 
     it('caches the user template list until a file changes — WB-6', () => {
