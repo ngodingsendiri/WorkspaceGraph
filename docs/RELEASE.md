@@ -34,6 +34,7 @@ akan menghasilkan release bernama beda dari installer-nya.
 | Tanggal | Tag | Hasil |
 |---------|-----|-------|
 | 2026-08-11 | `v1.0.0` | ✅ Run #31460817403 sukses end-to-end — `WorkspaceGraph-1.0.0-setup.exe` (181 MB) + `WorkspaceGraph-1.0.0.dmg` (216 MB) ter-attach ke release. **Keduanya unsigned** (belum ada secret). |
+| 2026-08-11 | `v1.1.0` | ✅ Run #31476233843 sukses end-to-end — **dual-arch terverifikasi**: `WorkspaceGraph-1.1.0-setup.exe` (173 MB) + `WorkspaceGraph-1.1.0-x64.dmg` (211,5 MB) + `WorkspaceGraph-1.1.0-arm64.dmg` (206,3 MB), step verifikasi artifact hijau di kedua job. Run #31475676465 (pertama) **gagal** — menemukan bug electron-builder `empty CSC_LINK → "<projectDir> not a file"` → diperbaiki (unset guard, commit `d12d475`). Kedua tag + release percobaan **dihapus** setelah verifikasi. |
 
 ---
 
