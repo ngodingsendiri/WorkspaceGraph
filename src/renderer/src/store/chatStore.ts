@@ -163,6 +163,9 @@ export interface ChatStore {
   ) => Promise<{ ok: boolean; proposal?: WriteProposalItem; error?: string }>
   saveCurrentChat: () => Promise<void>
   loadChat: (id: string) => Promise<void>
+  /** P3-3: switch sessions — persist the CURRENT session first, then load the
+   * target one, so opening an old chat never closes the active session. */
+  switchChat: (id: string) => Promise<void>
   /** Delete a saved conversation file (keeps current session untouched unless same id). */
   deleteChat: (id: string) => Promise<{ ok: boolean; error?: string }>
   /** P3-1: arm (or cancel) composer follow-up mode for an assistant message. */
@@ -922,6 +925,16 @@ Mulai: list_dir "" lalu read_note "AI Memory/00 Index.md".`
         (p) => p.status === 'pending' || !p.status
       )
     }))
+  },
+
+  switchChat: async (id: string) => {
+    // Save-then-load (P3-3): the current session is persisted BEFORE the
+    // target chat replaces it, so it survives the switch and can be resumed
+    // from the session list later. Skip when there is nothing to save.
+    if (get().messages.length > 0) {
+      await get().saveCurrentChat()
+    }
+    await get().loadChat(id)
   },
 
   deleteChat: async (id: string) => {

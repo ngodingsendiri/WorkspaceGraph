@@ -1396,6 +1396,21 @@ describe('AI system contracts', () => {
     expect(has(ipc, "'ai:promoteKnowledge'", "channel: 'ai:promoteKnowledge'")).toBe(true)
     expect(has(pre, 'listAIEvents', 'getAIEventStats')).toBe(true)
   })
+  it('P3-3 multi-session sidebar: switchChat persists current session + active badge', () => {
+    const store = read('src/renderer/src/store/chatStore.ts')
+    // Save-then-load is the contract — opening an old chat must NOT close the
+    // active session (it is persisted first and stays in the list).
+    expect(has(store, 'switchChat: async (id: string)', 'saveCurrentChat()', 'loadChat(id)')).toBe(
+      true
+    )
+    const panel = read('src/renderer/src/components/chat/ChatPanel.tsx')
+    expect(has(panel, 'switchChat', 'handleLoadChat', 'Sesi saat ini', 'aktif')).toBe(true)
+    expect(has(panel, 'chat-history-item--current', 'chat-history-badge', 'conversationId')).toBe(
+      true
+    )
+    const css = read('src/renderer/src/styles/globals.css')
+    expect(has(css, '.chat-history-item.is-active', '.chat-history-badge')).toBe(true)
+  })
   it('R2-4 auto-ingest: episodic cadence + deduped AI Memory/Log Ingest append', () => {
     const ingest = read('src/main/ai/autoIngest.ts')
     const ipc = read('src/main/ipc/handlers/ai.ts')

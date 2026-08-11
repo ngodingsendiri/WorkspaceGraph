@@ -2523,6 +2523,29 @@ html:not([data-theme]) {
 .chat-history-item:hover {
   background: var(--bg-hover);
 }
+/* P3-3: the active session in the list is visually pinned */
+.chat-history-item.is-active {
+  background: var(--color-primary-subtle);
+}
+.chat-history-item--current {
+  margin-bottom: 2px;
+}
+.chat-history-badge {
+  flex-shrink: 0;
+  font-size: 9px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-primary);
+  background: var(--color-primary-subtle);
+  border-radius: 8px;
+  padding: 2px 6px;
+  margin-right: 4px;
+}
+.chat-history-item--current.is-unsaved .chat-history-badge {
+  color: var(--color-warning);
+  background: var(--color-warning-subtle);
+}
 .chat-history-load {
   all: unset;
   box-sizing: border-box;

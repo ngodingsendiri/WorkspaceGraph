@@ -248,6 +248,7 @@ export const ChatPanel: React.FC = () => {
     pendingProposals,
     lastToolStatus,
     lastKernelStatus,
+    conversationId,
     fetchProviders,
     setActiveProvider,
     setSelectedModel,
@@ -263,7 +264,7 @@ export const ChatPanel: React.FC = () => {
     rejectProposal,
     promoteAnswer,
     saveCurrentChat,
-    loadChat,
+    switchChat,
     deleteChat,
     retryLastMessage,
     rephraseMessage,
@@ -975,7 +976,9 @@ export const ChatPanel: React.FC = () => {
 
   const handleLoadChat = async (id: string): Promise<void> => {
     if (isGenerating) return
-    await loadChat(id)
+    // P3-3: switchChat persists the CURRENT session first, so opening an old
+    // chat never closes the active one — it stays in the list, resumable.
+    await switchChat(id)
     setShowHistory(false)
     stickToBottom.current = true
   }
@@ -1135,11 +1138,14 @@ export const ChatPanel: React.FC = () => {
           </div>
         )}
       </div>
-      {/* History drawer */}{' '}
+      {/* P3-3: session sidebar — current (possibly unsaved) session pinned on
+          top, saved sessions below; the active one is badged. Opening an old
+          chat persists the current session first (switchChat), so it is never
+          closed — it just moves down into the saved list. */}
       {showHistory && (
         <div className="chat-history">
           <div className="chat-history-head">
-            <span>Riwayat chat</span>
+            <span>Sesi</span>
             <button
               type="button"
               className="btn btn-ghost btn-sm"
@@ -1148,6 +1154,26 @@ export const ChatPanel: React.FC = () => {
               Muat ulang
             </button>
           </div>
+          {messages.length > 0 && (
+            <div
+              className={`chat-history-item chat-history-item--current${conversationId ? '' : ' is-unsaved'}`}
+            >
+              <button
+                type="button"
+                className="chat-history-load"
+                onClick={() => setShowHistory(false)}
+                title="Kembali ke sesi saat ini"
+              >
+                <span className="truncate">
+                  {conversationId ? 'Sesi saat ini' : 'Sesi saat ini (belum disimpan)'}
+                </span>
+                <span className="chat-history-meta">{messages.length} pesan</span>
+              </button>
+              <span className="chat-history-badge" title="Sesi aktif">
+                aktif
+              </span>
+            </div>
+          )}
           <input
             className="chat-history-search"
             placeholder="Cari chat…"
@@ -1155,8 +1181,8 @@ export const ChatPanel: React.FC = () => {
             onChange={(e) => setHistoryQuery(e.target.value)}
             aria-label="Cari riwayat chat"
           />
-          {history.length === 0 ? (
-            <div className="chat-history-empty">Belum ada chat tersimpan.</div>
+          {history.length === 0 && messages.length === 0 ? (
+            <div className="chat-history-empty">Belum ada sesi tersimpan.</div>
           ) : (
             history
               .filter((h) =>
@@ -1165,36 +1191,44 @@ export const ChatPanel: React.FC = () => {
                   : true
               )
               .slice(0, 20)
-              .map((h) => (
-                <div key={h.id} className="chat-history-item">
-                  <button
-                    type="button"
-                    className="chat-history-load"
-                    onClick={() => void handleLoadChat(h.id)}
-                  >
-                    <span className="truncate">{h.title || h.id}</span>
-                    {h.updatedAt && (
-                      <span className="chat-history-meta">
-                        {new Date(h.updatedAt).toLocaleString(undefined, {
-                          month: 'short',
-                          day: 'numeric',
-                          hour: '2-digit',
-                          minute: '2-digit'
-                        })}
+              .map((h) => {
+                const isActive = h.id === conversationId
+                return (
+                  <div key={h.id} className={`chat-history-item${isActive ? ' is-active' : ''}`}>
+                    <button
+                      type="button"
+                      className="chat-history-load"
+                      onClick={() => void handleLoadChat(h.id)}
+                    >
+                      <span className="truncate">{h.title || h.id}</span>
+                      {h.updatedAt && (
+                        <span className="chat-history-meta">
+                          {new Date(h.updatedAt).toLocaleString(undefined, {
+                            month: 'short',
+                            day: 'numeric',
+                            hour: '2-digit',
+                            minute: '2-digit'
+                          })}
+                        </span>
+                      )}
+                    </button>
+                    {isActive && (
+                      <span className="chat-history-badge" title="Sesi aktif">
+                        aktif
                       </span>
                     )}
-                  </button>
-                  <button
-                    type="button"
-                    className="chat-history-del"
-                    aria-label="Hapus chat"
-                    title="Hapus chat tersimpan"
-                    onClick={() => void handleDeleteChat(h.id)}
-                  >
-                    <Icon name="trash" size={12} />
-                  </button>
-                </div>
-              ))
+                    <button
+                      type="button"
+                      className="chat-history-del"
+                      aria-label="Hapus chat"
+                      title="Hapus chat tersimpan"
+                      onClick={() => void handleDeleteChat(h.id)}
+                    >
+                      <Icon name="trash" size={12} />
+                    </button>
+                  </div>
+                )
+              })
           )}
         </div>
       )}

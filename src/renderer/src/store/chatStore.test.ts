@@ -56,6 +56,51 @@ beforeEach(() => {
   })
 })
 
+describe('chatStore switchChat (P3-3 multi-session)', () => {
+  it('persists the CURRENT session before loading the target one', async () => {
+    const api = mockWindowApi()
+    api.loadChat.mockResolvedValue({
+      id: 'target',
+      title: 'Chat lama',
+      createdAt: '2026-08-01',
+      updatedAt: '2026-08-01',
+      messages: [msg('tu1', 'user', 'pertanyaan lama')]
+    })
+    useChatStore.setState({
+      conversationId: 'current',
+      messages: [msg('u1', 'user', 'sesi aktif belum ditutup')]
+    })
+    await useChatStore.getState().switchChat('target')
+    // Current session saved first, then the target loaded.
+    expect(api.saveChat).toHaveBeenCalledTimes(1)
+    expect(api.loadChat).toHaveBeenCalledWith('target')
+    expect(useChatStore.getState().conversationId).toBe('target')
+    expect(useChatStore.getState().messages[0].content).toBe('pertanyaan lama')
+    const saveOrder = api.saveChat.mock.invocationCallOrder[0]
+    const loadOrder = api.loadChat.mock.invocationCallOrder[0]
+    expect(loadOrder).toBeGreaterThan(saveOrder)
+  })
+
+  it('skips the save when the current session is empty (nothing to persist)', async () => {
+    const api = mockWindowApi()
+    useChatStore.setState({ messages: [], conversationId: null })
+    await useChatStore.getState().switchChat('target')
+    expect(api.saveChat).not.toHaveBeenCalled()
+    expect(api.loadChat).toHaveBeenCalledWith('target')
+  })
+
+  it('loadChat (direct) does NOT persist — only switchChat does', async () => {
+    const api = mockWindowApi()
+    useChatStore.setState({
+      conversationId: 'current',
+      messages: [msg('u1', 'user', 'jangan disimpan oleh loadChat')]
+    })
+    await useChatStore.getState().loadChat('target')
+    expect(api.saveChat).not.toHaveBeenCalled()
+    expect(api.loadChat).toHaveBeenCalledWith('target')
+  })
+})
+
 describe('chatStore delete/save race', () => {
   it('deleteChat waits for an in-flight save (no same-id resurrection)', async () => {
     const api = mockWindowApi()
