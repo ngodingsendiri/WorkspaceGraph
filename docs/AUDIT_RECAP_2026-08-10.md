@@ -3,7 +3,7 @@
 **Tanggal:** 2026-08-10
 **Sumber:** `docs/AUDIT_PLAN.md` (7 wave, 32 batch) + `docs/TODO_FIX_2026-08-10.md` (backlog per item)
 **Total:** **52 temuan** — 1 risiko crash (P1) · 12 P2 · 34 P3/Nit · 5 keputusan desain (butuh user)
-**Verifikasi:** typecheck ✅ · **1001/1001 test** ✅ · preview hidup di `http://[::1]:5173/` ✅
+**Verifikasi (saat audit):** typecheck ✅ · **1001/1001 test** ✅ · preview hidup di `http://[::1]:5173/` ✅ — *angka akhir setelah perbaikan: **1054/1054**, lihat `docs/STATUS_2026-08-11.md`.*
 
 > **Koreksi jumlah:** ringkasan sebelumnya menyebut "42" — angka itu hanya item berformat daftar. Hitungan persis: 11 temuan audit save-stop (MED/LOW/NIT) + 41 temuan wave (WA/WB/WC/AD/AE/AF/AG) = **52**.
 

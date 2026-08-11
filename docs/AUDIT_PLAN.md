@@ -1,5 +1,7 @@
 # AUDIT PLAN — Audit Bertahap per Bagian
 
+> ✅ **SELESAI 2026-08-11 — 7 wave, 52 temuan tuntas.** Rekap akhir: `docs/STATUS_2026-08-11.md`.
+
 **Dibuat:** 2026-08-10
 **Tujuan:** audit menyeluruh tapi **scope sempit per sesi** — satu batch = satu modul/fitur, selesai dulu baru lanjut. Menghindari audit lebar yang melelahkan dan dangkal.
 
@@ -105,8 +107,12 @@
 
 | Dokumen | Cakupan | Status |
 |---------|---------|--------|
-| `docs/AUDIT.md` (2026-08-03) | Audit penuh + CRIT-1..3 + 27 bug fixed | ✅ historis |
-| `docs/FEATURE_AUDIT.md` (2026-07-22) | 70 fitur PASS / 9 MANUAL | ✅ historis |
-| `docs/AUDIT_REVIEW_2026-07-22.md` | Audit lama (HIGH/MED) | ✅ historis |
 | `docs/AUDIT_2026-08-10_save-stop.md` | Save/Test provider + two-step stop (commit 8de0361) | ✅ selesai |
-| `docs/TODO_FIX_2026-08-10.md` | Backlog masalah yang harus diselesaikan | ⏳ terbuka |
+| `docs/AUDIT_RECAP_2026-08-10.md` | Rekap 52 temuan (termasuk 5 keputusan desain) | ✅ selesai |
+| `docs/FIX_PLAN_2026-08-10.md` | Rencana perbaikan M1–M6 | ✅ selesai |
+| `docs/TODO_FIX_2026-08-10.md` | Backlog per item (55/55) | ✅ selesai |
+| `docs/STATUS_2026-08-11.md` | **Rekap status akhir (aktif)** | ✅ |
+| `docs/adr/` (5 + README) | Keputusan desain — wajib dibaca audit berikutnya | ✅ |
+
+> `docs/AUDIT.md` (08-03), `docs/FEATURE_AUDIT.md`, `docs/AUDIT_REVIEW_2026-07-22.md`,
+> `docs/BLUEPRINT_AUDIT_SYNC.md` — dihapus 2026-08-11 (historis, superseded; lihat git history).
