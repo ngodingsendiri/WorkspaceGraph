@@ -4630,34 +4630,64 @@ button {
 .merge-diff-summary .merge-diff-muted {
   color: var(--text-muted);
 }
-.merge-diff .md-line {
+.merge-diff .md-line,
+.chat-proposal-inline-diff-lines .md-line {
   display: flex;
   gap: var(--space-2);
   padding: 1px var(--space-4);
   white-space: pre-wrap;
   word-wrap: break-word;
 }
-.merge-diff .md-line.is-add {
+.merge-diff .md-line.is-add,
+.chat-proposal-inline-diff-lines .md-line.is-add {
   background: var(--color-success-subtle);
   color: var(--text-primary);
 }
-.merge-diff .md-line.is-remove {
+.merge-diff .md-line.is-remove,
+.chat-proposal-inline-diff-lines .md-line.is-remove {
   background: var(--color-error-subtle);
   color: var(--text-secondary);
   text-decoration: line-through;
   text-decoration-color: color-mix(in srgb, var(--color-error) 45%, transparent);
 }
-.merge-diff .md-line-mark {
+.merge-diff .md-line-mark,
+.chat-proposal-inline-diff-lines .md-line-mark {
   flex: 0 0 1em;
   text-align: center;
   color: var(--text-muted);
   user-select: none;
 }
-.merge-diff .md-line.is-add .md-line-mark {
+.merge-diff .md-line.is-add .md-line-mark,
+.chat-proposal-inline-diff-lines .md-line.is-add .md-line-mark {
   color: var(--color-success);
 }
-.merge-diff .md-line.is-remove .md-line-mark {
+.merge-diff .md-line.is-remove .md-line-mark,
+.chat-proposal-inline-diff-lines .md-line.is-remove .md-line-mark {
   color: var(--color-error);
+}
+
+/* R2-3: inline diff inside the proposal card — same line styling as the
+   dialog's Diff tab, but rendered in place without opening a dialog. */
+.chat-proposal-inline-diff {
+  margin: 6px 0;
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  max-height: 160px;
+  overflow-y: auto;
+  background: var(--bg-app);
+  font-size: 11px;
+  font-family: var(--font-mono);
+}
+.chat-proposal-inline-diff-loading {
+  padding: 6px var(--space-3);
+  color: var(--text-muted);
+}
+.chat-proposal-inline-diff-lines .md-line {
+  padding: 1px var(--space-3);
+}
+.chat-proposal-actions .btn.is-active {
+  color: var(--color-primary);
+  border-color: var(--color-primary);
 }
 
 /* ================================================

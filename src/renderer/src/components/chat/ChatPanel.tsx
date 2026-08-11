@@ -39,6 +39,7 @@ import {
 import { useEditorStore } from '../../store/editorStore'
 import { useWorkspaceStore } from '../../store/workspaceStore'
 import { MergeDialog } from '../editor/MergeDialog'
+import { diffLines, type DiffLine } from '../../utils/proposalDiff'
 import { Icon } from '../ui/Icons'
 import { confirmDialog, promptDialog } from '../ui/Dialog'
 import { usePanelWidth } from '../../hooks/usePanelWidth'
@@ -315,6 +316,13 @@ export const ChatPanel: React.FC = () => {
     p: WriteProposalItem
     theirs: string
   } | null>(null)
+  /** R2-3: inline diff rendered inside the proposal card (no dialog) —
+   * 'loading' while the disk read is in flight, then DiffLine[] once ready.
+   * The Expand button still opens the MergeDialog shell. */
+  const [inlineDiffs, setInlineDiffs] = useState<Record<string, DiffLine[] | 'loading'>>({})
+  /** R2-3: disk content cache per proposal id — read once per proposal so a
+   * collapse/expand toggle never re-reads the file. */
+  const inlineDiffCacheRef = useRef<Map<string, string>>(new Map())
   /** P2-3: composer slash commands — mini palette over the textarea */
   const [slashOpen, setSlashOpen] = useState(false)
   const [slashQuery, setSlashQuery] = useState('')
@@ -840,14 +848,59 @@ export const ChatPanel: React.FC = () => {
 
   const openDiff = async (p: WriteProposalItem): Promise<void> => {
     // Read the current disk content for the diff — create proposals have none
-    let theirs = ''
-    try {
-      const res = await window.api.readFile(p.absolutePath)
-      theirs = res?.content ?? ''
-    } catch {
-      /* create mode / file missing — diff vs empty */
+    const cached = inlineDiffCacheRef.current.get(p.id)
+    let theirs: string
+    if (cached === undefined) {
+      try {
+        const res = await window.api.readFile(p.absolutePath)
+        theirs = res?.content ?? ''
+      } catch {
+        /* create mode / file missing — diff vs empty */
+        theirs = ''
+      }
+      inlineDiffCacheRef.current.set(p.id, theirs)
+    } else {
+      theirs = cached
     }
     setDiffTarget({ p, theirs })
+  }
+
+  /** R2-3: expand/collapse the inline diff in the proposal card. Reads disk
+   * content once (cached per proposal id), then diffs vs the proposed content
+   * with the shared diffLines helper — no dialog involved. */
+  const toggleInlineDiff = (p: WriteProposalItem): void => {
+    const id = p.id
+    if (inlineDiffs[id] !== undefined) {
+      // Collapse — remove the entry entirely so aria-expanded flips to false.
+      setInlineDiffs((cur) => {
+        const next = { ...cur }
+        delete next[id]
+        return next
+      })
+      return
+    }
+    setInlineDiffs((cur) => ({ ...cur, [id]: 'loading' }))
+    void (async () => {
+      const cached = inlineDiffCacheRef.current.get(id)
+      let theirs: string
+      if (cached === undefined) {
+        try {
+          const res = await window.api.readFile(p.absolutePath)
+          theirs = res?.content ?? ''
+        } catch {
+          /* create mode / file missing — diff vs empty */
+          theirs = ''
+        }
+        inlineDiffCacheRef.current.set(id, theirs)
+      } else {
+        theirs = cached
+      }
+      // If the user collapsed (or the proposal disappeared) while reading,
+      // don't paint a stale diff back in.
+      setInlineDiffs((cur) =>
+        cur[id] === 'loading' ? { ...cur, [id]: diffLines(theirs, p.content) } : cur
+      )
+    })()
   }
 
   const handleApply = async (p: WriteProposalItem, content?: string): Promise<void> => {
@@ -1160,14 +1213,47 @@ export const ChatPanel: React.FC = () => {
               <div className="chat-proposal-preview truncate" title={p.preview}>
                 {p.preview}
               </div>
+              {/* R2-3: inline diff — expanded in place, no dialog */}
+              {(() => {
+                const inline = inlineDiffs[p.id]
+                if (inline === undefined) return null
+                return (
+                  <div className="chat-proposal-inline-diff" id={`proposal-diff-${p.id}`}>
+                    {inline === 'loading' ? (
+                      <div className="chat-proposal-inline-diff-loading">Memuat diff…</div>
+                    ) : (
+                      <div className="chat-proposal-inline-diff-lines">
+                        {inline.map((l, i) => (
+                          <div key={i} className={`md-line is-${l.kind}`}>
+                            <span className="md-line-mark" aria-hidden>
+                              {l.kind === 'add' ? '+' : l.kind === 'remove' ? '−' : ' '}
+                            </span>
+                            {l.text}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )
+              })()}
               <div className="chat-proposal-actions">
+                <button
+                  type="button"
+                  className={`btn btn-ghost btn-sm${inlineDiffs[p.id] !== undefined ? ' is-active' : ''}`}
+                  onClick={() => toggleInlineDiff(p)}
+                  aria-expanded={inlineDiffs[p.id] !== undefined}
+                  aria-controls={`proposal-diff-${p.id}`}
+                  title="Tampilkan/sembunyikan diff inline disk vs proposal"
+                >
+                  Diff
+                </button>
                 <button
                   type="button"
                   className="btn btn-ghost btn-sm"
                   onClick={() => void openDiff(p)}
-                  title="Lihat diff disk vs proposal sebelum terapkan"
+                  title="Buka dialog diff lengkap (Disk/Proposal/Diff)"
                 >
-                  Diff
+                  Expand
                 </button>
                 <button
                   type="button"
