@@ -417,6 +417,19 @@ describe('Renderer wiring', () => {
     expect(
       has(store, 'applyProposal: (', 'content?: string)', 'applyWriteProposal(id, content)')
     ).toBe(true)
+  })
+  it('R2-3 proposal card renders diff inline (reuse diffLines) without a dialog', () => {
+    const panel = read('src/renderer/src/components/chat/ChatPanel.tsx')
+    // Inline toggle + cache + aria wiring — Expand still opens the dialog
+    expect(
+      has(panel, "from '../../utils/proposalDiff'", 'diffLines', 'toggleInlineDiff', 'inlineDiffs')
+    ).toBe(true)
+    expect(has(panel, 'aria-expanded', 'aria-controls', 'proposal-diff-')).toBe(true)
+    expect(has(panel, 'Expand', 'chat-proposal-inline-diff', 'Memuat diff…')).toBe(true)
+    const css = read('src/renderer/src/styles/globals.css')
+    expect(
+      has(css, '.chat-proposal-inline-diff', '.chat-proposal-inline-diff-lines .md-line')
+    ).toBe(true)
     // Content override travels main → disk (edited proposal applies as-is)
     const tools = read('src/main/ai/AgentTools.ts')
     expect(has(tools, 'contentOverride?: string', 'content = contentOverride')).toBe(true)
@@ -1382,6 +1395,30 @@ describe('AI system contracts', () => {
     ).toBe(true)
     expect(has(ipc, "'ai:promoteKnowledge'", "channel: 'ai:promoteKnowledge'")).toBe(true)
     expect(has(pre, 'listAIEvents', 'getAIEventStats')).toBe(true)
+  })
+  it('R2-4 auto-ingest: episodic cadence + deduped AI Memory/Log Ingest append', () => {
+    const ingest = read('src/main/ai/autoIngest.ts')
+    const ipc = read('src/main/ipc/handlers/ai.ts')
+    // Module: cadence state, verified-facts summarizer, deduped append
+    expect(
+      has(
+        ingest,
+        'shouldAutoIngest',
+        'extractIngestFacts',
+        'buildIngestLines',
+        'appendLogEntry',
+        'notifyStreamCompleted',
+        "AUTO_INGEST_STATE_FILE = '.workspacegraph/autoingest.json'"
+      )
+    ).toBe(true)
+    // Dedup contract — a bullet already in the file is never appended again
+    expect(has(ingest, 'const fresh = bullets.filter((b) => !existing.includes(b))')).toBe(true)
+    // Hook: every completed stream bumps the cadence, fire-and-forget after await
+    expect(
+      has(ipc, 'notifyStreamCompleted', 'finally {', 'workspaceEngine.getState().rootPath')
+    ).toBe(true)
+    // Log Ingest.md is the target (AI Memory L1) + event trail is the source
+    expect(has(ingest, 'AI_MEMORY_FILES.logIngest', 'readAIEvents')).toBe(true)
   })
   it('AI Activity Log panel: list + filter + clear wired end-to-end', () => {
     const log = read('src/main/ai/AIEventLog.ts')
