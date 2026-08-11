@@ -79,6 +79,15 @@ sertifikat atau password. Env CI tetap cara yang dianjurkan.
 `CSC_IDENTITY_AUTO_DISCOVERY=false` dipasang di job agar identity lokal runner
 tidak pernah terpakai — tanpa `CSC_LINK`, build tetap **ad-hoc unsigned**.
 
+**Penting (gotcha):** saat secret tidak di-set, GitHub mengisi env `CSC_LINK`
+dengan string **kosong** — dan electron-builder memperlakukan `""` sebagai
+path sertifikat yang sah, lalu `importCertificate("")` me-resolve-nya ke
+project dir → crash `⨯ <projectDir> not a file` (terjadi di trial v1.1.0).
+Step build di `release.yml` meng-`unset CSC_LINK` (plus password/name) bila
+kosong sebelum memanggil electron-builder, sehingga variabel benar-benar
+`undefined` → jalur ad-hoc. Jangan pernah set `CSC_LINK=""` secara eksplisit
+saat uji lokal — hapus variable-nya saja.
+
 ### 4b. Notarisasi
 
 Notarisasi butuh keanggotaan Apple Developer ($99/thn):
@@ -124,7 +133,7 @@ atau buka DMG di Mac — tanpa peringatan Gatekeeper "unidentified developer".
 | Secret | Ada | Tidak ada |
 |--------|-----|-----------|
 | `WIN_CSC_LINK` + password | `.exe` ter-sign | `.exe` unsigned (default sekarang) |
-| `CSC_LINK` + password | `.app`/DMG ter-sign | ad-hoc unsigned |
+| `CSC_LINK` + password | `.app`/DMG ter-sign | env di-`unset` step build → ad-hoc unsigned |
 | `APPLE_ID` + app-specific pw + team | DMG ter-notarisasi | DMG tidak dinotarisasi (build tetap sukses) |
 
 Semua kombinasi **tidak membuat build gagal** — secret hanya menambah kualitas
@@ -175,3 +184,7 @@ release tidak terbit):
 - **`spctl` menolak DMG** → pastikan `hardenedRuntime: true` + entitlement
   JIT ada (sudah default di repo ini) dan build benar-benar ter-notarisasi
   (`stapler validate`).
+- **`⨯ <projectDir> not a file` saat build mac** → `CSC_LINK` ter-set ke string
+  kosong (secret belum ada / env `CSC_LINK=""` eksplisit). Workflow sudah
+  meng-`unset`-nya otomatis; untuk build lokal, jangan set `CSC_LINK=""` —
+  biarkan variable tidak ter-definisi.

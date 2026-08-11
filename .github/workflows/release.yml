@@ -17,7 +17,10 @@ name: Release
 #    `-c.mac.notarize=true` only when APPLE_ID + APPLE_APP_SPECIFIC_PASSWORD +
 #    APPLE_TEAM_ID are all present (electron-builder.yml keeps `notarize: false`
 #    so builds never fail on missing secrets). CSC_IDENTITY_AUTO_DISCOVERY is
-#    disabled so the runner's local identities are never picked up. Arch: builds
+#    disabled so the runner's local identities are never picked up. Missing
+#    secrets leave CSC_LINK EMPTY — the build step unsets it first, because
+#    electron-builder treats "" as a certificate path and crashes with
+#    "<projectDir> not a file" (hit in the v1.1.0 trial). Arch: builds
 #    BOTH x64 and arm64 DMGs (`--x64 --arm64`); each is named with ${arch}
 #    (dmg.artifactName). `--universal` is the single-DMG alternative but merges
 #    native modules across arches — kept separate per arch for reliability.
@@ -79,7 +82,9 @@ jobs:
       # unless CSC_LINK is provided.
       CSC_IDENTITY_AUTO_DISCOVERY: 'false'
       # Code signing (optional): CSC_LINK base64 .p12 + key password + identity
-      # name. Empty → ad-hoc unsigned build.
+      # name. When the secrets are missing the env vars are EMPTY strings — the
+      # build step unsets them first (electron-builder would otherwise treat ""
+      # as a certificate path and crash with "<projectDir> not a file").
       CSC_LINK: ${{ secrets.CSC_LINK }}
       CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
       CSC_NAME: ${{ secrets.CSC_NAME }}
@@ -99,6 +104,15 @@ jobs:
       - name: Build macOS installers (x64 + arm64; notarizes when secrets present)
         shell: bash
         run: |
+          # electron-builder's getCscLink() treats an EMPTY CSC_LINK as a real
+          # value ("// allow to specify as empty string"), then importCertificate
+          # resolves "" to the project dir → "<projectDir> not a file" crash
+          # (hit in the v1.1.0 trial). Unset it so the env var is undefined →
+          # ad-hoc unsigned build, same as when no secrets are configured.
+          if [ -z "${CSC_LINK:-}" ]; then
+            echo "CSC_LINK absent → unsetting signing env (ad-hoc unsigned build)"
+            unset CSC_LINK CSC_KEY_PASSWORD CSC_NAME
+          fi
           ARGS="--mac --x64 --arm64 --publish never"
           if [ -n "${APPLE_ID}" ] && [ -n "${APPLE_APP_SPECIFIC_PASSWORD}" ] && [ -n "${APPLE_TEAM_ID}" ]; then
             echo "Apple secrets present → enabling notarization"
