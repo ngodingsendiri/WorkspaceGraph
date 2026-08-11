@@ -19,9 +19,24 @@ const SETTINGS_VERSION = 1
 
 export const TRASH_FOLDER = '.trash'
 
+export const TEMPLATE_FOLDER = 'Templates'
+
 /** True if the path lives inside the vault trash folder (.trash). */
 export function isTrashPath(filePath: string): boolean {
   return filePath.split(/[/\\]/).includes(TRASH_FOLDER)
+}
+
+/**
+ * F-1/F-2 (testing 2026-08-11): Templates/*.md are seeded boilerplate, not
+ * user notes — they must NEVER be indexed as notes. Excluding them here keeps
+ * graph nodes, domain counts, recent notes, search hits and dashboard stats
+ * clean (a seeded template file showed up as "{{title}}" notes + created the
+ * "{{project}}" ghost). Only the TOP-LEVEL Templates/ dir is system-owned;
+ * a user's Projects/Templates/ stays a normal folder.
+ */
+export function isTemplateDir(relativePath: string): boolean {
+  const norm = relativePath.replace(/\\/g, '/').toLowerCase()
+  return norm === 'templates' || norm.startsWith('templates/')
 }
 
 export interface WorkspaceConfig {
@@ -160,7 +175,10 @@ function scanDirectory(dirPath: string, rootPath: string): WorkspaceFile[] {
   })
 }
 
-function countFiles(files: WorkspaceFile[]): { files: number; folders: number; notes: number } {
+function countFiles(
+  files: WorkspaceFile[],
+  countNotes = true
+): { files: number; folders: number; notes: number } {
   let fileCount = 0
   let folderCount = 0
   let noteCount = 0
@@ -168,14 +186,16 @@ function countFiles(files: WorkspaceFile[]): { files: number; folders: number; n
     if (f.isDirectory) {
       folderCount++
       if (f.children) {
-        const sub = countFiles(f.children)
+        // F-1: Templates/*.md are boilerplate, not notes — count the files
+        // (they appear in the sidebar) but never as notes.
+        const sub = countFiles(f.children, countNotes && !isTemplateDir(f.relativePath))
         fileCount += sub.files
         folderCount += sub.folders
         noteCount += sub.notes
       }
     } else {
       fileCount++
-      if (f.extension === '.md') noteCount++
+      if (countNotes && f.extension === '.md') noteCount++
     }
   }
   return { files: fileCount, folders: folderCount, notes: noteCount }

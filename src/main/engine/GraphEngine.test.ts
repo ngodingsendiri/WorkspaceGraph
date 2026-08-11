@@ -50,6 +50,14 @@ describe('GraphEngine', () => {
       expect(ghostNodes[0].title).toBe('NonExistent')
     })
 
+    it('F-2: template placeholder [[{{...}}]] never creates a ghost node', () => {
+      const notes = [parseNote('/vault/A.md', '# A\n\n[[{{project}}]] and [[{{title}}]]')]
+      buildGraph(notes)
+
+      const data = graph.getGraphData()
+      expect(data.nodes.some((n) => n.isGhost)).toBe(false)
+    })
+
     it('preserves aliases in link resolution', () => {
       const notes = [
         parseNote('/vault/A.md', '# A\n\n[[B|Alias]]'),

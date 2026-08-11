@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { WorkspaceEngine, isTrashPath } from './WorkspaceEngine'
+import { WorkspaceEngine, isTrashPath, isTemplateDir } from './WorkspaceEngine'
 import fs from 'fs'
 import path from 'path'
 import { tmpdir } from 'os'
@@ -76,6 +76,25 @@ describe('WorkspaceEngine', () => {
       expect(fs.existsSync(templatesDir)).toBe(true)
       // Template seeding requires TemplateEngine module which isn't available in tests
       // expect(fs.readdirSync(templatesDir).length).toBeGreaterThan(0)
+    })
+
+    it('F-1: Templates/*.md count as files but never as notes', () => {
+      engine.openWorkspace(testDir)
+      fs.writeFileSync(path.join(testDir, 'Note.md'), '# Note\n')
+      fs.writeFileSync(path.join(testDir, 'Templates', 'Project.md'), '# {{title}}\n')
+      engine.refreshFiles()
+      const st = engine.getState()
+      expect(st.totalFiles).toBeGreaterThanOrEqual(2)
+      expect(st.totalNotes).toBe(1) // only Note.md — Project.md is a template
+    })
+
+    it('isTemplateDir only matches the top-level Templates folder', () => {
+      engine.openWorkspace(testDir)
+      expect(isTemplateDir('Templates')).toBe(true)
+      expect(isTemplateDir('Templates/Project.md')).toBe(true)
+      expect(isTemplateDir('Projects/Templates/A.md')).toBe(false)
+      expect(isTemplateDir('templates/x.md')).toBe(true)
+      expect(isTemplateDir('Home.md')).toBe(false)
     })
   })
 

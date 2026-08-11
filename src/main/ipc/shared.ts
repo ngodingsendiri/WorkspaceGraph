@@ -2,7 +2,7 @@ import { BrowserWindow } from 'electron'
 import fs from 'fs'
 import crypto from 'crypto'
 import path from 'path'
-import { workspaceEngine, isTrashPath } from '../engine/WorkspaceEngine'
+import { workspaceEngine, isTrashPath, isTemplateDir } from '../engine/WorkspaceEngine'
 import { markdownEngine } from '../engine/MarkdownEngine'
 import { graphEngine } from '../engine/GraphEngine'
 import { searchEngine } from '../engine/SearchEngine'
@@ -72,6 +72,9 @@ function collectVaultFiles(fileTree: ReturnType<typeof workspaceEngine.refreshFi
     for (const f of files) {
       // Never index .trash items (deleted files awaiting restore/empty)
       if (isTrashPath(f.path)) continue
+      // F-1/F-2: Templates/*.md are seeded boilerplate, not notes — exclude
+      // them (and their attachments) from graph/domain/search/recent/dashboard.
+      if (isTemplateDir(f.relativePath)) continue
       if (f.isDirectory && f.children) {
         walk(f.children)
       } else if (!f.isDirectory) {
@@ -135,6 +138,8 @@ export async function syncWorkspaceData(rootPath: string): Promise<void> {
 
 export function syncSingleFile(filePath: string, rootPath: string): void {
   if (isTrashPath(filePath)) return
+  // F-1: template files are never indexed as notes (watcher path too)
+  if (isTemplateDir(path.relative(rootPath, filePath))) return
   const lower = filePath.toLowerCase()
   if (lower.endsWith('.md')) {
     try {
@@ -172,6 +177,7 @@ export function refreshDomainFromDisk(rootPath: string): void {
     function collectMd(files: typeof fileTree): void {
       for (const f of files) {
         if (isTrashPath(f.path)) continue
+        if (isTemplateDir(f.relativePath)) continue
         if (f.isDirectory && f.children) collectMd(f.children)
         else if (!f.isDirectory && f.extension === '.md') mdFiles.push(f.path)
       }

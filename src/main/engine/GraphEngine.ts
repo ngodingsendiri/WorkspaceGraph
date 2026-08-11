@@ -468,6 +468,10 @@ export class GraphEngine {
   }
 
   private ensureGhostNode(rawTarget: string): string | null {
+    // F-2 (testing 2026-08-11): template placeholders like [[{{project}}]] are
+    // NOT unresolved links — never mint a ghost node for them (defensive: the
+    // index already excludes Templates/, this guards future regressions).
+    if (/\{\{[^}]*\}\}/.test(rawTarget)) return null
     const key = normalizeLinkTarget(rawTarget)
     if (!key) return null
     const id = ghostNodeId(rawTarget)

@@ -6,6 +6,11 @@ import fs from 'fs'
 import path from 'path'
 import crypto from 'crypto'
 
+/** "Project" == "project" == "Project.md" == "Daily Note" == "Daily-Note" */
+function normalizeTemplateName(name: string): string {
+  return name.toLowerCase().replace(/[^a-z0-9]/g, '')
+}
+
 export type TemplateKind =
   'knowledge' | 'project' | 'task' | 'people' | 'daily' | 'sop' | 'document' | 'meeting' | 'custom'
 
@@ -402,11 +407,21 @@ export class TemplateEngine {
       const cached = this.userTemplateCache.get(workspaceRoot)
       if (cached && cached.sig === sig) return cached.list
 
+      // F-3 (testing 2026-08-11): the vault's Templates/ is SEEDED with the
+      // builtin templates (WorkspaceEngine.initializeWorkspaceStructure), so
+      // scanning those files as "user" templates duplicates every builtin in
+      // the list (16 entries for 8 templates). A user template only counts as
+      // custom when its name does NOT collide with a builtin — edited seeded
+      // files keep working through their builtin entry.
+      const builtinNames = new Set(
+        this.getBuiltinTemplates().map((t) => normalizeTemplateName(t.name))
+      )
       const user: TemplateDef[] = []
       for (const f of files) {
         const full = path.join(dir, f)
         const body = fs.readFileSync(full, 'utf-8')
         const name = path.basename(f, '.md')
+        if (builtinNames.has(normalizeTemplateName(name))) continue
         const kind = this.inferKindFromName(name, body)
         user.push({
           id: `user-${name.toLowerCase().replace(/\s+/g, '-')}`,
