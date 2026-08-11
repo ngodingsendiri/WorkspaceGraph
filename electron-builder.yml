@@ -26,6 +26,13 @@ asarUnpack:
   - node_modules/better-sqlite3/**
 win:
   executableName: WorkspaceGraph
+  # Code signing (stub — see docs/RELEASE.md): electron-builder signs the
+  # executable and NSIS installer automatically when the CI env vars are set:
+  #   WIN_CSC_LINK         base64-encoded .pfx certificate (repo secret)
+  #   WIN_CSC_KEY_PASSWORD password of the .pfx (repo secret)
+  # When both are absent the build stays UNSIGNED (current default — the
+  # verified v1.0.0 trial shipped unsigned). Local builds can instead set
+  # certificateFile / certificatePassword below; do not commit either.
   target:
     - target: nsis
       arch:
@@ -43,9 +50,26 @@ nsis:
 mac:
   entitlementsInherit: build/entitlements.mac.plist
   category: public.app-category.productivity
+  # Hardened runtime is a prerequisite for notarization; harmless for
+  # unsigned/ad-hoc builds (electron-builder still ad-hoc signs without an
+  # identity).
+  hardenedRuntime: true
+  # Code signing + notarization (stub — see docs/RELEASE.md):
+  #   Signing identity:  CSC_LINK (base64 .p12) + CSC_KEY_PASSWORD + CSC_NAME
+  #   Notarization:      `notarize: true` below + APPLE_ID +
+  #                      APPLE_APP_SPECIFIC_PASSWORD + APPLE_TEAM_ID env vars
+  # Kept `false` as the SAFE default so a build without Apple secrets never
+  # fails; release.yml flips it per-run with `-c.mac.notarize=true` only when
+  # all three Apple secrets are present. Enabling it here while the secrets
+  # are missing would make every tag build fail.
+  # Arch: release.yml passes `--x64 --arm64` → two DMGs (one per arch), each
+  # named with ${arch} below. `--universal` is the single-DMG alternative but
+  # merges native modules (better-sqlite3) across arches — riskier, keep the
+  # separate-DMG layout unless a merge issue is acceptable.
   notarize: false
 dmg:
-  artifactName: WorkspaceGraph-${version}.${ext}
+  # ${arch} keeps the two per-arch DMGs from colliding (x64 / arm64).
+  artifactName: WorkspaceGraph-${version}-${arch}.${ext}
 linux:
   target:
     - AppImage

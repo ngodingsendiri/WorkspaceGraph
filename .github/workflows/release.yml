@@ -8,14 +8,20 @@ name: Release
 # would produce an installer whose name does not match the release.
 #
 # Platform notes:
-#  - Windows: NSIS x64 per electron-builder.yml (win.target). No code-signing
-#    certificate configured → the installer is unsigned (expected for OSS/dev
-#    builds; wire WIN_CSC_LINK once a cert is available).
-#  - macOS: DMG per electron-builder.yml. `mac.notarize: false` is set, so no
-#    Apple Developer credentials are required. CSC_IDENTITY_AUTO_DISCOVERY is
-#    disabled so the runner's local identities are never picked up — builds are
-#    unsigned/ad-hoc. Arch follows the runner host (macos-latest); extend with
-#    `--x64 --arm64` or `--universal` when dual-arch DMGs are needed.
+#  - Windows: NSIS x64 per electron-builder.yml (win.target). Code signing is
+#    automatic when the repo secrets WIN_CSC_LINK (base64 .pfx) and
+#    WIN_CSC_KEY_PASSWORD exist; absent secrets → UNSIGNED installer (the
+#    current state — the verified v1.0.0 trial shipped unsigned).
+#  - macOS: DMG per electron-builder.yml. Signing uses CSC_LINK (base64 .p12)
+#    + CSC_KEY_PASSWORD + CSC_NAME; notarization is flipped on per-run via
+#    `-c.mac.notarize=true` only when APPLE_ID + APPLE_APP_SPECIFIC_PASSWORD +
+#    APPLE_TEAM_ID are all present (electron-builder.yml keeps `notarize: false`
+#    so builds never fail on missing secrets). CSC_IDENTITY_AUTO_DISCOVERY is
+#    disabled so the runner's local identities are never picked up. Arch: builds
+#    BOTH x64 and arm64 DMGs (`--x64 --arm64`); each is named with ${arch}
+#    (dmg.artifactName). `--universal` is the single-DMG alternative but merges
+#    native modules across arches — kept separate per arch for reliability.
+#  - Full signing/notarization setup guide: docs/RELEASE.md.
 #  - Artifacts are uploaded with --publish never, then attached to the release
 #    in the final job (single release, artifacts from both OS jobs).
 
@@ -31,6 +37,10 @@ jobs:
   build-win:
     name: Build Windows (NSIS)
     runs-on: windows-latest
+    env:
+      # Code signing (optional): empty secrets → unsigned build (default).
+      WIN_CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+      WIN_CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -50,7 +60,19 @@ jobs:
     name: Build macOS (DMG)
     runs-on: macos-latest
     env:
+      # Never pick up runner-local identities — builds are unsigned/ad-hoc
+      # unless CSC_LINK is provided.
       CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      # Code signing (optional): CSC_LINK base64 .p12 + key password + identity
+      # name. Empty → ad-hoc unsigned build.
+      CSC_LINK: ${{ secrets.CSC_LINK }}
+      CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+      CSC_NAME: ${{ secrets.CSC_NAME }}
+      # Notarization (optional): all three must be present for the run step to
+      # flip `-c.mac.notarize=true`; otherwise the DMG stays un-notarized.
+      APPLE_ID: ${{ secrets.APPLE_ID }}
+      APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+      APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -59,7 +81,17 @@ jobs:
           cache: 'npm'
       - run: npm ci
       - run: npm run build
-      - run: npx electron-builder --mac --publish never
+      - name: Build macOS installers (x64 + arm64; notarizes when secrets present)
+        shell: bash
+        run: |
+          ARGS="--mac --x64 --arm64 --publish never"
+          if [ -n "${APPLE_ID}" ] && [ -n "${APPLE_APP_SPECIFIC_PASSWORD}" ] && [ -n "${APPLE_TEAM_ID}" ]; then
+            echo "Apple secrets present → enabling notarization"
+            ARGS="${ARGS} -c.mac.notarize=true"
+          else
+            echo "Apple secrets absent → building un-notarized DMGs"
+          fi
+          npx electron-builder ${ARGS}
       - uses: actions/upload-artifact@v4
         with:
           name: installer-mac
