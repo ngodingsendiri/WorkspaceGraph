@@ -54,6 +54,3 @@ user mengaktifkannya sadar setelah melihat status.
 - `src/main/security/Permissions.ts` — `DEFAULT_PERMISSIONS`, `readPermissions` (komentar WC-4)
 - `src/renderer/src/components/settings/SettingsView.tsx` — Settings → Security
 - Komentar inline di `Permissions.ts` & `SettingsView.tsx` (postur default) menyebut `ADR-0003` — sinkron (2026-08-11)
-- `docs/AUDIT_PLAN.md` — AUD-11 (Permissions)
-- `docs/TODO_FIX_2026-08-10.md` — entri WC-4 (keputusan ✅, M1)
-- `docs/FIX_PLAN_2026-08-10.md` — tabel Gate 0 WC-4 ✅ **DIPUTUSKAN: (a)**

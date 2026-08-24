@@ -118,7 +118,22 @@ export const StatusBar: React.FC = () => {
             <span className="status-mode status-optional">
               {surfaceMode === 'source' ? 'source' : 'live'}
             </span>
-            {active?.isDirty && <span className="status-dirty">belum disimpan</span>}
+            {active?.saveState === 'saving' && (
+              <span className="status-dirty" title="Menyimpan perubahan…">
+                menyimpan…
+              </span>
+            )}
+            {active?.saveState === 'error' && (
+              <span
+                className="status-save-error"
+                title="Penyimpanan gagal — aplikasi akan mencoba lagi otomatis"
+              >
+                gagal disimpan
+              </span>
+            )}
+            {active?.isDirty && active?.saveState !== 'error' && (
+              <span className="status-dirty">belum disimpan</span>
+            )}
           </>
         )}
       </span>

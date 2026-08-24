@@ -10,7 +10,7 @@
 ![Version](https://img.shields.io/github/package-json/v/ngodingsendiri/WorkspaceGraph?label=version)
 ![License](https://img.shields.io/github/license/ngodingsendiri/WorkspaceGraph)
 ![Platform](https://img.shields.io/badge/Windows%20%7C%20macOS%20%7C%20Linux-ready-blue)
-![Tests](https://img.shields.io/badge/tests-302%20passed-brightgreen)
+![Tests](https://img.shields.io/badge/tests-1000%2B%20passed-brightgreen)
 ![Electron](https://img.shields.io/badge/Electron-39-47848F?logo=electron)
 
 [Download](#installation) · [Features](#features) · [Screenshots](#screenshots) · [AI Setup](#ai-setup) · [Development](#development)
@@ -176,7 +176,7 @@ Your Vault/
 ```bash
 npm run dev          # Electron dev server with HMR
 npm run typecheck    # TypeScript check (node + web)
-npm test             # Vitest unit tests (302 tests)
+npm test             # Vitest unit tests (1000+ tests)
 npm run lint         # ESLint
 npm run build        # Production build
 ```
@@ -195,7 +195,7 @@ npm run build        # Production build
 
 ### Quality gates (CI)
 
-Every push runs: **typecheck → lint → 302 vitest tests (with coverage) → production build**. All checks must pass on `main` before a release is cut.
+Every push runs: **typecheck → lint → 1000+ vitest tests (with coverage) → production build**. All checks must pass on `main` before a release is cut.
 
 ---
 

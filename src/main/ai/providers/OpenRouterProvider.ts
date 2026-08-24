@@ -79,7 +79,11 @@ export class OpenRouterProvider extends BaseProvider {
   }
 
   async healthCheck(): Promise<boolean> {
-    return this.isConfigured()
+    return this.healthWithTtl(async () => {
+      if (!this.isConfigured()) return false
+      const models = await fetchOpenRouterModels(this.apiKey)
+      return models.length > 0
+    })
   }
 
   async listModels(): Promise<ModelInfo[]> {

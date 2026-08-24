@@ -189,11 +189,13 @@ belum di-set.
 
 Repo ini menjaga jejak audit yang wajib diikuti saat berkontribusi:
 
-- **`docs/STATUS_2026-08-11.md`** — status proyek terkini (apa selesai, apa tersisa).
+- **`docs/STATUS_2026-08-24.md`** — status proyek terkini (apa selesai, apa tersisa).
 - **`docs/adr/`** — Architecture Decision Records (keputusan yang tidak boleh
   direvisi tanpa ADR baru).
-- **`docs/AUDIT_*.md` / `docs/FIX_PLAN_*.md` / `docs/TODO_FIX_*.md`** — arsip
-  audit & rencana perbaikan (riwayat, sudah selesai).
+- **`docs/AUDIT_MENDALAM_2026-08-24.md`** — audit mendalam terbaru: temuan
+  (severity + file:line + saran) & prioritas perbaikan P0–P3.
+- **`docs/ROADMAP_PENYEMPURNAAN_2026-08-24.md`** — rencana perbaikan terstruktur
+  per milestone (M0–M10) — kerjakan satu milestone per commit.
 - **`src/main/qa/`** — test QA lintas-lapis, termasuk `sourceContracts.test.ts`
   yang mengunci kontrak modul/UI — jangan lolos dari pembaruan saat mengubah kontrak.
 

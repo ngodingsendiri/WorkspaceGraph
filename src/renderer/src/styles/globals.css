@@ -5290,6 +5290,10 @@ button {
 .status-dirty {
   color: var(--color-warning);
 }
+.status-save-error {
+  color: var(--color-error);
+  font-weight: 600;
+}
 .status-right {
   margin-left: auto;
   display: inline-flex;

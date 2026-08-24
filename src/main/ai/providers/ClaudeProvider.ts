@@ -45,7 +45,11 @@ export class ClaudeProvider extends BaseProvider {
   }
 
   async healthCheck(): Promise<boolean> {
-    return this.isConfigured()
+    return this.healthWithTtl(async () => {
+      if (!this.isConfigured()) return false
+      const models = await fetchAnthropicModels(this.apiKey, this.baseUrl || undefined)
+      return models.length > 0
+    })
   }
 
   async listModels(): Promise<ModelInfo[]> {

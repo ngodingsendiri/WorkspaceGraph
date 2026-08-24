@@ -53,5 +53,3 @@ bukan hasil optimasi menyeluruh — dapat dituning ulang jika ranking berubah ke
   `0.6 * r.score`)
 - `scripts/wb12-validation.ts` — harness validasi vault nyata (6 query, OLD vs NEW)
 - `src/main/engine/SearchEngine.test.ts` — test per-doc max rescue (weak-kw + strong-sem → #1)
-- `docs/TODO_FIX_2026-08-10.md` — entri WB-12 (keputusan ✅ M6 + validasi + catatan mock)
-- `docs/FIX_PLAN_2026-08-10.md` — tabel Gate 0 WB-12 ✅ **SELESAI**

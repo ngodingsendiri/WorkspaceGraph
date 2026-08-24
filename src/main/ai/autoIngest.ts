@@ -20,7 +20,8 @@ import { workspaceEngine } from '../engine/WorkspaceEngine'
 import { atomicWriteJson } from '../utils/quarantine'
 import { readAIEvents, type AIEvent } from './AIEventLog'
 import { AI_MEMORY_DIR, AI_MEMORY_FILES } from './WorkspaceMemory'
-import { markSelfWrite, syncSingleFile } from '../ipc/shared'
+import { markSelfWrite } from '../utils/selfWrite'
+import { syncSingleFile } from '../ipc/shared'
 
 /** Run ingest after this many completed streams (default; overridable in tests). */
 export const AUTO_INGEST_EVERY_MESSAGES = 8

@@ -10,7 +10,7 @@
 atau objek JSON telanjang) dan mengembalikan daftar `ToolAction`. Read tools dieksekusi langsung;
 write tools menghasilkan proposal yang hanya diterapkan setelah konfirmasi user.
 
-Temuan audit **AD-2** (Wave D, item 40 di AUDIT_RECAP) menandai ketidaksesuaian antara
+Temuan audit **AD-2** (audit 2026-08-10) menandai ketidaksesuaian antara
 **komentar** dan **perilaku**:
 
 - Komentar lama berbunyi "Dedupe consecutive identical tool+args" (dedup hanya berurutan).
@@ -68,5 +68,3 @@ Yang diperbaiki hanya **dokumentasi** (bukan perilaku):
 - `src/main/ai/AgentTools.test.ts` — test non-consecutive dedup
 - `src/main/ai/AIMiddleware.test.ts:551` — kontrak yang bergantung pada dedup global
 - `src/main/ai/AgentTools.ts` komentar dedup menyebut `(ADR-0001 / AD-2)` — sinkron dengan ADR ini (2026-08-11)
-- `docs/TODO_FIX_2026-08-10.md` — entri AD-2 (keputusan ✅)
-- `docs/FIX_PLAN_2026-08-10.md` — tabel Gate 0, AD-2 ✅ **DIPUTUSKAN: global adalah fitur**

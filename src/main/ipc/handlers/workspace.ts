@@ -10,7 +10,7 @@ import { automationEngine } from '../../engine/AutomationEngine'
 import { pluginHost } from '../../plugin/PluginHost'
 import { mcpManager } from '../../mcp/McpClientManager'
 import { readPermissions } from '../../security/Permissions'
-import { syncWorkspaceData, attachFileWatcher } from '../shared'
+import { syncWorkspaceData, attachFileWatcher, flushWatcherQueue } from '../shared'
 
 /**
  * AE-2: shared vault-open flow for workspace:open and workspace:create.
@@ -38,7 +38,14 @@ function openVaultFlow(root: string): void {
     .finally(() => {
       const s = workspaceEngine.getState()
       if (s.rootPath === root) {
+        // X1: initial index done — flip flag, then apply any file changes that
+        // arrived mid-index so none are lost and none raced the full rebuild.
         s.indexing = false
+        try {
+          flushWatcherQueue()
+        } catch (err) {
+          console.error('[workspace] flush watcher queue failed:', err)
+        }
         for (const win of BrowserWindow.getAllWindows()) {
           if (win.isDestroyed()) continue
           win.webContents.send('workspace:updated', workspaceEngine.getState())

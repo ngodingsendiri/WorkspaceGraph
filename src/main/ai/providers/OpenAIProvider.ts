@@ -100,7 +100,16 @@ export class OpenAIProvider extends BaseProvider {
   }
 
   async healthCheck(): Promise<boolean> {
-    return this.isConfigured()
+    // M1.4 (AI-5): real probe — fetch the account's /models list. isConfigured()
+    // (key present) is no longer treated as "connected".
+    return this.healthWithTtl(async () => {
+      if (!this.isConfigured()) return false
+      const models = await discoverOpenAICompat(
+        this.baseUrl || 'https://api.openai.com/v1',
+        this.apiKey
+      )
+      return (models?.models?.length ?? 0) > 0
+    })
   }
 
   async listModels(): Promise<ModelInfo[]> {

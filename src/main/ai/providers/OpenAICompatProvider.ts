@@ -117,7 +117,14 @@ export class OpenAICompatProvider extends BaseProvider {
   }
 
   async healthCheck(): Promise<boolean> {
-    return this.isConfigured()
+    return this.healthWithTtl(async () => {
+      if (!this.isConfigured()) return false
+      const discovered = await discoverOpenAICompat(
+        this.baseUrl || 'https://api.openai.com/v1',
+        this.apiKey
+      )
+      return (discovered?.models?.length ?? 0) > 0
+    })
   }
 
   async listModels(): Promise<ModelInfo[]> {

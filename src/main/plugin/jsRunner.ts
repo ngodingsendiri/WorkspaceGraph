@@ -27,6 +27,14 @@ export interface JsPluginRuntimeInfo {
   version?: string
   dir: string
   entry: string
+  /**
+   * M1.5 (PLG-4): declared manifest permissions — the capability baseline.
+   * `undefined` = legacy plugin without a permissions field → permissive
+   * (read-only ops allowed, write still prompts). A declared array is the
+   * least-privilege baseline: read-only ops are denied without a dialog when
+   * the matching permission is absent.
+   */
+  permissions?: string[]
 }
 
 /** Engines behind the plugin API — injectable for tests. */
@@ -145,6 +153,38 @@ export const defaultPermissionGate = createPermissionGate()
 
 // ─── Privileged API executor ───────────────────────────────────────────────
 
+/**
+ * M1.5 (PLG-4): manifest permission required per op. A plugin that declares a
+ * `permissions` array must declare the matching capability for an op to be
+ * allowed at all — read-only ops are denied WITHOUT a dialog (declaration is
+ * the baseline), write ops additionally keep the interactive dialog (execApi
+ * still calls gate.check). `undefined` required = always allowed (settings.get,
+ * ui.notify — non-sensitive).
+ */
+const OP_MANIFEST_PERM: Record<string, string | undefined> = {
+  'vault.read': 'read',
+  'vault.exists': 'read',
+  'vault.list': 'read',
+  'vault.write': 'read',
+  'vault.delete': 'read',
+  'search.query': 'search',
+  'graph.getNeighbors': 'read',
+  'graph.getBacklinks': 'read',
+  'automation.listRules': 'automation',
+  'automation.runRule': 'automation',
+  'settings.get': undefined,
+  'ui.notify': undefined
+}
+
+/** True when the plugin's declared permissions cover `op` (or it's legacy). */
+function manifestAllows(plugin: JsPluginRuntimeInfo, op: string): boolean {
+  const required = OP_MANIFEST_PERM[op]
+  if (!required) return true
+  const declared = plugin.permissions
+  if (declared === undefined) return true // legacy: no declaration = permissive
+  return declared.includes(required)
+}
+
 async function execApi(
   ns: string,
   method: string,
@@ -157,6 +197,19 @@ async function execApi(
   try {
     const root = providers.root()
     if (!root) return { ok: false, value: { error: 'No workspace open' } }
+
+    // M1.5 (PLG-4): enforce declared manifest permissions as the capability
+    // baseline. A plugin that declares permissions: [] can no longer reach ANY
+    // read/search/graph/automation op (no dialog for missing declarations) —
+    // only settings.get / ui.notify (undefined-required) stay open.
+    if (!manifestAllows(plugin, op)) {
+      return {
+        ok: false,
+        value: {
+          error: `Permission denied: ${op} (butuh permission "${OP_MANIFEST_PERM[op]}" di manifest)`
+        }
+      }
+    }
 
     switch (op) {
       case 'vault.read': {

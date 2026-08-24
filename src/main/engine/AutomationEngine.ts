@@ -6,6 +6,7 @@ import fs from 'fs'
 import path from 'path'
 import { workspaceEngine } from './WorkspaceEngine'
 import { assertPathInVault } from '../security/PathSandbox'
+import { markSelfWrite } from '../utils/selfWrite'
 
 export type AutomationTriggerType =
   'file_created' | 'file_updated' | 'file_deleted' | 'workspace_opened' | 'manual' | 'schedule'
@@ -126,6 +127,18 @@ export class AutomationEngine {
   private lastFiredAt: Record<string, number> = {}
   /** Per-rule last fire day key (daily rules) */
   private lastFiredDay: Record<string, string> = {}
+  /**
+   * A1: re-entrancy guards. markSelfWrite (utils/selfWrite) suppresses the
+   * watcher echo for files automation itself wrote; these two guards are the
+   * second net for loops that bypass it:
+   *  - reentrancyDepth: synchronous nested handleEvent (rare), bounded.
+   *  - lastHandledAt: async watcher echo (the real loop vector) — the same
+   *    rule must not re-process the same file within the cooldown window.
+   */
+  private reentrancyDepth = 0
+  private readonly MAX_REENTRANCY_DEPTH = 3
+  private lastHandledAt: Record<string, number> = {}
+  private readonly REENTRANCY_COOLDOWN_MS = 5000
 
   load(workspaceRoot: string): void {
     this.rootPath = workspaceRoot
@@ -210,20 +223,43 @@ export class AutomationEngine {
 
   handleEvent(type: AutomationTriggerType, filePath?: string): void {
     if (!this.enabled || !this.rootPath) return
+    // A1: stop runaway re-entry (rule write → watcher echo → same rule …).
+    // Fail-open on the boundary: skip the event, log once, allow later events.
+    if (this.reentrancyDepth >= this.MAX_REENTRANCY_DEPTH) {
+      this.pushLog('__reentrancy__', `skip ${type} (max depth ${this.MAX_REENTRANCY_DEPTH})`, false)
+      return
+    }
+    this.reentrancyDepth++
 
     const ctx = this.buildCtx(filePath)
-    for (const rule of this.config.rules) {
-      if (!rule.enabled) continue
-      if (rule.trigger.type !== type) continue
-      if (filePath && !this.matchPath(rule.trigger.match, filePath)) continue
+    try {
+      for (const rule of this.config.rules) {
+        if (!rule.enabled) continue
+        if (rule.trigger.type !== type) continue
+        if (filePath && !this.matchPath(rule.trigger.match, filePath)) continue
 
-      for (const action of rule.actions) {
-        try {
-          this.runAction(action, ctx, rule.id)
-        } catch (err) {
-          this.pushLog(rule.id, err instanceof Error ? err.message : String(err), false)
+        // A1 (async): the same rule must not re-process the same file within
+        // the cooldown window — this is what actually stops append-to-own-file
+        // loops, since the watcher fires on a fresh event-loop tick.
+        if (filePath) {
+          const cooldownKey = `${rule.id}:${filePath.replace(/\\/g, '/').toLowerCase()}`
+          const last = this.lastHandledAt[cooldownKey]
+          if (last != null && Date.now() - last < this.REENTRANCY_COOLDOWN_MS) {
+            continue
+          }
+          this.lastHandledAt[cooldownKey] = Date.now()
+        }
+
+        for (const action of rule.actions) {
+          try {
+            this.runAction(action, ctx, rule.id)
+          } catch (err) {
+            this.pushLog(rule.id, err instanceof Error ? err.message : String(err), false)
+          }
         }
       }
+    } finally {
+      this.reentrancyDepth--
     }
   }
 
@@ -242,6 +278,8 @@ export class AutomationEngine {
       const content = this.interpolate(action.content, ctx)
       const dir = path.dirname(abs)
       if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
+      // A1: mark our own write so the watcher doesn't re-fire the same rule
+      markSelfWrite(abs)
       if (!fs.existsSync(abs)) {
         workspaceEngine.writeFile(
           abs,
@@ -288,6 +326,7 @@ export class AutomationEngine {
           } else {
             raw = fm + `\ntags: [${tag}]` + body
           }
+          markSelfWrite(abs)
           workspaceEngine.writeFile(abs, raw)
           this.pushLog(ruleId, `tag ${tag} → ${rel}`, true)
         }

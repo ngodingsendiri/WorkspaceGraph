@@ -462,6 +462,122 @@ describe('JS plugin runner (permissions + bridge)', () => {
   })
 })
 
+describe('M1.5 — manifest permission enforcement (PLG-4)', () => {
+  let root: string
+
+  const makePluginWith = (
+    perms: string[] | undefined,
+    code = 'module.exports = { main: async (ctx) => ctx.api.vault.read("A.md") }'
+  ): JsPluginRuntimeInfo => {
+    const entry = path.join(root, 'main.js')
+    fs.writeFileSync(entry, code, 'utf-8')
+    return {
+      pluginId: 'perm-plugin',
+      pluginName: 'Perm',
+      version: '1.0.0',
+      dir: root,
+      entry,
+      permissions: perms
+    }
+  }
+
+  beforeEach(() => {
+    root = tmpVault()
+    fs.writeFileSync(path.join(root, 'A.md'), '# A')
+  })
+  afterEach(() => {
+    try {
+      fs.rmSync(root, { recursive: true, force: true })
+    } catch {
+      /* ignore */
+    }
+  })
+
+  it('permissions: [] → vault.read ditolak TANPA dialog', async () => {
+    const plugin = makePluginWith([])
+    const calls: string[] = []
+    const res = await runJsPluginCommand(
+      plugin,
+      'main',
+      {},
+      { transport: inProcessTransport(), providers: fakeProviders(root), gate: fakeGate(calls) }
+    )
+    expect(res.ok).toBe(false)
+    expect(res.error).toMatch(/Permission denied: vault.read/)
+    expect(calls).toHaveLength(0) // no dialog — declaration baseline is enough
+  })
+
+  it('permissions: ["read"] → vault.read diizinkan (tanpa dialog)', async () => {
+    const plugin = makePluginWith(['read'])
+    const calls: string[] = []
+    const res = await runJsPluginCommand(
+      plugin,
+      'main',
+      {},
+      { transport: inProcessTransport(), providers: fakeProviders(root), gate: fakeGate(calls) }
+    )
+    expect(res.ok).toBe(true)
+    expect(res.result).toContain('# A')
+    expect(calls).toHaveLength(0)
+  })
+
+  it('permissions: ["search"] → vault.read ditolak (read belum dideklarasikan)', async () => {
+    const plugin = makePluginWith(['search'])
+    const res = await runJsPluginCommand(
+      plugin,
+      'main',
+      {},
+      { transport: inProcessTransport(), providers: fakeProviders(root), gate: fakeGate() }
+    )
+    expect(res.ok).toBe(false)
+    expect(res.error).toMatch(/Permission denied: vault.read/)
+  })
+
+  it('permissions: undefined (legacy) → permissive seperti sebelumnya', async () => {
+    const plugin = makePluginWith(undefined)
+    const res = await runJsPluginCommand(
+      plugin,
+      'main',
+      {},
+      { transport: inProcessTransport(), providers: fakeProviders(root), gate: fakeGate() }
+    )
+    expect(res.ok).toBe(true)
+  })
+
+  it('permissions: ["automation"] → runRule lolos manifest namun tetap dialog (write-op)', async () => {
+    const plugin = makePluginWith(
+      ['automation'],
+      'module.exports = { main: async (ctx) => ctx.api.automation.runRule("r1") }'
+    )
+    const calls: string[] = []
+    const res = await runJsPluginCommand(
+      plugin,
+      'main',
+      {},
+      { transport: inProcessTransport(), providers: fakeProviders(root), gate: fakeGate(calls) }
+    )
+    expect(res.ok).toBe(true)
+    // manifest allows, but runRule is a state-changing op → dialog still fires
+    expect(calls).toHaveLength(1)
+    expect(calls[0]).toBe('automation.runRule')
+  })
+
+  it('permissions: [] → search.query ditolak', async () => {
+    const plugin = makePluginWith(
+      [],
+      'module.exports = { main: async (ctx) => ctx.api.search.query("x") }'
+    )
+    const res = await runJsPluginCommand(
+      plugin,
+      'main',
+      {},
+      { transport: inProcessTransport(), providers: fakeProviders(root), gate: fakeGate() }
+    )
+    expect(res.ok).toBe(false)
+    expect(res.error).toMatch(/Permission denied: search.query/)
+  })
+})
+
 describe('default permission gate (dialog)', () => {
   beforeEach(() => {
     vi.mocked(dialog.showMessageBox).mockReset()

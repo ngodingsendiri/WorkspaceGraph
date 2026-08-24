@@ -49,9 +49,13 @@ export class GeminiProvider extends BaseProvider {
     this.modelCache.clear()
   }
 
-  /** Don't burn tokens — configured key = "connected" for UI */
   async healthCheck(): Promise<boolean> {
-    return this.isConfigured()
+    // M1.4 (AI-5): real probe — fetch the account's /models catalog.
+    return this.healthWithTtl(async () => {
+      if (!this.isConfigured()) return false
+      const models = await fetchGeminiModels(this.apiKey)
+      return models.length > 0
+    })
   }
 
   async listModels(): Promise<ModelInfo[]> {

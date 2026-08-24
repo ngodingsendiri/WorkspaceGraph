@@ -134,6 +134,11 @@ export abstract class BaseProvider {
     if (config.defaultModel !== undefined && config.defaultModel) {
       this.defaultModel = config.defaultModel
     }
+    // A new key/base URL invalidates any cached health probe result (M1.4) —
+    // the next status poll must re-ping, not serve a stale "connected".
+    if (config.apiKey !== undefined || config.baseUrl !== undefined) {
+      this.healthCache = null
+    }
   }
 
   getDefaultModel(): string {
@@ -185,6 +190,37 @@ export abstract class BaseProvider {
   /** Lightweight: key present / base URL reachable — do NOT burn tokens */
   abstract healthCheck(): Promise<boolean>
   abstract listModels(): Promise<ModelInfo[]>
+
+  /**
+   * M1.4 (AI-5): real health probe with a TTL cache. `healthCheck()` on cloud
+   * providers used to be `isConfigured()` (key present ≠ server reachable) —
+   * the UI showed "connected" for dead keys. Providers now probe a real
+   * endpoint (GET /models) via this helper; the result is cached for the TTL
+   * window so Settings' polling (every 3s) does not hammer the API.
+   */
+  protected healthCache: { at: number; ok: boolean } | null = null
+  protected readonly HEALTH_TTL_MS = 5 * 60_000
+
+  protected async healthWithTtl(probe: () => Promise<boolean>): Promise<boolean> {
+    const now = Date.now()
+    if (this.healthCache && now - this.healthCache.at < this.HEALTH_TTL_MS) {
+      return this.healthCache.ok
+    }
+    let ok = false
+    try {
+      ok = await probe()
+    } catch {
+      ok = false
+    }
+    this.healthCache = { at: now, ok }
+    return ok
+  }
+
+  /** Bust the health cache (Settings → Test / Refresh) so the next poll re-probes. */
+  clearHealthCache(): void {
+    this.healthCache = null
+  }
+
   abstract sendMessage(request: AIRequest): Promise<AIResponse>
   /**
    * Stream chunks. Optional AbortSignal lets the caller stop the HTTP request

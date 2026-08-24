@@ -285,3 +285,100 @@ describe('AutomationEngine scheduler (cron)', () => {
     expect(fs.readFileSync(path.join(root, 'Daily', notes[0]), 'utf-8')).toContain('- ping')
   })
 })
+
+describe('AutomationEngine re-entrancy guard (A1)', () => {
+  let engine: AutomationEngine
+  let root: string
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    root = fs.mkdtempSync(path.join(tmpdir(), 'wg-test-auto-reent-'))
+    engine = new AutomationEngine()
+    fs.mkdirSync(path.join(root, '.workspacegraph'), { recursive: true })
+  })
+
+  afterEach(() => {
+    engine.stop()
+    vi.useRealTimers()
+    try {
+      fs.rmSync(root, { recursive: true, force: true })
+    } catch {
+      /* ignore */
+    }
+  })
+
+  it('self-append rule does not re-process the same file within the cooldown', () => {
+    // Rule: file_updated on .md → append to the SAME file. The watcher echo
+    // would fire handleEvent again — the per-rule cooldown must skip it.
+    const cfg: AutomationConfig = {
+      version: 1,
+      rules: [
+        {
+          id: 'echo',
+          name: 'echo',
+          enabled: true,
+          trigger: { type: 'file_updated', match: '.md' },
+          actions: [{ type: 'append_to_note', path: '{{relativePath}}', content: '- echo\n' }]
+        }
+      ]
+    }
+    fs.writeFileSync(
+      path.join(root, '.workspacegraph', 'automation.json'),
+      JSON.stringify(cfg, null, 2),
+      'utf-8'
+    )
+    engine.load(root)
+    engine.setEnabled(true)
+
+    fs.writeFileSync(path.join(root, 'note.md'), '# Note\n', 'utf-8')
+
+    // First fire: appends once.
+    engine.handleEvent('file_updated', path.join(root, 'note.md'))
+    const once = fs.readFileSync(path.join(root, 'note.md'), 'utf-8')
+    const appendCount = (once.match(/- echo/g) || []).length
+    expect(appendCount).toBe(1)
+
+    // Watcher echo arrives immediately (same cooldown window) — must be skipped.
+    engine.handleEvent('file_updated', path.join(root, 'note.md'))
+    const twice = fs.readFileSync(path.join(root, 'note.md'), 'utf-8')
+    expect((twice.match(/- echo/g) || []).length).toBe(1)
+  })
+
+  it('append writes to the vault and marks it so watcher echo is suppressed', () => {
+    const cfg: AutomationConfig = {
+      version: 1,
+      rules: [
+        {
+          id: 'append-daily',
+          name: 'append-daily',
+          enabled: true,
+          trigger: { type: 'file_created', match: '.md' },
+          actions: [
+            {
+              type: 'append_to_note',
+              path: 'Daily/{{date}}.md',
+              content: '- Created [[{{title}}]]\n'
+            }
+          ]
+        }
+      ]
+    }
+    fs.writeFileSync(
+      path.join(root, '.workspacegraph', 'automation.json'),
+      JSON.stringify(cfg, null, 2),
+      'utf-8'
+    )
+    engine.load(root)
+    engine.setEnabled(true)
+
+    engine.handleEvent('file_created', path.join(root, 'note.md'))
+
+    const dailyDir = path.join(root, 'Daily')
+    const dailyFiles = fs.existsSync(dailyDir)
+      ? fs.readdirSync(dailyDir).filter((f) => f.endsWith('.md'))
+      : []
+    expect(dailyFiles).toHaveLength(1)
+    const content = fs.readFileSync(path.join(dailyDir, dailyFiles[0]), 'utf-8')
+    expect(content).toContain('[[note]]')
+  })
+})

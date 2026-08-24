@@ -8,6 +8,7 @@ export interface TabItem {
   content: string
   isDirty: boolean
   html?: string
+  saveState: 'idle' | 'saving' | 'error'
 }
 
 /**
@@ -197,7 +198,8 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
                         title: nextTitle,
                         path: nextPath,
                         html: '',
-                        isDirty: false
+                        isDirty: false,
+                        saveState: 'idle'
                       }
                     : t
                 )
@@ -219,7 +221,8 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
           path: fileData.filePath || target,
           content: raw,
           html: typeof fileData.html === 'string' ? fileData.html : '',
-          isDirty: false
+          isDirty: false,
+          saveState: 'idle'
         }
 
         // Re-check after await — another open may have added this path
@@ -415,6 +418,9 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
         if (typeof snapshot !== 'string') return
         // Already clean and no pending timer work
         if (!tab.isDirty && !saveTimers.has(tabId)) return
+        set({
+          tabs: get().tabs.map((t) => (t.id === tabId ? { ...t, saveState: 'saving' } : t))
+        })
         try {
           const result = await window.api.writeFile(tab.path, snapshot)
           if (result && result.conflict) {
@@ -431,7 +437,9 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
                 // Update tab content with resolved content
                 set((state) => ({
                   tabs: state.tabs.map((t) =>
-                    t.id === tabId ? { ...t, content: resolvedContent, isDirty: true } : t
+                    t.id === tabId
+                      ? { ...t, content: resolvedContent, isDirty: true, saveState: 'saving' }
+                      : t
                   )
                 }))
               },
@@ -450,7 +458,7 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
               if (t.id !== tabId) return t
               // Typed during await → keep dirty
               if (t.content !== snapshot) return { ...t }
-              return { ...t, isDirty: false, html: t.html || '' }
+              return { ...t, isDirty: false, html: t.html || '', saveState: 'idle' }
             })
           })
           if (get().activeTabId === tabId) {
@@ -458,6 +466,33 @@ export const useEditorStore = create<EditorStore>((set, get) => ({
           }
         } catch (err) {
           console.error('saveTab failed:', tab.path, err)
+          // Keep dirty + expose error state so StatusBar/tab can surface it
+          set({
+            tabs: get().tabs.map((t) =>
+              t.id === tabId ? { ...t, isDirty: true, saveState: 'error' } : t
+            )
+          })
+          try {
+            const { toast } = await import('../components/ui/Toast')
+            const rel = get().tabs.find((t) => t.id === tabId)
+            const label = rel?.title || tab.path.split(/[/\\]/).pop() || 'catatan'
+            toast(
+              `Gagal menyimpan "${label}" — ${err instanceof Error ? err.message : String(err)}`,
+              {
+                variant: 'error',
+                duration: 8000
+              }
+            )
+          } catch {
+            /* toast unavailable — state error tetap ter-set */
+          }
+          // Auto-retry once after a short backoff so a transient disk hiccup self-heals
+          setTimeout(() => {
+            const cur = get().tabs.find((t) => t.id === tabId)
+            if (cur?.isDirty && cur.saveState === 'error') {
+              void get().saveTab(tabId)
+            }
+          }, 4000)
         }
       })
       .finally(() => {

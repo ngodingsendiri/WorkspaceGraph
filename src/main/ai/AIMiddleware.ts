@@ -445,14 +445,21 @@ export class AIMiddleware {
          * - configured: credentials present (cloud key / ollama always true by design)
          */
         let connected = false
-        if (provider.id === 'ollama') {
+        // M1.4 (AI-5): every provider now runs a real probe (GET /models or
+        // Ollama /api/tags) with a TTL cache — Settings' 3s polling won't
+        // hammer the API, and a dead key/base URL no longer shows "connected".
+        try {
           connected = await provider.healthCheck().catch(() => false)
+        } catch {
+          connected = false
         }
         let error: string | undefined
         if (provider.id === 'ollama') {
           error = connected ? undefined : 'Ollama offline (localhost:11434)'
         } else if (!configured) {
           error = 'API key belum di-set'
+        } else if (!connected) {
+          error = 'Tidak dapat terhubung (periksa kunci/URL, atau coba Tes)'
         }
         const status: ProviderStatus = {
           id: provider.id,
@@ -494,6 +501,13 @@ export class AIMiddleware {
       return { ok: false, models: [], error: `Provider not found: ${providerId}` }
     }
     provider.clearModelCache()
+    // M1.4: refresh also busts the health probe cache so the card re-pings
+    // the new key/base URL on the next status poll instead of serving TTL.
+    try {
+      ;(provider as { clearHealthCache?: () => void }).clearHealthCache?.()
+    } catch {
+      /* ignore */
+    }
     try {
       const models = await provider.listModels()
       return { ok: true, models }

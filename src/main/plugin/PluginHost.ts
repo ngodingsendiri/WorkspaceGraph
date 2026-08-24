@@ -163,6 +163,7 @@ export class PluginHost {
       description: 'JS sandbox sample — count notes & notify',
       enabled: true,
       main: 'main.js',
+      permissions: ['read'],
       commands: [
         {
           id: 'count-notes',
@@ -213,7 +214,8 @@ module.exports = {
       pluginName: p.manifest.name,
       version: p.manifest.version,
       dir: p.dir,
-      entry: p.jsEntry
+      entry: p.jsEntry,
+      permissions: p.manifest.permissions
     }
     return runJsPluginCommand(runtime, cmd.handler || '', args)
   }

@@ -5,7 +5,8 @@
 Version: 0.1  
 **Acuan:** Constitution `00` + PRD `03` + Architecture `04` + engines `05–10` + UI `23–26`  
 **UI constraint (user):** tampilan **clean seperti Obsidian** (flat, content-first, chrome tenang)  
-**Status kode:** lihat `docs/AUDIT.md` + `docs/BLUEPRINT_AUDIT_SYNC.md`
+**Status kode:** lihat `docs/STATUS_2026-08-24.md` · `docs/AUDIT_MENDALAM_2026-08-24.md` · `docs/ROADMAP_PENYEMPURNAAN_2026-08-24.md`
+**Status roadmap:** semua Phase 0–5 TERPENUHI (2026-07-22 + siklus audit 2026-08-10). Phase 6 = perbaikan hasil audit mendalam 2026-08-24 (lihat bagian bawah).
 
 ------------------------------------------------------------------------
 
@@ -33,8 +34,8 @@ Pengguna dapat meninggalkan Obsidian sebagai app harian **setelah** core vault +
 **Tujuan:** Spek + kode tidak saling menipu.
 
 - [x] Blueprint 00–34 di root (user)  
-- [x] Audit kode `docs/AUDIT.md`  
-- [x] Sync matrix `docs/BLUEPRINT_AUDIT_SYNC.md`  
+- [x] Audit kode `docs/AUDIT.md` *(file historis — dihapus 2026-08-11; kini `docs/AUDIT_MENDALAM_2026-08-24.md`)*  
+- [x] Sync matrix `docs/BLUEPRINT_AUDIT_SYNC.md` *(file historis — dihapus 2026-08-11; kini `docs/AUDIT_MENDALAM_2026-08-24.md`)*  
 - [x] Isi/maintain `35_Roadmap.md` (dokumen ini)  
 - [x] README mengarah ke Constitution + Vision (partial — README singkat)  
 - [x] Fix demo vault path di Welcome  
@@ -91,9 +92,13 @@ Pengguna dapat meninggalkan Obsidian sebagai app harian **setelah** core vault +
 - [x] Context Engine: aktif → wikilinks → backlinks → Rules/SOP → search  
 - [x] Token budget + dedupe context  
 - [x] Auto-include `Rules/`, `SOP/`, `Templates/`, `Prompt/` (budget-capped)  
-- [ ] (Optional phase 2b) Embeddings lokal (Ollama) + hybrid vector — later  
+- [x] Embeddings lokal + hybrid vector — **SELESAI via `@xenova/transformers` all-MiniLM-L6-v2** (bukan Ollama; lihat catatan di bawah)
 
-**Exit:** AI mendapat Context Package sesuai 09; search FTS + Fuse. **→ TERPENUHI (minus vector 2b).**
+> **Catatan Phase 2b:** roadmap semula menandai "Ollama embeddings (later)". Implementasi memilih
+> `@xenova/transformers` (ONNX, worker thread, offline setelah download pertama) — **fakta menyimpang
+> dari spek, tapi tujuan (hybrid vector) tercapai.** Ini contoh SPEC-DRIFT yang tercatat, bukan bug.
+
+**Exit:** AI mendapat Context Package sesuai 09; search FTS + Fuse. **→ TERPENUHI (embedding Xenova).**
 
 ------------------------------------------------------------------------
 
@@ -161,6 +166,7 @@ Pengguna dapat meninggalkan Obsidian sebagai app harian **setelah** core vault +
 - Replace MS Office / IDE  
 - Full Obsidian plugin compatibility  
 - Train own foundation model  
+- **v2 deferred (dari Phase 5/6):** plugin JS sandbox/marketplace, scheduled automation cron, update system otomatis (tanpa ADR)
 
 ------------------------------------------------------------------------
 
@@ -191,16 +197,44 @@ Pengguna dapat:
 
 ------------------------------------------------------------------------
 
-# Tracking
+# Phase 6 — Perbaikan hasil audit mendalam (2026-08-24)
 
-| Phase | Status |
-|-------|--------|
-| 0 Align | 🔄 in progress |
-| 1 Vault UX Obsidian-clean | ⬜ |
-| 2 Search + Context | ⬜ |
-| 3 AI Worker | ⬜ |
-| 4 Knowledge systems | ⬜ |
-| 5 Platform | ⬜ |
+**Sumber detail:** `docs/AUDIT_MENDALAM_2026-08-24.md` (temuan) + `docs/ROADMAP_PENYEMPURNAAN_2026-08-24.md` (milestone M0–M10).
+**Klasifikasi temuan:** setiap item dikategorikan agar prioritas jelas:
+- **BUG** — perilaku salah/kritis pada kode yang sudah ada (harus diperbaiki dulu).
+- **FITUR-GAP** — sesuatu yang belum dibangun vs spek (bangun sesuai prioritas produk).
+- **SPEC-DRIFT** — spek vs kode tidak sinkron (keputusan: bangun ATAU koreksi spek).
+- **DEFERRED** — sudah ditunda eksplisit di roadmap lama (non-goal v2).
+
+## Peta temuan per kategori
+
+| Kategori | Item |
+|---|---|
+| **BUG (perbaiki dulu)** | `UI-4` (autosave senyap) · `X1` (race index-watcher) · `A1` (automation loop) · `AI-5` (health check palsu — terverifikasi 5 provider `isConfigured()`) · `PLG-4` (permission plugin tak di-enforce) · `A2` (YAML dup key) · `G4` (tag node terisolasi) · `S7` (headings noise) · `S6` (kontradiksi Templates/) · `T1` (YAML-escape title) · `DOM-5/6/7/11` (klasifikasi daily/task) |
+| **FITUR-GAP (bangun)** | `DOM-3` (milestone/subtask/dependency) · `DOM-2/4` (document metadata+search) · `S1/S3/S4` (metadata search/ranking/tasks) · `G1/G2/G3/G5` (node attrs/folder edge/incremental) · `C1/C2` (context selection/project-tasks) · `M1/M2/M3/M4` (footnote/id/image/link) · `AI-15/19/20/21` (2 agent, conversation) · `UI-16/17/20/21/25/30/31` (dashboard/graph/settings/theme) · `PLT-1/2/3/4/6` (automation) · `PLG-1/2/3/5/6/7` (plugin SDK) · `MCP-2/3` (gate+secrets) · `SEC-1/2/3` (audit log/backup/encrypt) · `API-1/2/3` · `INS-2/3/4` · `TST-1..6` |
+| **SPEC-DRIFT (keputusan)** | `M2` (frontmatter `id`) · `DOM-1` (folder `Archive/`) · `CST-2` (folder type mapping) · `D1` · `DOM-16` (type sop/plan/meeting) · `MC-5` (turn transaksional vs resume) · Phase 2b embeddings (Xenova ≠ Ollama — sudah tercatat di atas) · `FR-003` (konteks dapat dijelaskan) |
+| **DEFERRED (non-goal v2)** | `INS-1` (update system) — tunggu ADR · `PLG-1` sebagian (JS sandbox/marketplace) · `PLT-5` sebagian (cron) · `UI-19` sebagian (AI entry points) · `UI-23` (clustering) · `SEC-5` (auth local) |
+
+## Milestone (ringkas — detail lengkap di `docs/ROADMAP_PENYEMPURNAAN_2026-08-24.md`)
+
+| Phase 6 sub | Milestone | Isi | Estimasi |
+|---|---|---|---|
+| 6.0 | M0 | 8 ADR baru (gate MCP, CSP, MiniCore model, secret fallback, turn transaksional, ID stabil, archived, update system) | 1 sesi |
+| 6.1 | M1 | BUG P0: autosave, race, loop, health check, permission plugin | ✅ SELESAI (1115 test, 70 files) |
+| 6.2 | M2 | Integrasi MiniCore (budget compaction, force_compact, error taxonomy, finish-reason, args validation, loop) | 4–6 sesi |
+| 6.3 | M3 | AI alignment: sub-agent context, PromptRegistry, 2 agent, conversation | 3–4 sesi |
+| 6.4 | M4 | Sistem domain: klasifikasi → management → milestone/subtask | 4–6 sesi |
+| 6.5 | M5 | UI/UX: tokens, a11y, dashboard, graph, settings, theme | 4–6 sesi |
+| 6.6 | M6 | Automation + Plugin SDK | 3–4 sesi |
+| 6.7 | M7 | Engine & search hardening (skala 10k+) | 3–4 sesi |
+| 6.8 | M8 | MCP/Security/API/Installer | 3–4 sesi |
+| 6.9 | M9 | E2E, AI eval, cross-platform CI, security test | 2–3 sesi |
+| 6.10 | M10 | Polish LOW/INFO | 2–3 sesi |
+
+> **Ketergantungan kunci:** M1 sebelum M2/M6 (safety net dulu). M0 sebelum M1 (ADR dulu).
+> **Gerbang tiap milestone:** typecheck 0 · test hijau · lint 0 · satu commit per milestone.
+
+
 
 ------------------------------------------------------------------------
 

@@ -13,6 +13,10 @@ import { aiMiddleware } from '../ai/AIMiddleware'
 import { embeddingEngine } from '../ai/EmbeddingEngine'
 import { automationEngine } from '../engine/AutomationEngine'
 import { readPermissions } from '../security/Permissions'
+import { markSelfWrite, isSelfWriteEcho } from '../utils/selfWrite'
+
+// Re-export for handlers that import markSelfWrite from shared (back-compat).
+export { markSelfWrite }
 import type { ParsedMarkdown } from '../engine/MarkdownEngine'
 
 export function coerceDateStr(val: unknown): string {
@@ -262,20 +266,76 @@ export function debounceEmit(): void {
   }, 1000)
 }
 
-/** Paths we just wrote ourselves — skip chokidar double-sync (same file ~ms later). */
-const selfWriteIgnore = new Map<string, number>()
-export function markSelfWrite(filePath: string): void {
-  selfWriteIgnore.set(filePath.replace(/\\/g, '/').toLowerCase(), Date.now())
-}
-function isSelfWriteEcho(filePath: string, windowMs = 2500): boolean {
-  const key = filePath.replace(/\\/g, '/').toLowerCase()
-  const t = selfWriteIgnore.get(key)
-  if (t == null) return false
-  if (Date.now() - t > windowMs) {
-    selfWriteIgnore.delete(key)
+/** Shared attach for open + create vault (prevents create without live reindex) */
+let watcherEventQueue: { event: FileChangeEvent; folderPath: string }[] = []
+
+/**
+ * Pure handler for a single watcher change event. Extracted so the queue
+ * logic (X1) and per-event processing can be unit-tested without chokidar.
+ * Returns true if the event was enqueued (index still running), false if it
+ * was processed now.
+ */
+export function handleWatcherEvent(event: FileChangeEvent, folderPath: string): boolean {
+  if (isTrashPath(event.path)) {
+    debounceEmit()
     return false
   }
-  return true
+  // X1: while the initial background index is still running, its final
+  // buildFromParsedFiles clears every node/edge — any incremental update
+  // applied now would be wiped. Queue instead; flush after indexing ends.
+  if (workspaceEngine.getState().indexing) {
+    watcherEventQueue.push({ event, folderPath })
+    return true
+  }
+  processWatcherEvent(event, folderPath)
+  return false
+}
+
+function processWatcherEvent(event: FileChangeEvent, folderPath: string): void {
+  if (event.type === 'add' || event.type === 'change') {
+    // file:write already ran syncSingleFile — chokidar echo would double-parse + rebuild edges
+    if (isSelfWriteEcho(event.path)) {
+      debounceEmit()
+      return
+    }
+    syncSingleFile(event.path, folderPath)
+    // Keep embedding index in sync (only .md files)
+    if (event.path.toLowerCase().endsWith('.md')) {
+      embeddingEngine.reindexFile(event.path).catch(() => {})
+    }
+    const perms = readPermissions(workspaceEngine.getSettings())
+    if (perms.automation && automationEngine.isEnabled()) {
+      automationEngine.handleEvent(
+        event.type === 'add' ? 'file_created' : 'file_updated',
+        event.path
+      )
+    }
+  } else if (event.type === 'unlink' || event.type === 'unlinkDir') {
+    // WA-2: a deleted folder must cascade to every child node, not just the
+    // folder path (which has no graph node of its own).
+    if (event.type === 'unlinkDir') handleDirRemove(event.path)
+    else handleFileRemove(event.path)
+    embeddingEngine.removeFile(event.path)
+    const perms = readPermissions(workspaceEngine.getSettings())
+    if (perms.automation && automationEngine.isEnabled()) {
+      automationEngine.handleEvent('file_deleted', event.path)
+    }
+  } else if (event.type === 'addDir') {
+    debounceEmit()
+    return
+  }
+  debounceEmit()
+}
+
+export function flushWatcherQueue(): void {
+  const q = watcherEventQueue
+  watcherEventQueue = []
+  const state = workspaceEngine.getState()
+  if (!state.rootPath) return
+  for (const { event, folderPath } of q) {
+    processWatcherEvent(event, folderPath)
+  }
+  debounceEmit()
 }
 
 /** Shared attach for open + create vault (prevents create without live reindex) */
@@ -290,43 +350,7 @@ export function attachFileWatcher(folderPath: string): void {
     console.error('[FileWatcher] chokidar error:', err)
   })
   fileWatcher.on('change', (event: FileChangeEvent) => {
-    if (isTrashPath(event.path)) {
-      debounceEmit()
-      return
-    }
-    if (event.type === 'add' || event.type === 'change') {
-      // file:write already ran syncSingleFile — chokidar echo would double-parse + rebuild edges
-      if (isSelfWriteEcho(event.path)) {
-        debounceEmit()
-        return
-      }
-      syncSingleFile(event.path, folderPath)
-      // Keep embedding index in sync (only .md files)
-      if (event.path.toLowerCase().endsWith('.md')) {
-        embeddingEngine.reindexFile(event.path).catch(() => {})
-      }
-      const perms = readPermissions(workspaceEngine.getSettings())
-      if (perms.automation && automationEngine.isEnabled()) {
-        automationEngine.handleEvent(
-          event.type === 'add' ? 'file_created' : 'file_updated',
-          event.path
-        )
-      }
-    } else if (event.type === 'unlink' || event.type === 'unlinkDir') {
-      // WA-2: a deleted folder must cascade to every child node, not just the
-      // folder path (which has no graph node of its own).
-      if (event.type === 'unlinkDir') handleDirRemove(event.path)
-      else handleFileRemove(event.path)
-      embeddingEngine.removeFile(event.path)
-      const perms = readPermissions(workspaceEngine.getSettings())
-      if (perms.automation && automationEngine.isEnabled()) {
-        automationEngine.handleEvent('file_deleted', event.path)
-      }
-    } else if (event.type === 'addDir') {
-      debounceEmit()
-      return
-    }
-    debounceEmit()
+    handleWatcherEvent(event, folderPath)
   })
 }
 

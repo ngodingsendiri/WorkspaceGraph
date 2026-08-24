@@ -29,12 +29,14 @@ export class OllamaProvider extends BaseProvider {
   }
 
   async healthCheck(): Promise<boolean> {
-    try {
-      const res = await fetch(`${this.baseUrl}/api/tags`)
-      return res.ok
-    } catch {
-      return false
-    }
+    return this.healthWithTtl(async () => {
+      try {
+        const res = await fetch(`${this.baseUrl}/api/tags`)
+        return res.ok
+      } catch {
+        return false
+      }
+    })
   }
 
   async listModels(): Promise<ModelInfo[]> {
