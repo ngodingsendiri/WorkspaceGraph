@@ -40,6 +40,7 @@ import { estimateStreamCostUsd } from './cost'
 import { shouldFailoverError, failoverCandidatesFor } from './providerFailover'
 import { verifyCitations, type CitationVerification } from './CitationVerifier'
 import { compactMessages, contextBudgetForModel, RESERVED_OUTPUT_TOKENS } from './contextCompaction'
+import { isContextLengthExceeded } from './providers/providerRetry'
 
 /**
  * Structured per-tool lifecycle event (P1-1). One runId spans the whole
@@ -1491,6 +1492,10 @@ export class AIMiddleware {
     // than orphaning tool results the model still needs in context. Total provider
     // calls across original + resume can therefore reach MAX_TOOL_ROUNDS + 1.
     const startRound = Math.max(0, Math.min(resumeFrom?.round ?? 0, MAX_TOOL_ROUNDS - 1))
+    // M2.2 (MC-2): force_compact_and_retry is bounded — at most ONE compact
+    // retry per stream. If the provider still rejects after a compacted fold,
+    // surface the error instead of looping forever.
+    let forceCompactUsed = false
     for (let round = startRound; round < (enableTools ? MAX_TOOL_ROUNDS : 1); round++) {
       if (requestId && this.isCancelled(requestId)) {
         onChunk({
@@ -1509,6 +1514,29 @@ export class AIMiddleware {
           proposals: allProposals
         })
         return
+      }
+
+      // M2.1 (MC-1): budget-pressure compaction BETWEEN tool rounds. The
+      // pre-loop compact above only covers the incoming history; each round
+      // appends assistant tool_calls + tool results to `messages`, so round 2-4
+      // can push the estimate past the budget and hit context_length_exceeded.
+      // Re-evaluate once per round (deterministic, extractive — no extra model
+      // call) and fold the oldest tail if over. Tool pairing stays intact
+      // (compactMessages never splits a call from its results).
+      if (round > 0) {
+        const perRound = compactMessages(messages, Math.max(4096, compactBudget))
+        if (perRound.compactedCount > 0) {
+          messages = perRound.messages
+          const freed =
+            perRound.freedTokens >= 1000
+              ? `${(perRound.freedTokens / 1000).toFixed(1)}k`
+              : String(perRound.freedTokens)
+          onChunk({
+            content: `\n\n*(context antar-round di-compact — ${perRound.compactedCount} pesan lama, menghemat ±${freed} token)*\n`,
+            done: false,
+            toolStatus: `Context compacted (round ${round + 1})`
+          })
+        }
       }
 
       let fullText = ''
@@ -1630,6 +1658,29 @@ export class AIMiddleware {
       }
 
       if (streamError) {
+        // M2.2 (MC-2): provider rejected the context as too long → fold the
+        // oldest messages (extractive, deterministic) and retry the SAME round
+        // once. Bounded: only a successful fold retries; otherwise the error is
+        // surfaced normally (no infinite loop).
+        if (isContextLengthExceeded(streamError) && !forceCompactUsed) {
+          const compacted = compactMessages(messages, Math.max(4096, compactBudget))
+          if (compacted.compactedCount > 0) {
+            forceCompactUsed = true
+            messages = compacted.messages
+            const freed =
+              compacted.freedTokens >= 1000
+                ? `${(compacted.freedTokens / 1000).toFixed(1)}k`
+                : String(compacted.freedTokens)
+            onChunk({
+              content: `\n\n*(konteks terlalu panjang — di-compact (±${freed} token), mencoba ulang)*\n`,
+              done: false,
+              toolStatus: `Context compacted (force retry, round ${round + 1})`,
+              round
+            })
+            round-- // for-loop increments — retry the same round next iteration
+            continue
+          }
+        }
         onChunk({
           content: `\n\n**Error:** ${streamError}`,
           done: true,

@@ -1908,6 +1908,148 @@ describe('AIMiddleware.runStreamInner (P-B1)', () => {
     expect(done?.error).toContain('tidak mendukung vision')
     expect(provider.calls).toHaveLength(0)
   })
+
+  it('M2.1 (MC-1): compact BETWEEN tool rounds when a round pushes past the budget', async () => {
+    const provider = new ScriptedProvider(true)
+    const mid = makeMid(provider)
+    vi.spyOn(provider, 'listModels').mockResolvedValue([
+      { id: 'fake', name: 'Fake', contextWindow: 2000 }
+    ])
+    const bigPath = path.join(vault, 'big.md')
+    fs.writeFileSync(bigPath, '# Big\n\n' + 'x'.repeat(15_000), 'utf-8')
+
+    // Round 0 + round 1 both return a read_note tool call → 2× tool result
+    // appended after round 0 and round 1, which pushes total past the budget.
+    provider.script.push((_req, onChunk) => {
+      onChunk({
+        content: '',
+        done: true,
+        model: 'fake',
+        toolCalls: [{ id: 'c0', name: 'read_note', arguments: JSON.stringify({ path: bigPath }) }]
+      })
+    })
+    provider.script.push((_req, onChunk) => {
+      onChunk({
+        content: '',
+        done: true,
+        model: 'fake',
+        toolCalls: [{ id: 'c1', name: 'read_note', arguments: JSON.stringify({ path: bigPath }) }]
+      })
+    })
+    provider.script.push((_req, onChunk) => {
+      onChunk({ content: 'Done.', done: false, model: 'fake' })
+      onChunk({ content: '', done: true, model: 'fake' })
+    })
+
+    const chunks: StreamEvent[] = []
+    await mid.streamMessage(
+      {
+        messages: [{ role: 'user', content: 'read the big note ' + 'y'.repeat(10_000) }],
+        model: 'fake'
+      },
+      (c) => chunks.push(c),
+      undefined,
+      false,
+      'general',
+      true,
+      'req-compact-round',
+      false
+    )
+
+    // Round 1 request must carry a [Compacted] block prepended to messages —
+    // proof the per-round compaction ran and folded the old user turn.
+    const firstRound1 = provider.calls[1]?.messages?.[0]
+    expect(String(firstRound1?.content || '')).toContain('[Compacted]')
+    // And the mid-loop compaction status chunk was surfaced to the UI
+    expect(
+      chunks.some(
+        (c) =>
+          String(c.content || '').includes('antar-round') ||
+          String(c.toolStatus || '').includes('Context compacted')
+      )
+    ).toBe(true)
+  })
+
+  it('M2.2 (MC-2): force_compact_and_retry on context_length_exceeded, bounded to once', async () => {
+    const provider = new ScriptedProvider(true)
+    const mid = makeMid(provider)
+    vi.spyOn(provider, 'listModels').mockResolvedValue([
+      { id: 'fake', name: 'Fake', contextWindow: 2000 }
+    ])
+
+    // Round 0: provider rejects with context_length_exceeded → middleware must
+    // fold messages and retry the SAME round. Round 1 (retry): succeeds.
+    provider.script.push((_req, onChunk) => {
+      onChunk({ content: '', done: true, model: 'fake', error: 'maximum context length is 2000' })
+    })
+    provider.script.push((_req, onChunk) => {
+      onChunk({ content: 'Recovered.', done: false, model: 'fake' })
+      onChunk({ content: '', done: true, model: 'fake' })
+    })
+
+    const chunks: StreamEvent[] = []
+    await mid.streamMessage(
+      {
+        messages: [
+          { role: 'user', content: 'first big turn ' + 'a'.repeat(20_000) },
+          { role: 'assistant', content: 'ok' },
+          { role: 'user', content: 'continue ' + 'b'.repeat(20_000) }
+        ],
+        model: 'fake'
+      },
+      (c) => chunks.push(c),
+      undefined,
+      false,
+      'general',
+      false,
+      'req-force-compact',
+      false
+    )
+
+    // The first attempt errored, the retry succeeded → done chunk has no error
+    const done = chunks.filter((c) => c.done).pop()
+    expect(done?.error).toBeUndefined()
+    expect(provider.calls.length).toBeGreaterThanOrEqual(2)
+    // The force-retry status chunk was surfaced
+    expect(chunks.some((c) => String(c.toolStatus || '').includes('force retry'))).toBe(true)
+  })
+
+  it('M2.2 (MC-2): force_compact does not loop forever when compaction cannot shrink', async () => {
+    const provider = new ScriptedProvider(true)
+    const mid = makeMid(provider)
+    vi.spyOn(provider, 'listModels').mockResolvedValue([
+      { id: 'fake', name: 'Fake', contextWindow: 2000 }
+    ])
+
+    // Every attempt rejects with context_length — after the single bounded
+    // force-compact retry, the SECOND error must surface (no infinite loop).
+    provider.script.push((_req, onChunk) => {
+      onChunk({ content: '', done: true, model: 'fake', error: 'context_length_exceeded' })
+    })
+    provider.script.push((_req, onChunk) => {
+      onChunk({ content: '', done: true, model: 'fake', error: 'context_length_exceeded' })
+    })
+    provider.script.push((_req, onChunk) => {
+      onChunk({ content: '', done: true, model: 'fake', error: 'context_length_exceeded' })
+    })
+
+    const chunks: StreamEvent[] = []
+    await mid.streamMessage(
+      { messages: [{ role: 'user', content: 'hi ' + 'x'.repeat(20_000) }], model: 'fake' },
+      (c) => chunks.push(c),
+      undefined,
+      false,
+      'general',
+      false,
+      'req-force-compact-limit',
+      false
+    )
+
+    const done = chunks.filter((c) => c.done).pop()
+    expect(done?.error).toContain('context_length_exceeded')
+    // Bounded: initial attempt + exactly ONE force-compact retry
+    expect(provider.calls.length).toBeLessThanOrEqual(2)
+  })
 })
 
 describe('executeToolWithTimeout (P1-runtime)', () => {

@@ -40,22 +40,25 @@
 
 ## PHASE 0 — GATE & KEPUTUSAN DESAIN
 
-### M0: Keputusan desain → ADR baru
+### M0: Keputusan desain → ADR baru ✅ SELESAI (2026-08-24)
 
-Sebelum mengerjakan, putuskan dan catat sebagai ADR-0006+:
+> **Status:** 8 ADR tercatat (ADR-0006..0013). Keputusan berdampak di-map ke milestone:
+> ADR-0008 (MiniCore bertahap) → M2 · ADR-0011 (id frontmatter) → M7 · ADR-0012 (arsip
+> frontmatter) → M4 · ADR-0006/0007/0009/0013 (MCP gate, CSP, secret, updater) → M8.
+> Tidak ada keputusan tersisa yang memblokir M2.
 
-| Calon ADR | Keputusan yang perlu diambil | Asal temuan |
+| Calon ADR | Keputusan yang diambil | Asal temuan |
 |---|---|---|
-| ADR-0006 | **Gate spawn MCP** — MCP server membutuhkan permission eksplisit? `connectAll` saat open vault hanya bila `perms.aiTools` (atau permission MCP baru) aktif? | MCP-2 |
-| ADR-0007 | **CSP production** — pisahkan CSP dev vs prod; hapus `'unsafe-eval'`/`'unsafe-inline'` di production? | SEC-4 |
-| ADR-0008 | **Model MiniCore** — adopsi loop MiniCore penuh (`createSession`) vs adopsi bertahap (hanya compact/recovery)? | MC-1..10 |
-| ADR-0009 | **Fallback secret `plain:`** — tolak persist saat safeStorage tak tersedia, atau kunci file lokal, atau terima + tandai UI? | AI-8 |
-| ADR-0010 | **Turn transaksional vs resume marker** — turn gagal/abort: buang (MiniCore) vs marker `*(cancelled)*` (status quo)? | MC-5 |
-| ADR-0011 | **ID stabil** — hormati frontmatter `id` sebagai identity (renamed-safe) vs tetap hash path? | M2/G-x |
-| ADR-0012 | **Status `archived`** — hormati frontmatter status=archived sebagai lifecycle (bukan pindah folder), dan petakan `Archive/`? | DOM-1 |
-| ADR-0013 | **Update system** — adopsi electron-updater vs dokumentasikan sebagai non-goal? | INS-1 |
+| ADR-0006 | **Gate spawn MCP** — connectAll & save/test server butuh permission eksplisit (turunan `aiTools`); UI Settings mengaktifkan | MCP-2 |
+| ADR-0007 | **CSP production** — pisahkan dev vs prod; prod tanpa `'unsafe-eval'`/`'unsafe-inline'` | SEC-4 |
+| ADR-0008 | **Model MiniCore** — **adopsi bertahap** (5 langkah komponen, evaluasi `createSession` setelahnya) | MC-1..10 |
+| ADR-0009 | **Fallback secret `plain:`** — pertahankan + tandai "tidak terenkripsi" di UI | AI-8 |
+| ADR-0010 | **Turn transaksional vs resume marker** — pertahankan status quo (resume marker); evaluasi ulang saat adopsi penuh | MC-5 |
+| ADR-0011 | **ID stabil** — hormati frontmatter `id` sebagai identity, fallback hash path | M2/G-x |
+| ADR-0012 | **Status `archived`** — arsip = frontmatter `status: archived` (bukan pindah folder) | DOM-1 |
+| ADR-0013 | **Update system** — **adopsi electron-updater** di M8 (setelah core stabil) | INS-1 |
 
-**Output M0:** ADR-0006..0013 tertulis + baseline hijau.
+**Output M0:** ✅ ADR-0006..0013 tertulis + baseline hijau + `docs/adr/README.md` diperbarui.
 
 ---
 
@@ -80,20 +83,22 @@ Sebelum mengerjakan, putuskan dan catat sebagai ADR-0006+:
 
 ## PHASE 2 — INTEGRASI MINICORE (AI)
 
-### M2: Adopsi MiniCore sebagai runtime loop (nilai tertinggi)
+### M2: Adopsi MiniCore bertahap (ADR-0008)
 
-**Kontek:** MiniCore (`D:\git\minicore`, 148 test deterministik) punya loop `model→tool→observation` dengan budget-pressure compaction, recovery `force_compact_and_retry`, taksonomi error, semantik finish-reason, turn transaksional, validasi args JSON-schema. WorkspaceGraph punya loop sendiri di `AIMiddleware.runStreamInner` dengan duplikasi hampir identik.
+**Status:** 🔄 dimulai setelah M0 (ADR-0008) + M1 selesai. Langkah 2.1–2.2 = prioritas pertama.
+
+**Kontek:** MiniCore (`D:\git\minicore`, 148 test deterministik) punya loop `model→tool→observation` dengan budget-pressure compaction, recovery `force_compact_and_retry`, taksonomi error, semantik finish-reason, turn transaksional, validasi args JSON-schema. WorkspaceGraph punya loop sendiri di `AIMiddleware.runStreamInner` dengan duplikasi hampir identik. **ADR-0008: adopsi bertahap, bukan rombak sekaligus.**
 
 **Strategi (bertahap — mulai dari yang murah, naik ke paling bernilai):**
 
-| Step | Audit ID | Pekerjaan | Detail |
-|---|---|---|---|
-| 2.1 | MC-1 | Kompaksi berbasis budget antar-round | Terapkan evaluasi budget per step di tool loop (MiniCore `defaultBudgetPolicy`/`compact.ts`); saat medium/high → compact lalu lanjut round | 
-| 2.2 | MC-2 | `force_compact_and_retry` untuk `context_length_exceeded` | Map error provider → kompak → retry (MiniCore `recovery.ts:19-20`); failover tetap sebagai lapisan terakhir |
-| 2.3 | MC-3 | Taksonomi error ter-normalisasi | Pakai `ProviderErrorCategory`; adaptor provider map error vendor → kategori; ganti regex/status string |
-| 2.4 | MC-4 | Semantik `FinishReason` | Provider emit finish reason (`stop/length/abort/error`); output terpotong (`length`) ≠ sukses → recovery |
-| 2.5 | MC-6 | Validasi args tool via JSON-schema | Pakai `validateArgs` (MiniCore `tool.ts`) di depan `parseToolActions`/`nativeCallsToActions` |
-| 2.6 | MC-5/MC-8/MC-9 | Turn transaksional + deadline pasti + snapshot isolation | Evaluasi penggantian inti loop `runStreamInner` → `createSession`+`session.run()` (lihat audit §7.4) |
+| Step | Audit ID | Pekerjaan | Detail | Status |
+|---|---|---|---|---|
+| 2.1 | MC-1 | Kompaksi berbasis budget antar-round | Terapkan evaluasi budget per step di tool loop; saat medium/high → compact lalu lanjut round | ✅ SELESAI — compact per round>0 di `runStreamInner`; test M2.1 |
+| 2.2 | MC-2 | `force_compact_and_retry` untuk `context_length_exceeded` | Map error provider → kompak → retry (MiniCore `recovery.ts:19-20`); failover tetap sebagai lapisan terakhir | ✅ SELESAI — `isContextLengthExceeded` + retry sekali (bounded) di `runStreamInner`; test M2.2 |
+| 2.3 | MC-3 | Taksonomi error ter-normalisasi | Pakai `ProviderErrorCategory`; adaptor provider map error vendor → kategori; ganti regex/status string | ⬜ |
+| 2.4 | MC-4 | Semantik `FinishReason` | Provider emit finish reason (`stop/length/abort/error`); output terpotong (`length`) ≠ sukses → recovery | ⬜ |
+| 2.5 | MC-6 | Validasi args tool via JSON-schema | Pakai `validateArgs` (MiniCore `tool.ts`) di depan `parseToolActions`/`nativeCallsToActions` | ⬜ |
+| 2.6 | MC-5/MC-8/MC-9 | Evaluasi turn transaksional + deadline pasti + snapshot isolation | Hanya setelah 2.1–2.5 stabil; tetap jaga resume marker (ADR-0010) | ⬜ |
 
 **Dependensi:** M1 (safety net AI-5, PLG-4) selesai agar perubahan loop tidak menumpuk risiko.
 

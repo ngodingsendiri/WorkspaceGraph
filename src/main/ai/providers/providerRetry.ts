@@ -36,6 +36,25 @@ export function isRetryableProviderError(err: unknown): boolean {
   return /\b(429|5\d\d)\b/.test(msg)
 }
 
+/**
+ * M2.2 (MC-2): true when the provider rejected the request because the context
+ * is too long — the signal for `force_compact_and_retry` (fold the history and
+ * retry the same round, once). Providers report this as a 400 with a body like
+ * "maximum context length is X", "context_length_exceeded", "token limit", etc.
+ */
+export function isContextLengthExceeded(err: unknown): boolean {
+  if (!err) return false
+  const msg =
+    typeof err === 'string'
+      ? err
+      : typeof (err as { message?: unknown })?.message === 'string'
+        ? String((err as { message?: string }).message)
+        : String(err)
+  return /(context.{0,30}(length|window|limit)|token.{0,20}(exceed|too long|limit)|context_length_exceeded)/i.test(
+    msg
+  )
+}
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }

@@ -219,7 +219,7 @@ Pengguna dapat:
 
 | Phase 6 sub | Milestone | Isi | Estimasi |
 |---|---|---|---|
-| 6.0 | M0 | 8 ADR baru (gate MCP, CSP, MiniCore model, secret fallback, turn transaksional, ID stabil, archived, update system) | 1 sesi |
+| 6.0 | M0 | 8 ADR baru (gate MCP, CSP, MiniCore model, secret fallback, turn transaksional, ID stabil, archived, update system) | ✅ SELESAI (ADR-0006..0013) |
 | 6.1 | M1 | BUG P0: autosave, race, loop, health check, permission plugin | ✅ SELESAI (1115 test, 70 files) |
 | 6.2 | M2 | Integrasi MiniCore (budget compaction, force_compact, error taxonomy, finish-reason, args validation, loop) | 4–6 sesi |
 | 6.3 | M3 | AI alignment: sub-agent context, PromptRegistry, 2 agent, conversation | 3–4 sesi |

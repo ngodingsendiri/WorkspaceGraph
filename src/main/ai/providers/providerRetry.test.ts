@@ -1,9 +1,33 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { withProviderRetry, isRetryableProviderError } from './providerRetry'
+import {
+  withProviderRetry,
+  isRetryableProviderError,
+  isContextLengthExceeded
+} from './providerRetry'
 
 afterEach(() => {
   vi.useRealTimers()
   vi.restoreAllMocks()
+})
+
+describe('isContextLengthExceeded (M2.2 / MC-2)', () => {
+  it('detects context-length errors from provider messages', () => {
+    expect(isContextLengthExceeded(new Error('maximum context length is 128000'))).toBe(true)
+    expect(
+      isContextLengthExceeded(new Error("This model's maximum context length is 200000"))
+    ).toBe(true)
+    expect(isContextLengthExceeded(new Error('context_length_exceeded'))).toBe(true)
+    expect(isContextLengthExceeded('The request exceeds the token limit (400)')).toBe(true)
+    expect(isContextLengthExceeded('Input is too long for context window')).toBe(true)
+  })
+
+  it('does not flag unrelated errors', () => {
+    expect(isContextLengthExceeded(new Error('401 Unauthorized'))).toBe(false)
+    expect(isContextLengthExceeded(new Error('rate limit exceeded'))).toBe(false)
+    expect(isContextLengthExceeded('429 Too Many Requests')).toBe(false)
+    expect(isContextLengthExceeded(null)).toBe(false)
+    expect(isContextLengthExceeded(undefined)).toBe(false)
+  })
 })
 
 describe('isRetryableProviderError (R0-3)', () => {
