@@ -1358,15 +1358,20 @@ describe('AI system contracts', () => {
   it('R0-3 retry/backoff + R0-2 parallel reads wired', () => {
     const retry = read('src/main/ai/providers/providerRetry.ts')
     const mid = read('src/main/ai/AIMiddleware.ts')
-    // Shared wrapper: retries only 429/5xx, exponential backoff, optional give-up
+    // M2.3: classification lives in the shared taxonomy — retry delegates to it
+    expect(has(retry, 'export async function withProviderRetry', "from '../providerErrors'")).toBe(
+      true
+    )
+    const errors = read('src/main/ai/providerErrors.ts')
     expect(
       has(
-        retry,
-        'export async function withProviderRetry',
-        'export function isRetryableProviderError'
+        errors,
+        'export function isRetryableProviderError',
+        'export function categorizeProviderError',
+        'status === 429',
+        'status >= 500 && status < 600'
       )
     ).toBe(true)
-    expect(has(retry, 'status === 429', 'status >= 500 && status <= 599')).toBe(true)
     expect(has(retry, 'baseDelayMs * 2 ** attempt', 'maxDelayMs')).toBe(true)
     // OpenAI-compat providers wrap BOTH send + stream-create; Claude/Gemini wrap
     // send (Claude's stream helper fires lazily) and Gemini also wraps stream-create
@@ -1853,10 +1858,17 @@ describe('AI system contracts', () => {
         'export function failoverCandidatesFor'
       )
     ).toBe(true)
-    // 401/403/429/5xx are failover-worthy; 400/404 are not; Ollama never a target
-    expect(has(helper, 'status === 401', 'status === 429', 'status >= 500 && status < 600')).toBe(
-      true
-    )
+    // M2.3: failover categories come from the shared taxonomy — auth/rate_limit/
+    // server fail over; context_length recovers in place; invalid_request never
+    expect(
+      has(
+        helper,
+        "category === 'auth'",
+        "category === 'rate_limit'",
+        "category === 'server'",
+        "category === 'context_length_exceeded'"
+      )
+    ).toBe(true)
     expect(has(helper, "id === 'ollama'", 'id === activeId')).toBe(true)
     // Middleware: failover wrapper restarts the stream on the next configured
     // provider; note chunk + AIEventLog 'failover' (provider → target); the

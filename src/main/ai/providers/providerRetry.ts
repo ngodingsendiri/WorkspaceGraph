@@ -1,12 +1,25 @@
 /**
  * Shared retry/backoff for provider calls (R0-3).
  *
- * Retries ONLY transient failures — 429 rate limits and 5xx server errors.
- * 4xx auth/bad-request failures are never retried (a wrong key won't fix
- * itself in 500ms). Streams are retried at CREATE time only (before any chunk
- * was emitted); a mid-stream failure cannot be resumed without duplicating the
- * content the user already saw.
+ * Retries ONLY transient failures — 429 rate limits, 5xx server errors, and
+ * network-level failures. 4xx auth/bad-request failures are never retried (a
+ * wrong key won't fix itself in 500ms). Streams are retried at CREATE time
+ * only (before any chunk was emitted); a mid-stream failure cannot be resumed
+ * without duplicating the content the user already saw.
+ *
+ * M2.3 (MC-3): classification delegates to the shared taxonomy
+ * (`providerErrors.ts`) so retry/failover/context-length decisions can never
+ * drift apart on non-standard error messages.
  */
+
+import {
+  categorizeProviderError,
+  isContextLengthExceeded,
+  isRetryableProviderError
+} from '../providerErrors'
+
+// Re-exported so existing import sites keep working with unchanged paths.
+export { isRetryableProviderError, isContextLengthExceeded, categorizeProviderError }
 
 export interface RetryPolicy {
   /** Total attempts including the first call. Default 2. */
@@ -21,38 +34,6 @@ export interface RetryPolicy {
    * zero-based attempt that just failed.
    */
   shouldRetry?: (failedAttempt: number) => boolean
-}
-
-/** True for 429 or 5xx — the only statuses worth retrying. */
-export function isRetryableProviderError(err: unknown): boolean {
-  if (!err) return false
-  const anyErr = err as { status?: unknown; response?: { status?: unknown }; message?: unknown }
-  const status = Number(anyErr?.status ?? anyErr?.response?.status ?? NaN)
-  if (Number.isFinite(status) && status > 0) {
-    return status === 429 || (status >= 500 && status <= 599)
-  }
-  // Fallback for providers that only put the code in the message text
-  const msg = typeof anyErr?.message === 'string' ? anyErr.message : String(err)
-  return /\b(429|5\d\d)\b/.test(msg)
-}
-
-/**
- * M2.2 (MC-2): true when the provider rejected the request because the context
- * is too long — the signal for `force_compact_and_retry` (fold the history and
- * retry the same round, once). Providers report this as a 400 with a body like
- * "maximum context length is X", "context_length_exceeded", "token limit", etc.
- */
-export function isContextLengthExceeded(err: unknown): boolean {
-  if (!err) return false
-  const msg =
-    typeof err === 'string'
-      ? err
-      : typeof (err as { message?: unknown })?.message === 'string'
-        ? String((err as { message?: string }).message)
-        : String(err)
-  return /(context.{0,30}(length|window|limit)|token.{0,20}(exceed|too long|limit)|context_length_exceeded)/i.test(
-    msg
-  )
 }
 
 function sleep(ms: number): Promise<void> {
@@ -78,6 +59,7 @@ export async function withProviderRetry<T>(
     } catch (err) {
       lastErr = err
       const exhausted = attempt === attempts - 1
+      // M2.3: classification via the shared taxonomy (rate_limit/server/network)
       const giveUp =
         !isRetryableProviderError(err) || (policy.shouldRetry && !policy.shouldRetry(attempt))
       if (exhausted || giveUp) throw err

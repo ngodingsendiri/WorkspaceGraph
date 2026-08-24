@@ -13,25 +13,22 @@
  *    into an extra connection-refused hop. Failover targets are cloud providers.
  *  - Non-terminal errors (400/404/422, model not found) surface immediately —
  *    hopping providers on a bad request just wastes a call.
+ *
+ * M2.3 (MC-3): classification delegates to the shared taxonomy
+ * (`providerErrors.ts`) — one categorizer for retry, failover, and
+ * context-length decisions, so they can never drift apart.
  */
 import type { BaseProvider } from './providers/BaseProvider'
+import { categorizeProviderError } from './providers/providerRetry'
 
 /** True when a provider error is a terminal condition worth failing over on. */
 export function shouldFailoverError(err: unknown): boolean {
   if (!err) return false
-  if (typeof err === 'string') {
-    if (/\b(401|403|429|5\d\d)\b/.test(err)) return true
-    return /(invalid api key|unauthorized|forbidden|rate.?limit)/i.test(err)
-  }
-  if (err instanceof Error) {
-    const anyErr = err as Error & { status?: unknown; response?: { status?: unknown } }
-    const status = Number(anyErr.status ?? anyErr.response?.status ?? NaN)
-    if (Number.isFinite(status) && status > 0) {
-      return status === 401 || status === 403 || status === 429 || (status >= 500 && status < 600)
-    }
-    return shouldFailoverError(anyErr.message)
-  }
-  return false
+  const category = categorizeProviderError(err)
+  // context_length is recoverable in-place (force_compact_and_retry) — never
+  // hop providers for it.
+  if (category === 'context_length_exceeded') return false
+  return category === 'auth' || category === 'rate_limit' || category === 'server'
 }
 
 export interface FailoverCandidate {
