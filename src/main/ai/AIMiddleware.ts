@@ -1428,6 +1428,10 @@ export class AIMiddleware {
       })
     }
 
+    // M2.4 (MC-4): why the LAST provider round ended ('stop' | 'length' | …).
+    // 'length' means the answer was CUT OFF at the token limit — surfaced to
+    // the user instead of being presented as a complete answer.
+    let lastFinishReason: AIStreamChunk['finishReason']
     const allProposals: WriteProposal[] = []
     let lastCitations = citations
     // contextTokens are emitted once per STREAM (not per tool round).
@@ -1450,6 +1454,13 @@ export class AIMiddleware {
       }
       return verifications
     }
+
+    // M2.4 (MC-4): a 'length' finish means the model hit its token limit
+    // mid-answer — never present that as a complete reply.
+    const truncationNotice = (): string =>
+      lastFinishReason === 'length'
+        ? '\n\n*(⚠ jawaban terpotong — mencapai batas token model. Minta "lanjutkan" untuk menyambung.)*\n'
+        : ''
 
     // Timeout guard (~3 min total)
     const started = Date.now()
@@ -1609,6 +1620,8 @@ export class AIMiddleware {
           fullText += chunk.content || ''
           lastFullText += chunk.content || ''
           if (chunk.toolCalls?.length) toolCalls = chunk.toolCalls
+          // M2.4 (MC-4): remember why the provider stream ended (later wins)
+          if (chunk.finishReason) lastFinishReason = chunk.finishReason
           // Don't mark done until tool loop finishes (unless error)
           if (chunk.error) {
             onChunk({
@@ -1696,14 +1709,15 @@ export class AIMiddleware {
 
       if (!enableTools) {
         onChunk({
-          content: '',
+          content: truncationNotice(),
           done: true,
           citations: lastCitations,
           proposals: allProposals,
           verifications: getVerifications(),
           tokensUsed: reportedTokens ? undefined : estimatedTokens,
           contextSavedTokens: savedContextTokens(),
-          costUsd: streamCostUsd()
+          costUsd: streamCostUsd(),
+          ...(lastFinishReason ? { finishReason: lastFinishReason } : {})
         })
         return
       }
@@ -1715,14 +1729,15 @@ export class AIMiddleware {
         : parseToolActions(fullText).map((a) => ({ action: a }))
       if (pending.length === 0) {
         onChunk({
-          content: '',
+          content: truncationNotice(),
           done: true,
           citations: lastCitations,
           proposals: allProposals,
           verifications: getVerifications(),
           tokensUsed: reportedTokens ? undefined : estimatedTokens,
           contextSavedTokens: savedContextTokens(),
-          costUsd: streamCostUsd()
+          costUsd: streamCostUsd(),
+          ...(lastFinishReason ? { finishReason: lastFinishReason } : {})
         })
         return
       }
@@ -1761,14 +1776,15 @@ export class AIMiddleware {
       }
       if (known.length === 0) {
         onChunk({
-          content: '',
+          content: truncationNotice(),
           done: true,
           citations: lastCitations,
           proposals: allProposals,
           verifications: getVerifications(),
           tokensUsed: reportedTokens ? undefined : estimatedTokens,
           contextSavedTokens: savedContextTokens(),
-          costUsd: streamCostUsd()
+          costUsd: streamCostUsd(),
+          ...(lastFinishReason ? { finishReason: lastFinishReason } : {})
         })
         return
       }
@@ -2007,14 +2023,15 @@ export class AIMiddleware {
       // sub-agent's output into its final answer.
       if (readPending.length === 0 && delegates.length === 0) {
         onChunk({
-          content: '',
+          content: truncationNotice(),
           done: true,
           citations: lastCitations,
           proposals: allProposals,
           verifications: getVerifications(),
           tokensUsed: reportedTokens ? undefined : estimatedTokens,
           contextSavedTokens: savedContextTokens(),
-          costUsd: streamCostUsd()
+          costUsd: streamCostUsd(),
+          ...(lastFinishReason ? { finishReason: lastFinishReason } : {})
         })
         return
       }
@@ -2071,14 +2088,15 @@ export class AIMiddleware {
       )
     }
     onChunk({
-      content: '\n\n*(max tool rounds reached)*\n',
+      content: `\n\n*(max tool rounds reached)*${truncationNotice()}`,
       done: true,
       citations: lastCitations,
       proposals: allProposals,
       verifications: getVerifications(),
       tokensUsed: reportedTokens ? undefined : estimatedTokens,
       contextSavedTokens: savedContextTokens(),
-      costUsd: streamCostUsd()
+      costUsd: streamCostUsd(),
+      ...(lastFinishReason ? { finishReason: lastFinishReason } : {})
     })
   }
 }

@@ -206,13 +206,24 @@ export class GeminiProvider extends BaseProvider {
           }),
         { shouldRetry: () => !(signal?.aborted ?? false) }
       )
+      // M2.4 (MC-4): capture why the stream ended
+      let finishReason: AIStreamChunk['finishReason']
       for await (const chunk of responseStream) {
         if (signal?.aborted) break
         if (chunk.text) {
           onChunk({ content: chunk.text, done: false, model: useModel })
         }
+        // The last chunk's candidate carries the terminal finishReason
+        const fr = chunk.candidates?.[0]?.finishReason
+        if (fr === 'MAX_TOKENS') finishReason = 'length'
+        else if (fr === 'STOP') finishReason = 'stop'
       }
-      onChunk({ content: '', done: true, model: useModel })
+      onChunk({
+        content: '',
+        done: true,
+        model: useModel,
+        ...(finishReason ? { finishReason } : {})
+      })
     }
 
     try {

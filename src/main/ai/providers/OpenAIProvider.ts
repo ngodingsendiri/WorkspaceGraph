@@ -211,11 +211,17 @@ export class OpenAIProvider extends BaseProvider {
       )
 
       let tokensUsed: number | undefined
+      // M2.4 (MC-4): capture why the stream ended ('stop' | 'length' | …)
+      let finishReason: AIStreamChunk['finishReason']
       // P-A1: accumulate streaming tool_calls deltas (args split across chunks)
       const acc: MutableToolCall[] = []
       for await (const chunk of stream) {
-        const delta = chunk.choices[0]?.delta
+        const choice = chunk.choices[0]
+        const delta = choice?.delta
         const text = delta?.content || ''
+        // The LAST chunk carries finish_reason — remember it (later chunks win)
+        if (choice?.finish_reason === 'stop') finishReason = 'stop'
+        else if (choice?.finish_reason === 'length') finishReason = 'length'
         // P2-4: o-series reasoning rides `delta.reasoning` (reasoning_content on
         // some compat servers) — surface it before the content arrives
         const reasoning = deltaReasoning(delta)
@@ -233,6 +239,7 @@ export class OpenAIProvider extends BaseProvider {
         done: true,
         model,
         tokensUsed,
+        ...(finishReason ? { finishReason } : {}),
         ...(toolCalls.length ? { toolCalls } : {})
       })
     } catch (err) {

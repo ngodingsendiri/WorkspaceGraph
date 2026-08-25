@@ -96,7 +96,7 @@
 | 2.1 | MC-1 | Kompaksi berbasis budget antar-round | Terapkan evaluasi budget per step di tool loop; saat medium/high → compact lalu lanjut round | ✅ SELESAI — compact per round>0 di `runStreamInner`; test M2.1 |
 | 2.2 | MC-2 | `force_compact_and_retry` untuk `context_length_exceeded` | Map error provider → kompak → retry (MiniCore `recovery.ts:19-20`); failover tetap sebagai lapisan terakhir | ✅ SELESAI — `isContextLengthExceeded` + retry sekali (bounded) di `runStreamInner`; test M2.2 |
 | 2.3 | MC-3 | Taksonomi error ter-normalisasi | Pakai `ProviderErrorCategory`; adaptor provider map error vendor → kategori; ganti regex/status string | ✅ SELESAI — `providerErrors.ts` (7 kategori, satu `categorizeProviderError`); retry/failover/context-length mendelegasikan; test 9 baru + sourceContracts diperbarui |
-| 2.4 | MC-4 | Semantik `FinishReason` | Provider emit finish reason (`stop/length/abort/error`); output terpotong (`length`) ≠ sukses → recovery | ⬜ |
+| 2.4 | MC-4 | Semantik `FinishReason` | Provider emit finish reason (`stop/length/abort/error`); output terpotong (`length`) ≠ sukses → recovery | ✅ SELESAI — `finishReason` di `AIStreamChunk`; 7 provider menangkapnya (OpenAI-compat finish_reason, Claude stop_reason, Gemini candidates, Ollama done_reason); middleware menandai jawaban terpotong; test M2.4 ×2 |
 | 2.5 | MC-6 | Validasi args tool via JSON-schema | Pakai `validateArgs` (MiniCore `tool.ts`) di depan `parseToolActions`/`nativeCallsToActions` | ⬜ |
 | 2.6 | MC-5/MC-8/MC-9 | Evaluasi turn transaksional + deadline pasti + snapshot isolation | Hanya setelah 2.1–2.5 stabil; tetap jaga resume marker (ADR-0010) | ⬜ |
 

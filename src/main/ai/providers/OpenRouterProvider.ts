@@ -171,14 +171,19 @@ export class OpenRouterProvider extends BaseProvider {
       )
 
       let tokensUsed: number | undefined
+      // M2.4 (MC-4): capture why the stream ended ('stop' | 'length' | …)
+      let finishReason: AIStreamChunk['finishReason']
       // P-A1: accumulate streaming tool_calls deltas (args split across chunks)
       const acc: MutableToolCall[] = []
       for await (const chunk of stream) {
-        const delta = chunk.choices[0]?.delta
+        const choice = chunk.choices[0]
+        const delta = choice?.delta
         const text = delta?.content || ''
         // P2-4: DeepSeek/xAI reasoning models stream reasoning_content before
         // the answer — surface it as a collapsible block in the UI
         const reasoning = deltaReasoning(delta)
+        if (choice?.finish_reason === 'stop') finishReason = 'stop'
+        else if (choice?.finish_reason === 'length') finishReason = 'length'
         if (text || reasoning) {
           onChunk({ content: text, done: false, model, ...(reasoning ? { reasoning } : {}) })
         }
@@ -193,6 +198,7 @@ export class OpenRouterProvider extends BaseProvider {
         done: true,
         model,
         tokensUsed,
+        ...(finishReason ? { finishReason } : {}),
         ...(toolCalls.length ? { toolCalls } : {})
       })
     } catch (err) {

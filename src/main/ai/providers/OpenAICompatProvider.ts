@@ -214,11 +214,16 @@ export class OpenAICompatProvider extends BaseProvider {
       )
 
       let tokensUsed: number | undefined
+      // M2.4 (MC-4): capture why the stream ended ('stop' | 'length' | …)
+      let finishReason: AIStreamChunk['finishReason']
       const acc: MutableToolCall[] = []
       for await (const chunk of stream) {
-        const delta = chunk.choices[0]?.delta
+        const choice = chunk.choices[0]
+        const delta = choice?.delta
         const text = delta?.content || ''
         const reasoning = deltaReasoning(delta)
+        if (choice?.finish_reason === 'stop') finishReason = 'stop'
+        else if (choice?.finish_reason === 'length') finishReason = 'length'
         if (text || reasoning) {
           onChunk({ content: text, done: false, model, ...(reasoning ? { reasoning } : {}) })
         }
@@ -233,6 +238,7 @@ export class OpenAICompatProvider extends BaseProvider {
         done: true,
         model,
         tokensUsed,
+        ...(finishReason ? { finishReason } : {}),
         ...(toolCalls.length ? { toolCalls } : {})
       })
     } catch (err) {

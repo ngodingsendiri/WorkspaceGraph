@@ -145,12 +145,20 @@ export class ClaudeProvider extends BaseProvider {
         { signal }
       )
 
+      // M2.4 (MC-4): capture why the stream ended
+      let finishReason: AIStreamChunk['finishReason']
       for await (const event of stream) {
         if (event.type === 'content_block_delta' && event.delta.type === 'text_delta') {
           onChunk({ content: event.delta.text, done: false, model })
         }
+        // message_delta carries the terminal stop_reason ('max_tokens' = cut off)
+        if (event.type === 'message_delta') {
+          const stop = (event.delta as { stop_reason?: string } | undefined)?.stop_reason
+          if (stop === 'max_tokens') finishReason = 'length'
+          else if (stop === 'end_turn' || stop === 'stop_sequence') finishReason = 'stop'
+        }
       }
-      onChunk({ content: '', done: true, model })
+      onChunk({ content: '', done: true, model, ...(finishReason ? { finishReason } : {}) })
     } catch (err) {
       if (signal?.aborted) return
       const msg = err instanceof Error ? err.message : String(err)

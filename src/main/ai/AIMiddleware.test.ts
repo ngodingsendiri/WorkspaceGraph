@@ -1970,6 +1970,58 @@ describe('AIMiddleware.runStreamInner (P-B1)', () => {
     ).toBe(true)
   })
 
+  it('M2.4 (MC-4): a length-finished answer is surfaced as truncated, not complete', async () => {
+    const provider = new ScriptedProvider(false)
+    const mid = makeMid(provider)
+    // Single-round chat; the model hits its token limit mid-answer.
+    provider.script.push((_req, onChunk) => {
+      onChunk({ content: 'Partial answer…', done: false, model: 'fake' })
+      onChunk({ content: '', done: true, model: 'fake', finishReason: 'length' })
+    })
+
+    const chunks: StreamEvent[] = []
+    await mid.streamMessage(
+      { messages: [{ role: 'user', content: 'write something long' }], model: 'fake' },
+      (c) => chunks.push(c),
+      undefined,
+      false,
+      'general',
+      false,
+      'req-truncated',
+      false
+    )
+
+    const done = chunks.filter((c) => c.done).pop()
+    // Truncation notice is visible to the user + reason rides the done chunk
+    expect(String(done?.content || '')).toContain('terpotong')
+    expect(done?.finishReason).toBe('length')
+  })
+
+  it('M2.4 (MC-4): a stop-finished answer carries no truncation notice', async () => {
+    const provider = new ScriptedProvider(false)
+    const mid = makeMid(provider)
+    provider.script.push((_req, onChunk) => {
+      onChunk({ content: 'Complete answer.', done: false, model: 'fake' })
+      onChunk({ content: '', done: true, model: 'fake', finishReason: 'stop' })
+    })
+
+    const chunks: StreamEvent[] = []
+    await mid.streamMessage(
+      { messages: [{ role: 'user', content: 'hi' }], model: 'fake' },
+      (c) => chunks.push(c),
+      undefined,
+      false,
+      'general',
+      false,
+      'req-stop',
+      false
+    )
+
+    const done = chunks.filter((c) => c.done).pop()
+    expect(String(done?.content || '')).not.toContain('terpotong')
+    expect(done?.finishReason).toBe('stop')
+  })
+
   it('M2.2 (MC-2): force_compact_and_retry on context_length_exceeded, bounded to once', async () => {
     const provider = new ScriptedProvider(true)
     const mid = makeMid(provider)

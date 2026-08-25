@@ -74,6 +74,17 @@ export interface AIStreamChunk {
   /** Streaming chain-of-thought delta (P2-4): xAI/DeepSeek `reasoning_content`,
    * OpenAI o-series `reasoning`. Rendered as a collapsible block in the UI. */
   reasoning?: string
+  /**
+   * M2.4 (MC-4): why the stream ended, when the provider reports it.
+   * - 'stop'   — the model finished naturally
+   * - 'length' — output was CUT OFF at the token limit (≠ a complete answer)
+   * - 'abort'  — the request was cancelled/aborted
+   * - 'error'  — ended on an error
+   * Absent = provider did not report a reason. The middleware surfaces
+   * truncated answers (`length`) to the user instead of presenting them as
+   * complete.
+   */
+  finishReason?: 'stop' | 'length' | 'abort' | 'error'
 }
 
 export interface ProviderCapabilities {

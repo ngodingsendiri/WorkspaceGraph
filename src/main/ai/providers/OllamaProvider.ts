@@ -143,13 +143,27 @@ export class OllamaProvider extends BaseProvider {
               message?: { content: string }
               done?: boolean
               error?: string
+              done_reason?: string
             }
             if (json.error) throw new Error(json.error)
             if (json.message?.content) {
               onChunk({ content: json.message.content, done: false, model })
             }
             if (json.done) {
-              onChunk({ content: '', done: true, model })
+              // M2.4 (MC-4): Ollama reports done_reason on the final line —
+              // 'length' means the generation hit the num_predict limit.
+              const reason =
+                json.done_reason === 'length'
+                  ? 'length'
+                  : json.done_reason === 'stop'
+                    ? 'stop'
+                    : undefined
+              onChunk({
+                content: '',
+                done: true,
+                model,
+                ...(reason ? { finishReason: reason } : {})
+              })
               return
             }
           } catch (e) {

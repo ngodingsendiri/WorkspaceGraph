@@ -397,12 +397,17 @@ export class GrokProvider extends BaseProvider {
       let tokensUsed: number | undefined
       // P-A1: accumulate streaming tool_calls deltas (args split across chunks)
       const acc: MutableToolCall[] = []
+      let finishReason: AIStreamChunk['finishReason']
       for await (const chunk of stream) {
         if (signal?.aborted) return
-        const delta = chunk.choices[0]?.delta
+        const choice = chunk.choices[0]
+        const delta = choice?.delta
         const text = delta?.content || ''
         // P2-4: Grok 3 reasoning emits reasoning_content deltas before content
         const reasoning = deltaReasoning(delta)
+        // M2.4 (MC-4): remember why the stream ended
+        if (choice?.finish_reason === 'stop') finishReason = 'stop'
+        else if (choice?.finish_reason === 'length') finishReason = 'length'
         if (text || reasoning) {
           onChunk({ content: text, done: false, model, ...(reasoning ? { reasoning } : {}) })
         }
@@ -417,6 +422,7 @@ export class GrokProvider extends BaseProvider {
         done: true,
         model,
         tokensUsed,
+        ...(finishReason ? { finishReason } : {}),
         ...(toolCalls.length ? { toolCalls } : {})
       })
     }
