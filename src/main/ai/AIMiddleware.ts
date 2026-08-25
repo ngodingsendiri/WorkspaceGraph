@@ -1654,6 +1654,11 @@ export class AIMiddleware {
       if (Date.now() - started > TIMEOUT_MS) {
         // Watchdog won — timeout chunk already emitted (or stream finished past
         // budget). Stop cleanly; the done marker is already on the wire.
+        // M2.6 (MC-8): the abandoned stream must NEVER surface an unhandled
+        // rejection — a provider that ignores abort() and throws late would
+        // otherwise reject with nobody attached. Drain it silently; the
+        // deadline is already guaranteed by the race above.
+        void streamPromise.catch(() => {})
         if (requestId) this.clearCancel(requestId)
         return
       }

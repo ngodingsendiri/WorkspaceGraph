@@ -444,6 +444,70 @@ describe('AIMiddleware.runStreamInner (P-B1)', () => {
     }
   }, 10_000)
 
+  it('M2.6 (MC-8): abandoned stream after watchdog is drained (no unhandled rejection)', async () => {
+    vi.useFakeTimers({
+      toFake: [
+        'setTimeout',
+        'clearTimeout',
+        'setInterval',
+        'clearInterval',
+        'setImmediate',
+        'clearImmediate',
+        'Date'
+      ]
+    })
+    try {
+      const provider = new ScriptedProvider(true)
+      const mid = makeMid(provider)
+      // Stream hangs past the deadline, then rejects LATE — exactly the
+      // provider behavior that would produce an unhandled rejection without
+      // the drain-catch.
+      let rejectLate: ((e: Error) => void) | undefined
+      provider.script.push(
+        () =>
+          new Promise<void>((_, rej) => {
+            rejectLate = rej
+          })
+      )
+
+      const unhandled: unknown[] = []
+      const onUnhandled = (err: unknown): void => {
+        unhandled.push(err)
+      }
+      process.on('unhandledRejection', onUnhandled)
+
+      const chunks: StreamEvent[] = []
+      const pending = mid.streamMessage(
+        { messages: [{ role: 'user', content: 'stall' }], model: 'fake' },
+        (c) => chunks.push(c),
+        undefined,
+        false,
+        'general',
+        true,
+        'req-drain'
+      )
+      await Promise.resolve()
+      await Promise.resolve()
+      await vi.advanceTimersByTimeAsync(180_001)
+      await pending
+
+      // Watchdog won; now the abandoned stream rejects late
+      expect(rejectLate).toBeDefined()
+      rejectLate!(new Error('late provider crash'))
+      // Flush microtasks so a rejection handler (if any) would have fired
+      await Promise.resolve()
+      await Promise.resolve()
+      await Promise.resolve()
+
+      expect(unhandled).toHaveLength(0)
+      const timeoutChunk = chunks.find((c) => c.error === 'Stream timed out')
+      expect(timeoutChunk).toBeDefined()
+    } finally {
+      vi.useRealTimers()
+      process.removeAllListeners('unhandledRejection')
+    }
+  }, 10_000)
+
   it('provider stream error surfaces as a done error chunk', async () => {
     const provider = new ScriptedProvider(true)
     const mid = makeMid(provider)
