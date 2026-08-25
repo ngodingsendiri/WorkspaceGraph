@@ -637,4 +637,51 @@ Keep me.`
       expect(res.error).toContain('middleware')
     })
   })
+
+  describe('M2.5 — JSON-schema argument validation (MC-6)', () => {
+    it('args invalid (missing required) → error ToolResult, bukan crash mid-execution', async () => {
+      const res = await executeTool({
+        tool: 'read_note',
+        args: {} as Record<string, unknown> // path wajib hilang
+      })
+      expect(res.ok).toBe(false)
+      expect(res.error).toContain('Invalid arguments for read_note')
+      expect(res.error).toContain('missing required: path')
+    })
+
+    it('args tipe salah → ditolak sebelum eksekusi', async () => {
+      const res = await executeTool({
+        tool: 'search',
+        args: { query: 12345 } as unknown as Record<string, unknown>
+      })
+      expect(res.ok).toBe(false)
+      expect(res.error).toContain('Invalid arguments for search')
+      expect(res.error).toContain('query: expected string')
+    })
+
+    it('enum violation ditolak (delegate role di luar daftar)', async () => {
+      const res = await executeTool({
+        tool: 'delegate_subagent',
+        args: { role: 'superadmin', task: 'x' }
+      })
+      expect(res.ok).toBe(false)
+      expect(res.error).toContain('value not allowed')
+    })
+
+    it('args valid tetap dieksekusi normal (list_dir tanpa argumen wajib)', async () => {
+      const res = await executeTool({ tool: 'list_dir', args: {} })
+      expect(res.ok).toBe(true)
+    })
+
+    it('__proto__ dalam args tidak mem-pollute prototype (sanitasi)', async () => {
+      const malicious = JSON.parse(
+        '{"__proto__": {"polluted": true}, "path": "Knowledge/x.md", "content": "# x"}'
+      )
+      const res = await executeTool({ tool: 'create_note', args: malicious })
+      // create_note menghasilkan proposal write — yang penting bukan error
+      // validasi DAN prototype global tidak ternoda.
+      expect(({} as Record<string, unknown>).polluted).toBeUndefined()
+      expect(res.error || '').not.toContain('__proto__')
+    })
+  })
 })

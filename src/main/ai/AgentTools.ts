@@ -16,6 +16,62 @@ import { renderPrompt } from './PromptRegistry'
 import { mcpManager } from '../mcp/McpClientManager'
 import type { AgentRole } from './ContextEngine'
 import type { AIToolCall, ProviderTool } from './providers/BaseProvider'
+import { validateToolArgs } from './toolArgsValidation'
+
+// M2.5 (MC-6): static schema map for deterministic argument validation — the
+// same shapes buildToolSchemas advertises to the model, so what is validated
+// here can never drift from what the model was taught.
+const schemaFn = (
+  parameters: Record<string, unknown>,
+  required: string[] = []
+): ProviderTool['function']['parameters'] => ({
+  type: 'object',
+  properties: parameters,
+  required
+})
+
+const TOOL_SCHEMA_MAP: Record<string, ProviderTool['function']['parameters']> = {
+  search: schemaFn({ query: { type: 'string' }, limit: { type: 'number' } }, ['query']),
+  read_note: schemaFn({ path: { type: 'string' } }, ['path']),
+  list_dir: schemaFn({ path: { type: 'string' } }),
+  write_note: schemaFn({ path: { type: 'string' }, content: { type: 'string' } }, [
+    'path',
+    'content'
+  ]),
+  append_note: schemaFn({ path: { type: 'string' }, content: { type: 'string' } }, [
+    'path',
+    'content'
+  ]),
+  create_note: schemaFn({ path: { type: 'string' }, content: { type: 'string' } }, ['path']),
+  list_templates: schemaFn({}),
+  create_from_template: schemaFn(
+    {
+      templateId: { type: 'string' },
+      title: { type: 'string' },
+      folder: { type: 'string' }
+    },
+    ['templateId', 'title']
+  ),
+  delegate_subagent: schemaFn(
+    {
+      role: {
+        type: 'string',
+        enum: ['general', 'writer', 'researcher', 'curator', 'planner']
+      },
+      task: { type: 'string' }
+    },
+    ['role', 'task']
+  ),
+  create_plan: schemaFn(
+    {
+      title: { type: 'string' },
+      goal: { type: 'string' },
+      steps: { type: 'array', items: { type: 'string' } },
+      notes: { type: 'string' }
+    },
+    ['title', 'goal', 'steps']
+  )
+}
 
 export type ToolName =
   | 'search'
@@ -641,7 +697,7 @@ export async function executeTool(
   opts: ToolAdvertOptions = {}
 ): Promise<ToolResult> {
   const tool = action.tool
-  const args = action.args || {}
+  let args = action.args || {}
 
   // R0-1: MCP tools are dynamic (not in the static ToolName set) and carry
   // their own gate: role-write capability + the server's allowWriteTools
@@ -669,6 +725,22 @@ export async function executeTool(
       ok: false,
       error: `Tool "${tool}" tidak diizinkan untuk role "${role}"${opts.planMode ? ' (plan mode — write tools off)' : ''}`
     }
+  }
+
+  // M2.5 (MC-6): deterministic JSON-schema validation BEFORE any execution
+  // code runs. A hallucinated/malformed argument now produces a clear error
+  // ToolResult the model can read and self-correct from — and the sanitized
+  // copy (defineProperty-built) replaces the raw input, so a `__proto__` key
+  // in the model output can never swap the arguments' prototype.
+  const schema = TOOL_SCHEMA_MAP[tool]
+  if (schema) {
+    const checked = validateToolArgs(schema, args)
+    if (!checked.ok) {
+      return { tool, ok: false, error: `Invalid arguments for ${tool}: ${checked.message}` }
+    }
+    // Replace the raw model output with the sanitized copy (own-property built)
+    action.args = checked.value
+    args = checked.value
   }
 
   try {
