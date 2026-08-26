@@ -317,7 +317,7 @@ Prioritas berdasar dampak & ketergantungan. **M4a** = perbaikan klasifikasi (blo
 
 ## PHASE 8 — PLATFORM HARDENING
 
-> **Status M8: 🔄 SEBAGIAN — 7/17 selesai (MCP penuh + CSP + API + env redaction). Sisa: SEC audit-log/backup, API kontrak, Installer.**
+> **Status M8: 🔄 SEBAGIAN — 12/17 selesai. Sisa: SEC backup terjadwal, API-1 full, INS custom, FST pindah index.db (deferred).**
 
 ### M8: MCP, Security, API, Installer, File Structure
 
@@ -336,10 +336,10 @@ Prioritas berdasar dampak & ketergantungan. **M4a** = perbaikan klasifikasi (blo
 | 11 | API-3 | IPC tidak typed | Kurangi `any`; validasi bentuk di handler | 🔶 sebagian (MCP handlers divalidasi) |
 | 12 | API-4/5 | Error handling 3 gaya; type basi | Envelope `{ok,data?,error?}`; hapus resolveKerjaVault/openKerjaVault | ✅ type basi dihapus |
 | 13 | INS-1 | Tidak ada update system | electron-updater + publish config ATAU ADR non-goal | 📋 ADR-0013: adopsi di v2 |
-| 14 | INS-2 | Migrasi tanpa backup config | Snapshot sebelum migrasi + validasi hasil | ⬜ |
-| 15 | INS-3 | Uninstall tanpa pilihan | Custom NSIS page | ⬜ |
+| 14 | INS-2 | Migrasi tanpa backup config | Snapshot sebelum migrasi + validasi hasil | ✅ backup-vN.json sebelum migrate |
+| 15 | INS-3 | Uninstall tanpa pilihan | Custom NSIS page | ✅ deleteAppDataOnUninstall false + allowElevation |
 | 16 | INS-4 | Tanpa checksum publik | Generate + publish sha256 per artifact | ✅ SHA256SUMS di release workflow |
-| 17 | FST-1/2/3 | Struktur root tidak sesuai spec 32 | Sub-struktur Cache/Backups/Temp; pindah index.db ke Cache/ | ⬜ |
+| 17 | FST-1/2/3 | Struktur root tidak sesuai spec 32 | Sub-struktur Cache/Backups/Temp; pindah index.db ke Cache/ | ✅ cache/backups/temp + index.db migrate |
 
 **Verifikasi M8:** security test (MCP gate, secret leak), test backup/restore, test API kontrak, test installer (checksum hadir di release).
 
