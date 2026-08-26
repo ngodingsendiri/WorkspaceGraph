@@ -327,8 +327,8 @@ Prioritas berdasar dampak & ketergantungan. **M4a** = perbaikan klasifikasi (blo
 | 2 | MCP-3 | Secrets MCP plaintext | Enkripsi env dengan safeStorage / sanitasi response | ✅ env redacted di getServers; Save merge env lama |
 | 3 | MCP-1 | Handler tanpa validasi array | `Array.isArray` guard | ✅ handler + saveServers |
 | 4 | MCP-4 | Error connectAll di-swallow | Log + set errors map | ✅ per-server console.warn |
-| 5 | SEC-1 | Audit logging tidak lengkap (config/plugin/security) | Perluas jadi event log umum (`audit.jsonl`) | ⬜ |
-| 6 | SEC-2 | Backup protection tidak ada | Backup folder manual + checksum + restore point | ⬜ (Settings Backup section ada) |
+| 5 | SEC-1 | Audit logging tidak lengkap (config/plugin/security) | Perluas jadi event log umum (`audit.jsonl`) | ✅ `security/AuditLog.ts` — settings/plugin/automation/MCP/denial di-audit |
+| 6 | SEC-2 | Backup protection tidak ada | Backup folder manual + checksum + restore point | ✅ `security/Backup.ts` + IPC backup:create/list + Settings UI; terjadwal deferred |
 | 7 | SEC-3 | Enkripsi hanya API keys AI | Terapkan ke env MCP (dengan MCP-3) | ✅ redaction; safeStorage deferred (env di disk tetap, tak terekspos ke renderer) |
 | 8 | SEC-4 | CSP lemah + sandbox off | Pisahkan dev/prod CSP (ADR-0007); verifikasi contextIsolation | ✅ prod tanpa unsafe-eval/inline |
 | 9 | API-1 | InternalAPI bukan kontrak | Migrasi bertahap handler ke InternalAPI (read-only dulu) | ⬜ |
