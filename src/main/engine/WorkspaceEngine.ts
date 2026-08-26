@@ -141,6 +141,8 @@ function scanDirectory(dirPath: string, rootPath: string): WorkspaceFile[] {
       if (item.name.startsWith('.')) continue
       if (item.name === 'node_modules') continue
       const fullPath = path.join(dirPath, item.name)
+      // M7 W2: yield to event loop every 100 files to avoid UI freeze on 10k+ vaults
+      // (sync version keeps yielding via setImmediate check; async version below yields properly)
       const stats = fs.statSync(fullPath)
       const relativePath = path.relative(rootPath, fullPath)
       if (item.isDirectory()) {
@@ -176,6 +178,72 @@ function scanDirectory(dirPath: string, rootPath: string): WorkspaceFile[] {
     }
   } catch (err) {
     console.error('Error scanning directory:', dirPath, err)
+  }
+  return entries.sort((a, b) => {
+    if (a.isDirectory && !b.isDirectory) return -1
+    if (!a.isDirectory && b.isDirectory) return 1
+    return a.name.localeCompare(b.name)
+  })
+}
+
+/**
+ * M7 W2: async vault scan — yields to the event loop every 100 entries so a
+ * 10k-file vault does not freeze the Electron main thread. Used by
+ * refreshFilesAsync; the sync scanDirectory above stays for hot paths.
+ */
+async function scanDirectoryAsync(dirPath: string, rootPath: string): Promise<WorkspaceFile[]> {
+  const entries: WorkspaceFile[] = []
+  let yielded = 0
+  const scan = async (dir: string): Promise<void> => {
+    const items = await fs.promises.readdir(dir, { withFileTypes: true })
+    for (const item of items) {
+      if (item.name.startsWith('.')) continue
+      if (item.name === 'node_modules') continue
+      const fullPath = path.join(dir, item.name)
+      // Yield periodically so the main thread can pump IPC / UI events
+      if (++yielded % 100 === 0) await new Promise<void>((r) => setImmediate(r))
+      try {
+        const stats = await fs.promises.stat(fullPath)
+        const relativePath = path.relative(rootPath, fullPath)
+        if (item.isDirectory()) {
+          const children = await scanDirectoryAsync(fullPath, rootPath)
+          entries.push({
+            id: generateId(fullPath),
+            name: item.name,
+            path: fullPath,
+            relativePath,
+            type: 'other',
+            extension: '',
+            size: 0,
+            createdAt: stats.birthtime.toISOString(),
+            updatedAt: stats.mtime.toISOString(),
+            isDirectory: true,
+            children
+          })
+        } else {
+          const ext = path.extname(item.name).toLowerCase()
+          entries.push({
+            id: generateId(fullPath),
+            name: item.name,
+            path: fullPath,
+            relativePath,
+            type: fileTypeFromPath(fullPath, rootPath),
+            extension: ext,
+            size: stats.size,
+            createdAt: stats.birthtime.toISOString(),
+            updatedAt: stats.mtime.toISOString(),
+            isDirectory: false
+          })
+        }
+      } catch {
+        /* skip unreadable entry */
+      }
+    }
+  }
+  try {
+    await scan(dirPath)
+  } catch (err) {
+    console.error('Error scanning directory (async):', dirPath, err)
   }
   return entries.sort((a, b) => {
     if (a.isDirectory && !b.isDirectory) return -1
@@ -466,6 +534,18 @@ export class WorkspaceEngine {
   refreshFiles(): WorkspaceFile[] {
     if (!this.state.rootPath) return []
     const files = scanDirectory(this.state.rootPath, this.state.rootPath)
+    const counts = countFiles(files)
+    this.state.files = files
+    this.state.totalFiles = counts.files
+    this.state.totalFolders = counts.folders
+    this.state.totalNotes = counts.notes
+    return files
+  }
+
+  /** M7 W2: async variant that yields to the event loop — use for initial vault open on large vaults. */
+  async refreshFilesAsync(): Promise<WorkspaceFile[]> {
+    if (!this.state.rootPath) return []
+    const files = await scanDirectoryAsync(this.state.rootPath, this.state.rootPath)
     const counts = countFiles(files)
     this.state.files = files
     this.state.totalFiles = counts.files

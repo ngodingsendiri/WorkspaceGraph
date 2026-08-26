@@ -274,6 +274,16 @@ interface DomainOverview {
     doneCheckboxes?: number
   }[]
   people: { title: string; path: string; relativePath: string }[]
+  knowledge: {
+    title: string
+    path: string
+    status?: string
+    type?: string
+    relativePath: string
+    updatedAt?: string
+    openCheckboxes?: number
+    doneCheckboxes?: number
+  }[]
   openCheckboxes: { text: string; noteTitle: string; notePath: string }[]
   counts: {
     projects: number
@@ -734,6 +744,29 @@ export const DashboardView: React.FC<{ onOpenSearch: () => void }> = ({ onOpenSe
                   .map((p) => listItem(p.title, p.relativePath, () => openNote(p.path)))}
                 {(!domain || domain.people.length === 0) && (
                   <EmptyState text="Belum ada catatan orang. Link rekan via [[Nama]]." />
+                )}
+              </>
+            )}
+
+            <div style={{ height: 'var(--space-3)' }} />
+            {/* M4b.3: Daily timeline — daftar harian kronologis */}
+            <SectionHead
+              icon="daily"
+              title="Daily Notes"
+              count={domain?.knowledge.filter((k) => k.type === 'daily' || k.relativePath.toLowerCase().startsWith('daily/')).length || undefined}
+            />
+            {loading ? (
+              <SkeletonRows count={3} />
+            ) : (
+              <>
+                {(domain?.knowledge
+                  .filter((k) => k.type === 'daily' || k.relativePath.toLowerCase().startsWith('daily/'))
+                  .sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''))
+                  .slice(0, 5)
+                  .map((d) => listItem(d.title, d.relativePath, () => openNote(d.path), d.updatedAt?.slice(0, 10) || '')) as unknown as ReturnType<typeof listItem>[]) || []}
+                {(!domain ||
+                  domain.knowledge.filter((k) => k.type === 'daily' || k.relativePath.toLowerCase().startsWith('daily/')).length === 0) && (
+                  <EmptyState text="Belum ada daily notes. Buat via Daily template." />
                 )}
               </>
             )}
