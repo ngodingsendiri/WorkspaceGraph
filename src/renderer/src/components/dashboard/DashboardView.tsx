@@ -301,6 +301,27 @@ export const DashboardView: React.FC<{ onOpenSearch: () => void }> = ({ onOpenSe
   const [tplOpen, setTplOpen] = useState(false)
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState<string | null>(null)
+  // M5c UI-17: widget visibility — persist to localStorage
+  const [visibleWidgets, setVisibleWidgets] = useState<Record<string, boolean>>(() => {
+    try {
+      const saved = localStorage.getItem('wg-dashboard-widgets')
+      if (saved) return JSON.parse(saved)
+    } catch {
+      /* ignore */
+    }
+    return { tasks: true, projects: true, recent: true, tags: true, orphans: true }
+  })
+  const toggleWidget = (key: string): void => {
+    setVisibleWidgets((prev) => {
+      const next = { ...prev, [key]: !prev[key] }
+      try {
+        localStorage.setItem('wg-dashboard-widgets', JSON.stringify(next))
+      } catch {
+        /* ignore */
+      }
+      return next
+    })
+  }
 
   const loadDashboardData = async (): Promise<void> => {
     setLoading(true)
@@ -530,6 +551,27 @@ export const DashboardView: React.FC<{ onOpenSearch: () => void }> = ({ onOpenSe
         </div>
       </div>
 
+      {/* M5c UI-17: widget visibility toggles — persist to localStorage */}
+      <div style={{ display: 'flex', gap: 'var(--space-1)', flexWrap: 'wrap', marginBottom: 'var(--space-3)' }}>
+        {[
+          ['tasks', 'Tugas'],
+          ['projects', 'Proyek'],
+          ['recent', 'Terbaru'],
+          ['tags', 'Tag'],
+          ['orphans', 'Orphan']
+        ].map(([key, label]) => (
+          <button
+            key={key}
+            className={`btn btn-xs ${visibleWidgets[key] ? 'btn-surface' : 'btn-ghost'}`}
+            style={{ opacity: visibleWidgets[key] ? 1 : 0.5 }}
+            onClick={() => toggleWidget(key)}
+            title={visibleWidgets[key] ? `Sembunyikan ${label}` : `Tampilkan ${label}`}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+
       {/* M5b UI-5: inline error + retry when dashboard load fails */}
       {loadError && (
         <div
@@ -574,7 +616,8 @@ export const DashboardView: React.FC<{ onOpenSearch: () => void }> = ({ onOpenSe
 
       <div className="dash-grid">
         {/* Open tasks + checkboxes */}
-        <section className="dash-section">
+        {visibleWidgets.tasks && (
+          <section className="dash-section">
           <SectionHead icon="check" title="Tugas terbuka" count={domain?.counts.openTasks} />
           {/* M4b.2: status/priority breakdown — tasksByStatus/Priority was computed but never shown */}
           {domain?.tasksByStatus && Object.keys(domain.tasksByStatus).length > 0 && (
@@ -615,9 +658,11 @@ export const DashboardView: React.FC<{ onOpenSearch: () => void }> = ({ onOpenSe
             .slice(0, 8)
             .map((c) => listItem(c.text, c.noteTitle, () => openNote(c.notePath)))}
         </section>
+        )}
 
         {/* Projects + People */}
-        <section className="dash-section">
+        {visibleWidgets.projects && (
+          <section className="dash-section">
           <SectionHead icon="folder" title="Proyek" count={domain?.projects.length} />
           {/* M4b.1: status breakdown — projectsByStatus was computed but never shown (DOM-15) */}
           {domain?.projectsByStatus && Object.keys(domain.projectsByStatus).length > 0 && (
@@ -680,9 +725,11 @@ export const DashboardView: React.FC<{ onOpenSearch: () => void }> = ({ onOpenSe
             </>
           )}
         </section>
+        )}
 
         {/* Recent + tags + orphans */}
-        <section className="dash-section">
+        {visibleWidgets.recent && (
+          <section className="dash-section">
           <SectionHead icon="history" title="Terbaru" count={recentNotes.length} />
           {loading ? (
             <SkeletonRows count={4} />
@@ -778,6 +825,8 @@ export const DashboardView: React.FC<{ onOpenSearch: () => void }> = ({ onOpenSe
             </button>
           )}
         </section>
+        )}
+
       </div>
 
       <TemplatePicker open={tplOpen} onClose={() => setTplOpen(false)} />

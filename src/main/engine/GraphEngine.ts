@@ -70,7 +70,7 @@ export interface GraphEdge {
   id: string
   source: string
   target: string
-  type: 'wiki_link' | 'tag' | 'folder'
+  type: 'wiki_link' | 'tag' | 'folder' | 'backlink' | 'reference' | 'dependency' | 'related'
   weight: number
 }
 
