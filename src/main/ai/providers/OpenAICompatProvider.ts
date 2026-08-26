@@ -50,9 +50,11 @@ export class OpenAICompatProvider extends BaseProvider {
   readonly capabilities: ProviderCapabilities = {
     chat: true,
     streaming: true,
-    vision: true,
+    vision: false,
     toolCalling: true,
-    embeddings: false
+    embeddings: false,
+    reasoning: false,
+    structuredOutput: true
   }
 
   private client: OpenAI | null = null

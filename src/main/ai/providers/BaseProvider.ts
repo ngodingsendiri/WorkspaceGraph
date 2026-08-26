@@ -93,6 +93,8 @@ export interface ProviderCapabilities {
   vision: boolean
   toolCalling: boolean
   embeddings: boolean
+  reasoning: boolean
+  structuredOutput: boolean
 }
 
 export interface ModelInfo {

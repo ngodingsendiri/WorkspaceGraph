@@ -664,13 +664,7 @@ export class AIMiddleware {
     // R1-3 plan mode: a hard behavioral contract riding BOTH the round-0 and
     // the lean prompt (rounds 1+ must keep planning, not start writing).
     if (toolOptions.planMode) {
-      const planInstruction = [
-        '',
-        '[PLAN MODE — R1-3]',
-        'Anda dalam PLAN MODE: JANGAN panggil tool tulis (write_note/append_note/create_note/create_from_template) atau MCP write.',
-        'Kerjakan: (1) ANALISIS singkat situasi, (2) daftar LANGKAH implementasi bernomor, (3) panggil create_plan {title, goal, steps} sebagai langkah TERAKHIR agar rencana menjadi proposal yang bisa ditinjau user.',
-        'Tulis seluruh analisis SEBELUM create_plan — stream berhenti setelah proposal plan dibuat.'
-      ].join('\n')
+      const planInstruction = renderPrompt('planMode')
       systemPrompt += '\n\n' + planInstruction
       leanSystemPrompt += '\n\n' + planInstruction
     }
@@ -1255,7 +1249,7 @@ export class AIMiddleware {
       model: undefined,
       maxTokens: 4000,
       messages: [{ role: 'user', content: task }],
-      systemPrompt: `[Sub-agent — ${role}]\nAnda adalah sub-agent dengan peran "${role}" yang didelegasikan oleh agent utama. Selesaikan tugas di atas menggunakan tool yang tersedia. Balas HANYA dengan hasil kerja Anda — tanpa basa-basi, tanpa mengulang isi tugas.`
+      systemPrompt: renderPrompt('subAgent', { role })
     }
     let output = ''
     let error: string | undefined
@@ -1279,7 +1273,7 @@ export class AIMiddleware {
       subRequest,
       subOnChunk,
       undefined,
-      false, // sub-agent context is the task itself — skip the context engine
+      true, // M3.1 (CST-1/AI-17): sub-agent now uses Context Engine — task-aware
       role,
       true, // tools on for the sub-agent; its role gates what it may call
       requestId,
@@ -1344,6 +1338,29 @@ export class AIMiddleware {
         error: `Provider "${provider.name}" belum dikonfigurasi. Buka Settings → AI Providers, isi API key, lalu Save.`
       })
       return
+    }
+
+    // M3.5 AI-1: double-gate — permission is enforced BOTH at IPC and inside
+    // the middleware so a direct programmatic caller cannot bypass the IPC gate.
+    try {
+      const { readPermissions } = await import('../security/Permissions')
+      const { workspaceEngine: ws } = await import('../engine/WorkspaceEngine')
+      const perms = readPermissions(ws.getSettings() as never)
+      if (!perms.aiAccess) {
+        onChunk({
+          content: '',
+          done: true,
+          error: 'Akses AI dinonaktifkan di Settings → Security. Aktifkan aiAccess untuk memakai AI.'
+        })
+        return
+      }
+      if (enableTools && !perms.aiTools) {
+        // Downgrade to no-tools rather than hard error — the chat still works,
+        // just without tool execution (defense-in-depth, not UX breakage).
+        enableTools = false
+      }
+    } catch {
+      /* permission check is best-effort — IPC gate already enforced */
     }
 
     // P-A2 vision gate: images only work on providers that advertise vision.
@@ -1462,9 +1479,17 @@ export class AIMiddleware {
         ? '\n\n*(⚠ jawaban terpotong — mencapai batas token model. Minta "lanjutkan" untuk menyambung.)*\n'
         : ''
 
-    // Timeout guard (~3 min total)
+    // Timeout guard (~3 min total) — M3.5 AI-2: configurable via settings
     const started = Date.now()
-    const TIMEOUT_MS = 180_000
+    let STREAM_TIMEOUT_MS = 180_000
+    try {
+      const s = workspaceEngine.getSettings() as { aiStreamTimeoutMs?: unknown }
+      if (typeof s.aiStreamTimeoutMs === 'number' && s.aiStreamTimeoutMs > 0) {
+        STREAM_TIMEOUT_MS = s.aiStreamTimeoutMs
+      }
+    } catch {
+      /* settings unavailable — use default */
+    }
 
     // P1-runtime token accounting: OpenAI-compat providers (Grok/OpenAI/OpenRouter)
     // report usage.total_tokens on their final chunk; Claude/Gemini/Ollama report
@@ -1517,7 +1542,7 @@ export class AIMiddleware {
         })
         return
       }
-      if (Date.now() - started > TIMEOUT_MS) {
+      if (Date.now() - started > STREAM_TIMEOUT_MS) {
         onChunk({
           content: '\n\n*(timeout — stopped tool loop)*\n',
           done: true,
@@ -1580,7 +1605,7 @@ export class AIMiddleware {
       // Watchdog: a provider stream that stalls must not hang the chat forever.
       // The round-level TIMEOUT_MS guard above only runs BETWEEN rounds — a stuck
       // stream would otherwise keep isGenerating=true indefinitely.
-      const remainingMs = TIMEOUT_MS - (Date.now() - started)
+      const remainingMs = STREAM_TIMEOUT_MS - (Date.now() - started)
       if (remainingMs <= 0) {
         onChunk({
           content: '\n\n*(timeout — stream stalled)*\n',
@@ -1651,7 +1676,7 @@ export class AIMiddleware {
       )
       await Promise.race([streamPromise, watchdog])
       if (watchdogTimer) clearTimeout(watchdogTimer)
-      if (Date.now() - started > TIMEOUT_MS) {
+      if (Date.now() - started > STREAM_TIMEOUT_MS) {
         // Watchdog won — timeout chunk already emitted (or stream finished past
         // budget). Stop cleanly; the done marker is already on the wire.
         // M2.6 (MC-8): the abandoned stream must NEVER surface an unhandled

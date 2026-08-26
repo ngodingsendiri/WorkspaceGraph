@@ -45,7 +45,9 @@ export class OpenAIProvider extends BaseProvider {
     streaming: true,
     vision: true,
     toolCalling: true,
-    embeddings: true
+    embeddings: true,
+    reasoning: true,
+    structuredOutput: true
   }
 
   private client: OpenAI | null = null

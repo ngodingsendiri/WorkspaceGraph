@@ -23,7 +23,9 @@ export class GeminiProvider extends BaseProvider {
     // P-A1: native function calling belum di-wire (bukan OpenAI-compat) — tool
     // loop memakai fallback fence wg-action di AIMiddleware.
     toolCalling: false,
-    embeddings: true
+    embeddings: true,
+    reasoning: false,
+    structuredOutput: true
   }
 
   private ai: GoogleGenAI | null = null

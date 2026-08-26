@@ -20,7 +20,9 @@ export class ClaudeProvider extends BaseProvider {
     // P-A1: native function calling belum di-wire (bukan OpenAI-compat) — tool
     // loop memakai fallback fence wg-action di AIMiddleware.
     toolCalling: false,
-    embeddings: false
+    embeddings: false,
+    reasoning: false,
+    structuredOutput: true
   }
 
   private client: Anthropic | null = null

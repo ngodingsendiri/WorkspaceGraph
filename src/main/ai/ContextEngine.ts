@@ -5,7 +5,7 @@ import { embeddingEngine } from './EmbeddingEngine'
 import { listAiMemoryPaths, AI_MEMORY_DIR } from './WorkspaceMemory'
 import path from 'path'
 
-export type AgentRole = 'general' | 'writer' | 'researcher' | 'curator' | 'planner'
+export type AgentRole = 'general' | 'writer' | 'researcher' | 'curator' | 'planner' | 'projectManager' | 'documentAnalyst'
 
 export interface AgentInfo {
   id: AgentRole
@@ -49,6 +49,20 @@ export const AGENT_ROLES: Record<AgentRole, AgentInfo> = {
     icon: '📋',
     systemInstruction:
       'You are a specialized Task Planner. Break down goals into actionable task checklists (- [ ]), define priorities, deadlines, and project milestones.'
+  },
+  projectManager: {
+    id: 'projectManager' as AgentRole,
+    name: 'Project Manager',
+    icon: '📁',
+    systemInstruction:
+      'You are a specialized Project Manager. Coordinate projects: track status (Planning/Active/On Hold/Completed), organize milestones, link tasks and knowledge, and keep project dashboards up to date.'
+  },
+  documentAnalyst: {
+    id: 'documentAnalyst' as AgentRole,
+    name: 'Document Analyst',
+    icon: '📄',
+    systemInstruction:
+      'You are a specialized Document Analyst. Analyze documents and attachments (read, summarize, extract metadata, link to knowledge), handle vision inputs, and bridge non-Markdown assets into the knowledge graph.'
   }
 }
 
@@ -147,6 +161,22 @@ export const ROLE_PROFILES: Record<AgentRole, RoleProfile> = {
     semanticFiles: 3,
     semanticChars: 450,
     systemCap: 2
+  },
+  projectManager: {
+    budget: 3800,
+    searchFiles: 5,
+    searchChars: 500,
+    semanticFiles: 4,
+    semanticChars: 500,
+    systemCap: 1
+  },
+  documentAnalyst: {
+    budget: 4200,
+    searchFiles: 5,
+    searchChars: 550,
+    semanticFiles: 5,
+    semanticChars: 550,
+    systemCap: 1
   }
 }
 

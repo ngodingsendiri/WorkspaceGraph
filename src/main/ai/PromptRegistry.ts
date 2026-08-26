@@ -23,7 +23,7 @@ import path from 'path'
 import { workspaceEngine } from '../engine/WorkspaceEngine'
 import { atomicWriteJson } from '../utils/quarantine'
 
-export type PromptId = 'kernel' | 'bootstrap' | 'toolsHead' | 'toolsTail'
+export type PromptId = 'kernel' | 'bootstrap' | 'toolsHead' | 'toolsTail' | 'planMode' | 'subAgent'
 export type PromptCategory = 'system' | 'user'
 
 export interface PromptEntry {
@@ -98,10 +98,31 @@ Memory / graph rules:
 - Paths: vault-relative (AI Memory/..., Knowledge/..., Daily/...).
 - After tool results, continue answering. Do not invent tool results.
 - Finish with a clear Markdown summary + [[WikiLinks]].`
+  },
+  planMode: {
+    version: 1,
+    category: 'system',
+    template: `[PLAN MODE — R1-3]
+Anda dalam PLAN MODE: JANGAN panggil tool tulis (write_note/append_note/create_note/create_from_template) atau MCP write.
+Kerjakan: (1) ANALISIS singkat situasi, (2) daftar LANGKAH implementasi bernomor, (3) panggil create_plan {title, goal, steps} sebagai langkah TERAKHIR agar rencana menjadi proposal yang bisa ditinjau user.
+Tulis seluruh analisis SEBELUM create_plan — stream berhenti setelah proposal plan dibuat.`
+  },
+  subAgent: {
+    version: 1,
+    category: 'system',
+    template: `[Sub-agent — {{role}}]
+Anda adalah sub-agent dengan peran "{{role}}" yang didelegasikan oleh agent utama. Selesaikan tugas di atas menggunakan tool yang tersedia. Balas HANYA dengan hasil kerja Anda — tanpa basa-basi, tanpa mengulang isi tugas.`
   }
 }
 
-export const PROMPT_IDS: PromptId[] = ['kernel', 'bootstrap', 'toolsHead', 'toolsTail']
+export const PROMPT_IDS: PromptId[] = [
+  'kernel',
+  'bootstrap',
+  'toolsHead',
+  'toolsTail',
+  'planMode',
+  'subAgent'
+]
 
 export function promptsDir(root: string): string {
   return path.join(root, '.workspacegraph', 'prompts')

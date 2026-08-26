@@ -1844,11 +1844,13 @@ export const ChatPanel: React.FC = () => {
                 onChange={(e) => setAgentRole(e.target.value as never)}
                 aria-label="Agent role"
               >
-                <option value="general">General</option>
-                <option value="writer">Writer</option>
+                <option value="general">General</option>       
+                <option value="writer">Writer</option>        
                 <option value="researcher">Researcher</option>
-                <option value="curator">Curator</option>
-                <option value="planner">Planner</option>
+                <option value="curator">Curator</option>      
+                <option value="planner">Planner</option>      
+                <option value="projectManager">Project Manager</option>
+                <option value="documentAnalyst">Document Analyst</option>
               </select>
             </div>
           </div>,

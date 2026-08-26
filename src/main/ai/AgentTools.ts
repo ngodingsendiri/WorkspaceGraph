@@ -186,6 +186,23 @@ export const ROLE_TOOL_PERMISSIONS: Record<AgentRole, ReadonlySet<ToolName>> = {
     'create_note',
     'create_from_template',
     'delegate_subagent'
+  ]),
+  projectManager: new Set([
+    'search',
+    'read_note',
+    'list_dir',
+    'list_templates',
+    'create_note',
+    'append_note',
+    'create_from_template',
+    'delegate_subagent'
+  ]),
+  documentAnalyst: new Set([
+    'search',
+    'read_note',
+    'list_dir',
+    'list_templates',
+    'delegate_subagent'
   ])
 }
 

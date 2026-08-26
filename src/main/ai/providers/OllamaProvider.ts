@@ -15,7 +15,9 @@ export class OllamaProvider extends BaseProvider {
     streaming: true,
     vision: true,
     toolCalling: false,
-    embeddings: true
+    embeddings: true,
+    reasoning: false,
+    structuredOutput: false
   }
 
   protected baseUrl = 'http://localhost:11434'

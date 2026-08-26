@@ -70,7 +70,9 @@ export class GrokProvider extends BaseProvider {
     streaming: true,
     vision: true,
     toolCalling: true,
-    embeddings: false
+    embeddings: false,
+    reasoning: true,
+    structuredOutput: true
   }
 
   private client: OpenAI | null = null
