@@ -266,7 +266,7 @@ Prioritas berdasar dampak & ketergantungan. **M4a** = perbaikan klasifikasi (blo
 | 5 | PLT-5 | Scheduling tidak lengkap | `onceAt` + `monthly` | ✅ onceAt (auto-disable) + dayOfMonth |
 | 6 | PLT-6 | Logging in-memory | Persist ke `.workspacegraph/logs/automation-events.jsonl` + field trigger/status/durasi/error/hasil | ✅ persist jsonl |
 | 7 | PLT-8 | `save()` non-atomic; aksi typo gagal senyap | Atomic write + validasi `action.type` + default branch log error | ✅ atomicWriteJson + validateConfig tolak typo |
-| 8 | PLT-7 | Plugin tidak bisa memperluas Automation | Mulai action `plugin.run <id> <command>` | ⬜ |
+| 8 | PLT-7 | Plugin tidak bisa memperluas Automation | Mulai action `plugin.run <id> <command>` | ✅ `plugin_run` action + PluginHost runner |
 
 ### M6b: Plugin SDK (spec 28)
 

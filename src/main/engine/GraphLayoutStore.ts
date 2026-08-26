@@ -655,8 +655,11 @@ export function upsertGraphView(
       views.push(view)
     }
   }
-  // Cap at 40 views
-  if (views.length > 40) views = views.slice(-40)
+  // Cap at 40 views — warn so the user knows older views were trimmed
+  if (views.length > 40) {
+    console.warn('[GraphLayoutStore] capped views at 40; oldest views dropped')
+    views = views.slice(-40)
+  }
   const res = writeViewsFile(vaultRoot, views)
   if (!res.ok) return { ok: false, error: res.error }
   return { ok: true, view, views }
