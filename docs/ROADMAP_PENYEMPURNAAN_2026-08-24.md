@@ -286,30 +286,32 @@ Prioritas berdasar dampak & ketergantungan. **M4a** = perbaikan klasifikasi (blo
 
 ## PHASE 7 — HARDENING ENGINE & SEARCH
 
+> **Status M7: 🔄 SEBAGIAN — bug/perf inti selesai (G4/S7/T1/G7/G8). Sisa: fitur search lanjutan + async scan (medium).**
+
 ### M7: Skala & kualitas engine (spec 05-09)
 
-| # | Audit ID | Masalah | Solusi |
-|---|---|---|---|
-| 1 | W2 | scanDirectory sinkron + statSync → UI freeze di 10k+ file | Async scan / batas waktu / background |
-| 2 | S1 | Metadata search tidak ada | Frontmatter masuk FTS atau tabel key-value; query `metadata:` |
-| 3 | S3 | Ranking tanpa backlink-count/graph proximity/status | Tambah sinyal ranking dari graph + domain |
-| 4 | S4 | Tasks tidak diindeks | Parse checkbox → index |
-| 5 | S7 | `rebuildSqliteFromMemory` kata-per-heading → noise | Simpan heading string asli |
-| 6 | S6 | Kontradiksi template (listSystemNotes) | Sinkronkan kebijakan Templates/ |
-| 7 | G1/G2 | Node/edge attrs Created/Updated/Color MISSING | Tambah metadata temporal + color category |
-| 8 | G3 | Edge `folder` dideklarasikan tak pernah dibuat | Buat folder edges |
-| 9 | G4 | Tag nodes terisolasi di jalur produksi | Selalu buat note→#tag edges |
-| 10 | G5 | Update single-file rebuild penuh tag/degree | Incremental (hanya node tersentuh) |
-| 11 | G7 | getNeighbors O(depth×nodes×edges) | Adjacency list |
-| 12 | G8 | resolveLinkTarget O(links×keys) | Index path→id |
-| 13 | C1 | User selection tidak didukung | Parameter selection di buildContextPackage |
-| 14 | C2 | Context package tanpa Project/Tasks | Lookup project/task terkait dokumen aktif |
-| 15 | C3 | Path sinkron tidak memangkas budget | Truncate di path sinkron juga |
-| 16 | T1 | `{{title}}` tanpa YAML-escape | Sanitasi setelah merge vars |
-| 17 | M1/M2/M3/M4 | Footnote/id/Image lokal/link lokal | Implementasikan per spec 06 |
-| 18 | W1/W3 | Manifest tidak lengkap; tanpa validateWorkspaceStructure | Lengkapi manifest + validasi |
-| 19 | S2/S5/S8/S9 | Link search parsial, recent tanpa "dibuka", O(N) path, token `:` dibuang | Perbaikan parsial |
-| 20 | C4/C5/C6, D1/D2, T2/T3, L1/L2, FW1 | Polish kecil | Lihat detail audit |
+| # | Audit ID | Masalah | Solusi | Status |
+|---|---|---|---|---|
+| 1 | W2 | scanDirectory sinkron + statSync → UI freeze di 10k+ file | Async scan / batas waktu / background | ⬜ (invasif — defer) |
+| 2 | S1 | Metadata search tidak ada | Frontmatter masuk FTS atau tabel key-value; query `metadata:` | ⬜ |
+| 3 | S3 | Ranking tanpa backlink-count/graph proximity/status | Tambah sinyal ranking dari graph + domain | ⬜ |
+| 4 | S4 | Tasks tidak diindeks | Parse checkbox → index | ⬜ |
+| 5 | S7 | `rebuildSqliteFromMemory` kata-per-heading → noise | Simpan heading string asli | ✅ satu entri heading gabungan; FTS text sama tanpa noise |
+| 6 | S6 | Kontradiksi template (listSystemNotes) | Sinkronkan kebijakan Templates/ | ⬜ low |
+| 7 | G1/G2 | Node/edge attrs Created/Updated/Color MISSING | Tambah metadata temporal + color category | ⬜ |
+| 8 | G3 | Edge `folder` dideklarasikan tak pernah dibuat | Buat folder edges | ⬜ |
+| 9 | G4 | Tag nodes terisolasi di jalur produksi | Selalu buat note→#tag edges | ✅ guard basi pre-WB-3 dihapus + regression test produksi |
+| 10 | G5 | Update single-file rebuild penuh tag/degree | Incremental (hanya node tersentuh) | ⬜ |
+| 11 | G7 | getNeighbors O(depth×nodes×edges) | Adjacency list | ✅ adjacency O(E)/panggilan + BFS O(V+E) |
+| 12 | G8 | resolveLinkTarget O(links×keys) | Index path→id | ✅ suffix index prebuilt, O(1)/link; ambiguous suffix ditolak |
+| 13 | C1 | User selection tidak didukung | Parameter selection di buildContextPackage | ⬜ |
+| 14 | C2 | Context package tanpa Project/Tasks | Lookup project/task terkait dokumen aktif | ⬜ |
+| 15 | C3 | Path sinkron tidak memangkas budget | Truncate di path sinkron juga | ⬜ |
+| 16 | T1 | `{{title}}` tanpa YAML-escape | Sanitasi setelah merge vars | ✅ extraVars tak bisa menimpa title/filename + collapse newline |
+| 17 | M1/M2/M3/M4 | Footnote/id/Image lokal/link lokal | Implementasikan per spec 06 | ⬜ |
+| 18 | W1/W3 | Manifest tidak lengkap; tanpa validateWorkspaceStructure | Lengkapi manifest + validasi | ⬜ |
+| 19 | S2/S5/S8/S9 | Link search parsial, recent tanpa "dibuka", O(N) path, token `:` dibuang | Perbaikan parsial | ⬜ |
+| 20 | C4/C5/C6, D1/D2, T2/T3, L1/L2, FW1 | Polish kecil | Lihat detail audit | ⬜ |
 
 **Verifikasi M7:** benchmark (10k file scan, search latency, graph update single-file), test search metadata, test graph incremental.
 
