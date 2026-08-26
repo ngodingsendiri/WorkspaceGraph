@@ -253,34 +253,32 @@ Prioritas berdasar dampak & ketergantungan. **M4a** = perbaikan klasifikasi (blo
 
 ## PHASE 6 — PLATFORM: AUTOMATION + PLUGIN
 
-### M6: Automation & Plugin SDK sesuai spec 22/28
-
-**Dependensi:** M1 (A1 markSelfWrite) selesai dulu — jangan expand automation sebelum guard re-entrancy ada.
+> **Status M6: 🔄 SEBAGIAN — M6a 5/8, M6b 4/7. High-priority selesai; sisa medium/low.**
 
 ### M6a: Automation (spec 22)
 
-| # | Audit ID | Masalah | Solusi |
-|---|---|---|---|
-| 1 | PLT-1 | 4 trigger MISSING (project_created/task_completed/daily_note_created/ai_response_generated) | Pancarkan event dari sumbernya (TemplateEngine/DomainEngine/AIMiddleware → automationEngine.handleEvent) |
-| 2 | PLT-2 | Conditions TIDAK ADA | Tambah `conditions?: AutomationCondition[]` + evaluator (File Type/Tags/Metadata dulu — murah) |
-| 3 | PLT-3 | Actions terbatas (3/8) | Prioritaskan `notify` (channel ada) + `create_task`/`create_knowledge` via engine; lalu `run_agent`, `add_backlink`, `archive` |
-| 4 | PLT-4 | Workflow engine tidak ada | Minimal retry (count + backoff) per action; multi-step/branch/parallel sebagai roadmap |
-| 5 | PLT-5 | Scheduling tidak lengkap | `onceAt` + `monthly` |
-| 6 | PLT-6 | Logging in-memory | Persist ke `.workspacegraph/logs/automation-events.jsonl` + field trigger/status/durasi/error/hasil |
-| 7 | PLT-8 | `save()` non-atomic; aksi typo gagal senyap | Atomic write + validasi `action.type` + default branch log error |
-| 8 | PLT-7 | Plugin tidak bisa memperluas Automation | Mulai action `plugin.run <id> <command>` |
+| # | Audit ID | Masalah | Solusi | Status |
+|---|---|---|---|---|
+| 1 | PLT-1 | 4 trigger MISSING (project_created/task_completed/daily_note_created/ai_response_generated) | Pancarkan event dari sumbernya (TemplateEngine/DomainEngine/AIMiddleware → automationEngine.handleEvent) | ✅ wired di `template:createNote` + `stream_end` |
+| 2 | PLT-2 | Conditions TIDAK ADA | Tambah `conditions?: AutomationCondition[]` + evaluator (File Type/Tags/Metadata dulu — murah) | ✅ `AutomationCondition` + `conditionsMatch` + test |
+| 3 | PLT-3 | Actions terbatas (3/8) | Prioritaskan `notify` (channel ada) + `create_task`/`create_knowledge` via engine; lalu `run_agent`, `add_backlink`, `archive` | ✅ `notify` + `create_note` (5/8 total); run_agent/archive deferred |
+| 4 | PLT-4 | Workflow engine tidak ada | Minimal retry (count + backoff) per action; multi-step/branch/parallel sebagai roadmap | ⬜ |
+| 5 | PLT-5 | Scheduling tidak lengkap | `onceAt` + `monthly` | ⬜ |
+| 6 | PLT-6 | Logging in-memory | Persist ke `.workspacegraph/logs/automation-events.jsonl` + field trigger/status/durasi/error/hasil | ⬜ |
+| 7 | PLT-8 | `save()` non-atomic; aksi typo gagal senyap | Atomic write + validasi `action.type` + default branch log error | ⬜ |
+| 8 | PLT-7 | Plugin tidak bisa memperluas Automation | Mulai action `plugin.run <id> <command>` | ⬜ |
 
 ### M6b: Plugin SDK (spec 28)
 
-| # | Audit ID | Masalah | Solusi |
-|---|---|---|---|
-| 1 | PLG-1 | Hanya 1/9 extension point | Mulai 1-2 berdampak: Context Menu + Search Provider (bisa declarative di manifest tanpa UI SDK penuh) |
-| 2 | PLG-2 | Lifecycle 8 tahap tidak lengkap | Dokumentasikan "folder = install"; tambah validasi SDK version + event lifecycle |
-| 3 | PLG-3 | Manifest kurang dependencies/minimumSdkVersion | Tambah field + `minSdk` gate |
-| 4 | PLG-5 | SDK APIs jauh dari spec | Tambah read-only Project/Task/Knowledge (via DomainEngine) + `settings.set` + Event subscribe |
-| 5 | PLG-6 | Event system tidak ada | Minimal `events.subscribe(channel, cb)` dibatasi event yang ada |
-| 6 | PLG-7 | Resource limits tanpa cap memori | `resourceLimits: { maxOldGenerationSizeMb }` pada Worker |
-| 7 | PLG-8 | Contoh plugin `enabled: true` | Ubah ke `false` (konsisten ADR-0003) |
+| # | Audit ID | Masalah | Solusi | Status |
+|---|---|---|---|---|
+| 1 | PLG-1 | Hanya 1/9 extension point | Mulai 1-2 berdampak: Context Menu + Search Provider (bisa declarative di manifest tanpa UI SDK penuh) | ⬜ deferred (butuh UI SDK) |
+| 2 | PLG-2 | Lifecycle 8 tahap tidak lengkap | Dokumentasikan "folder = install"; tambah validasi SDK version + event lifecycle | 🔶 SDK gate ✅; lifecycle event deferred |
+| 3 | PLG-3 | Manifest kurang dependencies/minimumSdkVersion | Tambah field + `minSdk` gate | ✅ `minSdkVersion`/`dependencies` + semver gate + PLUGIN_SDK_VERSION |
+| 4 | PLG-5 | SDK APIs jauh dari spesifikasi | Tambah read-only Project/Task/Knowledge (via DomainEngine) + `settings.set` + Event subscribe | ✅ `domain.list` read-only (settings.set/event deferred) |
+| 5 | PLG-6 | Event system TIDAK ADA | Minimal `events.subscribe(channel, cb)` dibatasi event yang ada | ⬜ deferred |
+| 6 | PLG-7 | Resource limits tanpa cap memori | `resourceLimits: { maxOldGenerationSizeMb }` pada Worker | ✅ 256MB old / 64MB young |
+| 7 | PLG-8 | Contoh plugin `enabled: true` | Ubah ke `false` (konsisten ADR-0003) | ⬜ low |
 
 **Verifikasi M6:** test automation (trigger baru, conditions, persist log, re-entrancy masih aman), test plugin (permission enforcement — PLG-4 di M1 — + extension point baru + minSdk gate + resource limit).
 
