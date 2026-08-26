@@ -153,13 +153,12 @@ export function deleteConversation(id: string): { ok: boolean; error?: string } 
 }
 
 // M3.4 AI-20: rename a conversation's title
-export function renameConversation(
-  id: string,
-  newTitle: string
-): { ok: boolean; error?: string } {
+export function renameConversation(id: string, newTitle: string): { ok: boolean; error?: string } {
   const clean = safeConversationId(id)
   if (!clean) return { ok: false, error: 'Invalid conversation id' }
-  const title = String(newTitle || '').trim().slice(0, 200)
+  const title = String(newTitle || '')
+    .trim()
+    .slice(0, 200)
   if (!title) return { ok: false, error: 'Title is required' }
   const conv = loadConversation(clean)
   if (!conv) return { ok: false, error: 'Conversation not found' }
@@ -258,12 +257,15 @@ function conversationToMarkdown(conv: StoredConversation): string {
 
 // M3.4 AI-21: simple title/content search over stored conversations
 export function searchConversations(query: string, limit = 20): StoredConversation[] {
-  const q = String(query || '').trim().toLowerCase()
+  const q = String(query || '')
+    .trim()
+    .toLowerCase()
   if (!q) return []
   const all = listConversations(200)
   const scored = all
     .map((c) => {
-      const hay = `${c.title} ${c.summary || ''} ${c.messages.map((m) => m.content).join(' ')}`.toLowerCase()
+      const hay =
+        `${c.title} ${c.summary || ''} ${c.messages.map((m) => m.content).join(' ')}`.toLowerCase()
       const idx = hay.indexOf(q)
       return idx === -1 ? null : { c, score: idx }
     })

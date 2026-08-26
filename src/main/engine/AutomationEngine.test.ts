@@ -382,3 +382,136 @@ describe('AutomationEngine re-entrancy guard (A1)', () => {
     expect(content).toContain('[[note]]')
   })
 })
+
+describe('M6a — automation triggers, conditions, actions (PLT-1/2/3)', () => {
+  let engine: AutomationEngine
+  let root: string
+
+  const cfg = (rules: AutomationRule[]): AutomationConfig => ({ version: 1, rules })
+
+  beforeEach(() => {
+    root = fs.mkdtempSync(path.join(tmpdir(), 'wg-test-auto-m6-'))
+    fs.mkdirSync(path.join(root, '.workspacegraph'), { recursive: true })
+    engine = new AutomationEngine()
+  })
+
+  afterEach(() => {
+    engine.stop()
+    try {
+      fs.rmSync(root, { recursive: true, force: true })
+    } catch {
+      /* ignore */
+    }
+  })
+
+  const load = (rules: AutomationRule[]): void => {
+    fs.writeFileSync(
+      path.join(root, '.workspacegraph', 'automation.json'),
+      JSON.stringify(cfg(rules), null, 2),
+      'utf-8'
+    )
+    engine.load(root)
+    engine.setEnabled(true)
+  }
+
+  it('PLT-1: new domain triggers fire when their event is raised', () => {
+    load([
+      {
+        id: 'r1',
+        name: 'project',
+        enabled: true,
+        trigger: { type: 'project_created' },
+        actions: [{ type: 'log', message: 'project created {{date}}' }]
+      },
+      {
+        id: 'r2',
+        name: 'daily',
+        enabled: true,
+        trigger: { type: 'daily_note_created' },
+        actions: [{ type: 'log', message: 'daily' }]
+      },
+      {
+        id: 'r3',
+        name: 'ai',
+        enabled: true,
+        trigger: { type: 'ai_response_generated' },
+        actions: [{ type: 'log', message: 'ai' }]
+      }
+    ])
+    engine.handleEvent('project_created')
+    engine.handleEvent('daily_note_created')
+    engine.handleEvent('ai_response_generated')
+    const msgs = engine.getLogs().map((l) => l.message)
+    expect(msgs.some((m) => m.includes('project created'))).toBe(true)
+    expect(msgs).toContain('daily')
+    expect(msgs).toContain('ai')
+  })
+
+  it('PLT-2: conditions gate a rule (file_type equals project)', () => {
+    load([
+      {
+        id: 'r1',
+        name: 'proj-only',
+        enabled: true,
+        trigger: { type: 'file_created' },
+        conditions: [{ field: 'file_type', op: 'equals', value: 'project' }],
+        actions: [{ type: 'log', message: 'PROJECT' }]
+      }
+    ])
+    fs.mkdirSync(path.join(root, 'Projects'), { recursive: true })
+    fs.mkdirSync(path.join(root, 'Knowledge'), { recursive: true })
+    fs.writeFileSync(
+      path.join(root, 'Projects', 'Alpha.md'),
+      '---\ntype: project\n---\n# Alpha',
+      'utf-8'
+    )
+    fs.writeFileSync(path.join(root, 'Knowledge', 'Note.md'), '# Note', 'utf-8')
+
+    engine.handleEvent('file_created', path.join(root, 'Projects', 'Alpha.md'))
+    engine.handleEvent('file_created', path.join(root, 'Knowledge', 'Note.md'))
+    const msgs = engine.getLogs().map((l) => l.message)
+    expect(msgs).toContain('PROJECT')
+    expect(msgs.filter((m) => m === 'PROJECT')).toHaveLength(1)
+  })
+
+  it('PLT-2: conditions gate on tags contains', () => {
+    load([
+      {
+        id: 'r1',
+        name: 'tagged',
+        enabled: true,
+        trigger: { type: 'file_updated' },
+        conditions: [{ field: 'tags', op: 'contains', value: 'project,urgent' }],
+        actions: [{ type: 'log', message: 'TAGGED' }]
+      }
+    ])
+    fs.mkdirSync(path.join(root, 'Notes'), { recursive: true })
+    fs.writeFileSync(
+      path.join(root, 'Notes', 'A.md'),
+      '---\ntags: [project, urgent]\n---\n# A',
+      'utf-8'
+    )
+    engine.handleEvent('file_updated', path.join(root, 'Notes', 'A.md'))
+    expect(engine.getLogs().map((l) => l.message)).toContain('TAGGED')
+  })
+
+  it('PLT-3: notify + create_note actions run', () => {
+    load([
+      {
+        id: 'r1',
+        name: 'notify-create',
+        enabled: true,
+        trigger: { type: 'manual' },
+        actions: [
+          { type: 'notify', message: 'Halo {{workspace}}' },
+          { type: 'create_note', path: 'Knowledge/Auto.md', content: '# Auto' }
+        ]
+      }
+    ])
+    engine.runManual('r1')
+    const created = path.join(root, 'Knowledge', 'Auto.md')
+    expect(fs.existsSync(created)).toBe(true)
+    expect(fs.readFileSync(created, 'utf-8')).toBe('# Auto')
+    expect(engine.getLogs().some((l) => l.ok && l.message.startsWith('create'))).toBe(true)
+  })
+})

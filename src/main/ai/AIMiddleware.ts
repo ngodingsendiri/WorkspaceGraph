@@ -826,6 +826,19 @@ export class AIMiddleware {
         costUsd: finalMeta.costUsd,
         durationMs: Date.now() - startedAt
       })
+      // M6a PLT-1: fire ai_response_generated when a stream completes OK
+      try {
+        if (!finalMeta.error) {
+          const { automationEngine } = await import('../engine/AutomationEngine')
+          const { readPermissions } = await import('../security/Permissions')
+          const perms = readPermissions(workspaceEngine.getSettings() as never)
+          if (perms.automation && automationEngine.isEnabled()) {
+            automationEngine.handleEvent('ai_response_generated', activeFilePath)
+          }
+        }
+      } catch {
+        /* automation best-effort */
+      }
       if (requestId) this.abortControllers.delete(requestId)
     }
   }
@@ -1350,7 +1363,8 @@ export class AIMiddleware {
         onChunk({
           content: '',
           done: true,
-          error: 'Akses AI dinonaktifkan di Settings → Security. Aktifkan aiAccess untuk memakai AI.'
+          error:
+            'Akses AI dinonaktifkan di Settings → Security. Aktifkan aiAccess untuk memakai AI.'
         })
         return
       }

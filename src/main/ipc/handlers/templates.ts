@@ -77,6 +77,19 @@ export function registerTemplateHandlers(): void {
       workspaceEngine.createFile(filePath, content)
       syncSingleFile(filePath, state.rootPath)
       debounceEmit()
+      // M6a PLT-1: fire domain triggers for template-kind creations
+      try {
+        const { automationEngine } = await import('../../engine/AutomationEngine')
+        const { readPermissions } = await import('../../security/Permissions')
+        const perms = readPermissions(workspaceEngine.getSettings() as never)
+        if (perms.automation && automationEngine.isEnabled()) {
+          if (tpl.kind === 'project') automationEngine.handleEvent('project_created', filePath)
+          if (tpl.kind === 'daily') automationEngine.handleEvent('daily_note_created', filePath)
+          if (tpl.kind === 'task') automationEngine.handleEvent('task_completed', filePath)
+        }
+      } catch {
+        /* automation is best-effort */
+      }
       return {
         ok: true,
         path: filePath,

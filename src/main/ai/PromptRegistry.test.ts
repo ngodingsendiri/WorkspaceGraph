@@ -31,7 +31,14 @@ describe('PromptRegistry (doc 19 — prompt as versioned asset)', () => {
   })
 
   it('ships versioned defaults for every prompt id', () => {
-    expect(PROMPT_IDS).toEqual(['kernel', 'bootstrap', 'toolsHead', 'toolsTail'])
+    expect(PROMPT_IDS).toEqual([
+      'kernel',
+      'bootstrap',
+      'toolsHead',
+      'toolsTail',
+      'planMode',
+      'subAgent'
+    ])
     for (const id of PROMPT_IDS) {
       const e = PROMPT_DEFAULTS[id]
       expect(e.version).toBeGreaterThanOrEqual(1)

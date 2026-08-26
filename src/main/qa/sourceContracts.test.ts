@@ -1911,9 +1911,13 @@ describe('AI system contracts', () => {
     // Middleware: runSubAgent nested stream (role-scoped, no recursion), delegate
     // interception in the tool loop, plan-mode contract in the system prompt
     const mid = read('src/main/ai/AIMiddleware.ts')
-    expect(has(mid, 'private async runSubAgent', 'excludeDelegate: true', 'PLAN MODE — R1-3')).toBe(
+    expect(has(mid, 'private async runSubAgent', 'excludeDelegate: true', 'renderPrompt')).toBe(
       true
     )
+    // M3.2: plan-mode contract moved to the Prompt Registry (planMode entry)
+    expect(
+      has(read('src/main/ai/PromptRegistry.ts'), 'planMode:', 'PLAN MODE — R1-3', 'create_plan')
+    ).toBe(true)
     expect(has(mid, 'isDelegateTool(p.action.tool)', 'delegates.length === 0')).toBe(true)
     expect(has(mid, 'buildToolSchemas(agentRole, undefined, opts)')).toBe(true)
     // IPC + preload pass planMode through to the stream

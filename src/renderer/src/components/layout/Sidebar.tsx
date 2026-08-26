@@ -203,7 +203,10 @@ export const Sidebar: React.FC<{ onOpenSearch: () => void }> = ({ onOpenSearch }
           if (!actualDir.startsWith(expectedDir)) {
             const newPath = `${base}${base.includes('\\') ? '\\' : '/'}${title}.md`
             try {
-              await window.api.createFile(newPath, await window.api.readFile(res.path).then((d: { content: string }) => d.content))
+              await window.api.createFile(
+                newPath,
+                await window.api.readFile(res.path).then((d: { content: string }) => d.content)
+              )
             } catch {
               /* fallback: open template location */
               await fetchState()
@@ -543,7 +546,14 @@ export const Sidebar: React.FC<{ onOpenSearch: () => void }> = ({ onOpenSearch }
         <div
           ref={menuRef}
           className="ctx-menu"
-          style={{ position: 'fixed', left: ctx.x, top: ctx.y, zIndex: 'var(--z-dropdown)' } as React.CSSProperties}
+          style={
+            {
+              position: 'fixed',
+              left: ctx.x,
+              top: ctx.y,
+              zIndex: 'var(--z-dropdown)'
+            } as React.CSSProperties
+          }
           onContextMenu={(e) => e.preventDefault()}
         >
           {(() => {

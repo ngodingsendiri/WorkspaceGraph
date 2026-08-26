@@ -6,7 +6,17 @@ import { confirmProviderDelete } from './providerDeleteConfirm'
 import { buildRowSaveFlash, providerLabel } from './providerSaveKeyConfirm'
 
 type Section =
-  'ai' | 'appearance' | 'index' | 'security' | 'automation' | 'plugins' | 'mcp' | 'logs' | 'about' | 'general' | 'backup'
+  | 'ai'
+  | 'appearance'
+  | 'index'
+  | 'security'
+  | 'automation'
+  | 'plugins'
+  | 'mcp'
+  | 'logs'
+  | 'about'
+  | 'general'
+  | 'backup'
 
 /** R0-1 MCP server config (shape mirrors main's McpServerConfig). */
 interface McpServerCfg {
@@ -996,7 +1006,13 @@ export const SettingsView: React.FC = () => {
         {section === 'general' && (
           <div className="settings-section">
             <h2>General</h2>
-            <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-muted)', marginBottom: 'var(--space-3)' }}>
+            <p
+              style={{
+                fontSize: 'var(--text-sm)',
+                color: 'var(--text-muted)',
+                marginBottom: 'var(--space-3)'
+              }}
+            >
               Pengaturan umum aplikasi.
             </p>
             <div className="settings-row">
@@ -1015,7 +1031,10 @@ export const SettingsView: React.FC = () => {
                   Simpan otomatis setiap 700ms setelah mengetik (editor).
                 </div>
               </div>
-              <span className="badge" style={{ background: 'var(--color-success-subtle)', color: 'var(--color-success)' }}>
+              <span
+                className="badge"
+                style={{ background: 'var(--color-success-subtle)', color: 'var(--color-success)' }}
+              >
                 Aktif
               </span>
             </div>
@@ -1685,7 +1704,13 @@ export const SettingsView: React.FC = () => {
         {section === 'backup' && (
           <div className="settings-section">
             <h2>Backup & Restore</h2>
-            <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-muted)', marginBottom: 'var(--space-3)' }}>
+            <p
+              style={{
+                fontSize: 'var(--text-sm)',
+                color: 'var(--text-muted)',
+                marginBottom: 'var(--space-3)'
+              }}
+            >
               Cadangan & pemulihan data workspace.
             </p>
             <div className="settings-row">
@@ -1709,7 +1734,9 @@ export const SettingsView: React.FC = () => {
                 onClick={async () => {
                   try {
                     const s = await window.api.getSettings()
-                    const blob = new Blob([JSON.stringify(s, null, 2)], { type: 'application/json' })
+                    const blob = new Blob([JSON.stringify(s, null, 2)], {
+                      type: 'application/json'
+                    })
                     const url = URL.createObjectURL(blob)
                     const a = document.createElement('a')
                     a.href = url

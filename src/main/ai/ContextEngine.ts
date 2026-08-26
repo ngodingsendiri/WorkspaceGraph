@@ -5,7 +5,8 @@ import { embeddingEngine } from './EmbeddingEngine'
 import { listAiMemoryPaths, AI_MEMORY_DIR } from './WorkspaceMemory'
 import path from 'path'
 
-export type AgentRole = 'general' | 'writer' | 'researcher' | 'curator' | 'planner' | 'projectManager' | 'documentAnalyst'
+export type AgentRole =
+  'general' | 'writer' | 'researcher' | 'curator' | 'planner' | 'projectManager' | 'documentAnalyst'
 
 export interface AgentInfo {
   id: AgentRole

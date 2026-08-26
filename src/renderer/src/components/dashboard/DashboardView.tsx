@@ -552,7 +552,14 @@ export const DashboardView: React.FC<{ onOpenSearch: () => void }> = ({ onOpenSe
       </div>
 
       {/* M5c UI-17: widget visibility toggles — persist to localStorage */}
-      <div style={{ display: 'flex', gap: 'var(--space-1)', flexWrap: 'wrap', marginBottom: 'var(--space-3)' }}>
+      <div
+        style={{
+          display: 'flex',
+          gap: 'var(--space-1)',
+          flexWrap: 'wrap',
+          marginBottom: 'var(--space-3)'
+        }}
+      >
         {[
           ['tasks', 'Tugas'],
           ['projects', 'Proyek'],
@@ -618,71 +625,74 @@ export const DashboardView: React.FC<{ onOpenSearch: () => void }> = ({ onOpenSe
         {/* Open tasks + checkboxes */}
         {visibleWidgets.tasks && (
           <section className="dash-section">
-          <SectionHead icon="check" title="Tugas terbuka" count={domain?.counts.openTasks} />
-          {/* M4b.2: status/priority breakdown — tasksByStatus/Priority was computed but never shown */}
-          {domain?.tasksByStatus && Object.keys(domain.tasksByStatus).length > 0 && (
-            <div className="dash-status-pills" style={{ marginBottom: 'var(--space-2)' }}>
-              {Object.entries(domain.tasksByStatus)
-                .filter(([st]) => st !== 'done' && st !== 'completed' && st !== 'archived')
-                .sort(([, a], [, b]) => (b as number) - (a as number))
-                .slice(0, 5)
-                .map(([st, n]) => (
-                  <span key={st} className="dash-pill">
-                    {st} {String(n)}
-                  </span>
-                ))}
-            </div>
-          )}
-          {loading ? (
-            <SkeletonRows count={4} />
-          ) : (
-            <>
-              {openTasks
-                .slice(0, 6)
-                .map((t) =>
-                  listItem(t.title, t.relativePath, () => openNote(t.path), t.priority || t.status)
+            <SectionHead icon="check" title="Tugas terbuka" count={domain?.counts.openTasks} />
+            {/* M4b.2: status/priority breakdown — tasksByStatus/Priority was computed but never shown */}
+            {domain?.tasksByStatus && Object.keys(domain.tasksByStatus).length > 0 && (
+              <div className="dash-status-pills" style={{ marginBottom: 'var(--space-2)' }}>
+                {Object.entries(domain.tasksByStatus)
+                  .filter(([st]) => st !== 'done' && st !== 'completed' && st !== 'archived')
+                  .sort(([, a], [, b]) => (b as number) - (a as number))
+                  .slice(0, 5)
+                  .map(([st, n]) => (
+                    <span key={st} className="dash-pill">
+                      {st} {String(n)}
+                    </span>
+                  ))}
+              </div>
+            )}
+            {loading ? (
+              <SkeletonRows count={4} />
+            ) : (
+              <>
+                {openTasks
+                  .slice(0, 6)
+                  .map((t) =>
+                    listItem(
+                      t.title,
+                      t.relativePath,
+                      () => openNote(t.path),
+                      t.priority || t.status
+                    )
+                  )}
+                {(!domain || domain.tasks.length === 0) && (
+                  <EmptyState text="Belum ada catatan tugas. Buat lewat template Task." />
                 )}
-              {(!domain || domain.tasks.length === 0) && (
-                <EmptyState text="Belum ada catatan tugas. Buat lewat template Task." />
-              )}
-            </>
-          )}
+              </>
+            )}
 
-          <div style={{ height: 'var(--space-3)' }} />
-          <SectionHead
-            icon="checkCircle"
-            title="Checklist terbuka"
-            count={domain?.openCheckboxes.length}
-          />
-          {(domain?.openCheckboxes || [])
-            .slice(0, 8)
-            .map((c) => listItem(c.text, c.noteTitle, () => openNote(c.notePath)))}
-        </section>
+            <div style={{ height: 'var(--space-3)' }} />
+            <SectionHead
+              icon="checkCircle"
+              title="Checklist terbuka"
+              count={domain?.openCheckboxes.length}
+            />
+            {(domain?.openCheckboxes || [])
+              .slice(0, 8)
+              .map((c) => listItem(c.text, c.noteTitle, () => openNote(c.notePath)))}
+          </section>
         )}
 
         {/* Projects + People */}
         {visibleWidgets.projects && (
           <section className="dash-section">
-          <SectionHead icon="folder" title="Proyek" count={domain?.projects.length} />
-          {/* M4b.1: status breakdown — projectsByStatus was computed but never shown (DOM-15) */}
-          {domain?.projectsByStatus && Object.keys(domain.projectsByStatus).length > 0 && (
-            <div className="dash-status-pills" style={{ marginBottom: 'var(--space-2)' }}>
-              {Object.entries(domain.projectsByStatus)
-                .sort(([, a], [, b]) => (b as number) - (a as number))
-                .map(([st, n]) => (
-                  <span key={st} className="dash-pill" title={`${n} proyek: ${st}`}>
-                    {st} {String(n)}
-                  </span>
-                ))}
-            </div>
-          )}
-          {loading ? (
-            <SkeletonRows count={3} />
-          ) : (
-            <>
-              {(domain?.projects || [])
-                .slice(0, 8)
-                .map((p) => {
+            <SectionHead icon="folder" title="Proyek" count={domain?.projects.length} />
+            {/* M4b.1: status breakdown — projectsByStatus was computed but never shown (DOM-15) */}
+            {domain?.projectsByStatus && Object.keys(domain.projectsByStatus).length > 0 && (
+              <div className="dash-status-pills" style={{ marginBottom: 'var(--space-2)' }}>
+                {Object.entries(domain.projectsByStatus)
+                  .sort(([, a], [, b]) => (b as number) - (a as number))
+                  .map(([st, n]) => (
+                    <span key={st} className="dash-pill" title={`${n} proyek: ${st}`}>
+                      {st} {String(n)}
+                    </span>
+                  ))}
+              </div>
+            )}
+            {loading ? (
+              <SkeletonRows count={3} />
+            ) : (
+              <>
+                {(domain?.projects || []).slice(0, 8).map((p) => {
                   // M4b.1: progress from checkboxes (open/done) per project
                   const total = (p.openCheckboxes ?? 0) + (p.doneCheckboxes ?? 0)
                   const pct = total > 0 ? Math.round(((p.doneCheckboxes ?? 0) / total) * 100) : null
@@ -693,7 +703,10 @@ export const DashboardView: React.FC<{ onOpenSearch: () => void }> = ({ onOpenSe
                         <div className="dash-list-sub truncate">
                           {p.relativePath}
                           {pct !== null && (
-                            <span className="dash-progress" title={`${p.doneCheckboxes}/${total} selesai`}>
+                            <span
+                              className="dash-progress"
+                              title={`${p.doneCheckboxes}/${total} selesai`}
+                            >
                               {' '}
                               — {pct}%
                             </span>
@@ -704,129 +717,128 @@ export const DashboardView: React.FC<{ onOpenSearch: () => void }> = ({ onOpenSe
                     </div>
                   )
                 })}
-              {(!domain || domain.projects.length === 0) && (
-                <EmptyState text="Belum ada proyek. Buat dari template." />
-              )}
-            </>
-          )}
+                {(!domain || domain.projects.length === 0) && (
+                  <EmptyState text="Belum ada proyek. Buat dari template." />
+                )}
+              </>
+            )}
 
-          <div style={{ height: 'var(--space-3)' }} />
-          <SectionHead icon="people" title="Orang" count={domain?.people.length} />
-          {loading ? (
-            <SkeletonRows count={3} />
-          ) : (
-            <>
-              {(domain?.people || [])
-                .slice(0, 8)
-                .map((p) => listItem(p.title, p.relativePath, () => openNote(p.path)))}
-              {(!domain || domain.people.length === 0) && (
-                <EmptyState text="Belum ada catatan orang. Link rekan via [[Nama]]." />
-              )}
-            </>
-          )}
-        </section>
+            <div style={{ height: 'var(--space-3)' }} />
+            <SectionHead icon="people" title="Orang" count={domain?.people.length} />
+            {loading ? (
+              <SkeletonRows count={3} />
+            ) : (
+              <>
+                {(domain?.people || [])
+                  .slice(0, 8)
+                  .map((p) => listItem(p.title, p.relativePath, () => openNote(p.path)))}
+                {(!domain || domain.people.length === 0) && (
+                  <EmptyState text="Belum ada catatan orang. Link rekan via [[Nama]]." />
+                )}
+              </>
+            )}
+          </section>
         )}
 
         {/* Recent + tags + orphans */}
         {visibleWidgets.recent && (
           <section className="dash-section">
-          <SectionHead icon="history" title="Terbaru" count={recentNotes.length} />
-          {loading ? (
-            <SkeletonRows count={4} />
-          ) : (
-            recentNotes.map((note) => (
-              <div key={note.id} className="dash-list-item" onClick={() => openNote(note.path)}>
-                <div style={{ minWidth: 0 }}>
-                  <div className="dash-list-title truncate">{note.title}</div>
-                  <div className="dash-list-sub truncate">{note.relativePath}</div>
-                </div>
-                <button
-                  className="btn btn-ghost btn-sm btn-icon"
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    handleOpenInGraph(note.path)
-                  }}
-                  title="Graph"
-                >
-                  <Icon name="graph" size={14} />
-                </button>
-              </div>
-            ))
-          )}
-
-          <div style={{ height: 'var(--space-3)' }} />
-          <SectionHead icon="tag" title="Tag" count={tags.length} />
-          <div className="flex flex-wrap gap-2">
+            <SectionHead icon="history" title="Terbaru" count={recentNotes.length} />
             {loading ? (
-              <SkeletonRows count={2} />
+              <SkeletonRows count={4} />
             ) : (
-              tags.slice(0, 14).map((t) => (
-                <button
-                  key={t.tag}
-                  type="button"
-                  className="dash-tag"
-                  onClick={() => handleTagClick(t.tag)}
-                >
-                  #{t.tag} ({t.count})
-                </button>
+              recentNotes.map((note) => (
+                <div key={note.id} className="dash-list-item" onClick={() => openNote(note.path)}>
+                  <div style={{ minWidth: 0 }}>
+                    <div className="dash-list-title truncate">{note.title}</div>
+                    <div className="dash-list-sub truncate">{note.relativePath}</div>
+                  </div>
+                  <button
+                    className="btn btn-ghost btn-sm btn-icon"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      handleOpenInGraph(note.path)
+                    }}
+                    title="Graph"
+                  >
+                    <Icon name="graph" size={14} />
+                  </button>
+                </div>
               ))
             )}
-          </div>
 
-          <div
-            className="dash-section-head"
-            style={{ justifyContent: 'space-between', paddingTop: 'var(--space-4)' }}
-          >
-            <span className="flex gap-2 items-center">
-              <Icon name="graph" size={13} />
-              Catatan orphan
-            </span>
-            {orphanNodes.length > 0 && (
+            <div style={{ height: 'var(--space-3)' }} />
+            <SectionHead icon="tag" title="Tag" count={tags.length} />
+            <div className="flex flex-wrap gap-2">
+              {loading ? (
+                <SkeletonRows count={2} />
+              ) : (
+                tags.slice(0, 14).map((t) => (
+                  <button
+                    key={t.tag}
+                    type="button"
+                    className="dash-tag"
+                    onClick={() => handleTagClick(t.tag)}
+                  >
+                    #{t.tag} ({t.count})
+                  </button>
+                ))
+              )}
+            </div>
+
+            <div
+              className="dash-section-head"
+              style={{ justifyContent: 'space-between', paddingTop: 'var(--space-4)' }}
+            >
               <span className="flex gap-2 items-center">
-                <span className="dash-section-count">{orphanNodes.length}</span>
-                <button
-                  type="button"
-                  className="btn btn-ghost btn-sm btn-tiny"
-                  onClick={handleOrphanClick}
-                  title="Buka Graph · hanya orphan"
-                >
-                  Graph
-                </button>
+                <Icon name="graph" size={13} />
+                Catatan orphan
               </span>
+              {orphanNodes.length > 0 && (
+                <span className="flex gap-2 items-center">
+                  <span className="dash-section-count">{orphanNodes.length}</span>
+                  <button
+                    type="button"
+                    className="btn btn-ghost btn-sm btn-tiny"
+                    onClick={handleOrphanClick}
+                    title="Buka Graph · hanya orphan"
+                  >
+                    Graph
+                  </button>
+                </span>
+              )}
+            </div>
+            {orphanNodes.length === 0 ? (
+              <EmptyState text="Tidak ada orphan — semua catatan terhubung." />
+            ) : (
+              orphanNodes
+                .slice(0, 8)
+                .map((n) =>
+                  listItem(n.title, n.relativePath || n.type, () => openNote(n.path), '0 link')
+                )
             )}
-          </div>
-          {orphanNodes.length === 0 ? (
-            <EmptyState text="Tidak ada orphan — semua catatan terhubung." />
-          ) : (
-            orphanNodes
-              .slice(0, 8)
-              .map((n) =>
-                listItem(n.title, n.relativePath || n.type, () => openNote(n.path), '0 link')
-              )
-          )}
-          {orphanNodes.length > 8 && (
-            <button
-              type="button"
-              className="btn btn-ghost btn-sm btn-tiny"
-              style={{ marginTop: 4 }}
-              onClick={handleOrphanClick}
-            >
-              +{orphanNodes.length - 8} lagi di Graph
-            </button>
-          )}
-          {orphanNodes.length > 0 && (
-            <button
-              type="button"
-              className="btn btn-ghost btn-sm btn-tiny"
-              style={{ marginTop: 2, color: 'var(--text-muted)' }}
-              onClick={handleOrphanSearch}
-            >
-              Cari orphan:true
-            </button>
-          )}
-        </section>
+            {orphanNodes.length > 8 && (
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm btn-tiny"
+                style={{ marginTop: 4 }}
+                onClick={handleOrphanClick}
+              >
+                +{orphanNodes.length - 8} lagi di Graph
+              </button>
+            )}
+            {orphanNodes.length > 0 && (
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm btn-tiny"
+                style={{ marginTop: 2, color: 'var(--text-muted)' }}
+                onClick={handleOrphanSearch}
+              >
+                Cari orphan:true
+              </button>
+            )}
+          </section>
         )}
-
       </div>
 
       <TemplatePicker open={tplOpen} onClose={() => setTplOpen(false)} />

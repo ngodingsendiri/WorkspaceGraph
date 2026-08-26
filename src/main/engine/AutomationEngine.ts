@@ -7,9 +7,19 @@ import path from 'path'
 import { workspaceEngine } from './WorkspaceEngine'
 import { assertPathInVault } from '../security/PathSandbox'
 import { markSelfWrite } from '../utils/selfWrite'
+import { BrowserWindow } from 'electron'
 
 export type AutomationTriggerType =
-  'file_created' | 'file_updated' | 'file_deleted' | 'workspace_opened' | 'manual' | 'schedule'
+  | 'file_created'
+  | 'file_updated'
+  | 'file_deleted'
+  | 'workspace_opened'
+  | 'manual'
+  | 'schedule'
+  | 'project_created'
+  | 'task_completed'
+  | 'daily_note_created'
+  | 'ai_response_generated'
 
 /** Cron-style schedule: either a repeating interval or a daily atTime slot. */
 export interface AutomationSchedule {
@@ -20,6 +30,21 @@ export interface AutomationSchedule {
   atTime?: string
   /** 0=Sunday … 6=Saturday; empty = every day */
   daysOfWeek?: number[]
+}
+
+/**
+ * M6a PLT-2: declarative conditions evaluated against the triggering context.
+ * A rule fires only when every condition matches. Empty/absent = unconditional.
+ */
+export interface AutomationCondition {
+  /** Field to inspect: file path type, tags, metadata key, or a simple custom predicate. */
+  field: 'file_type' | 'tags' | 'metadata' | 'custom'
+  /** Comparison operator. */
+  op: 'equals' | 'not_equals' | 'contains' | 'not_contains'
+  /** Expected value (string or comma-separated list for contains). */
+  value: string
+  /** For field === 'metadata': the frontmatter key to check. */
+  key?: string
 }
 
 export interface AutomationRule {
@@ -33,6 +58,8 @@ export interface AutomationRule {
     /** Only for trigger.type === 'schedule' */
     schedule?: AutomationSchedule
   }
+  /** M6a PLT-2: optional conditions — all must pass for the rule to fire. */
+  conditions?: AutomationCondition[]
   actions: AutomationAction[]
 }
 
@@ -40,6 +67,8 @@ export type AutomationAction =
   | { type: 'log'; message: string }
   | { type: 'append_to_note'; path: string; content: string }
   | { type: 'set_frontmatter_tag'; path: string; tag: string }
+  | { type: 'notify'; message: string }
+  | { type: 'create_note'; path: string; content: string }
 
 export interface AutomationLogEntry {
   at: string
@@ -221,6 +250,89 @@ export class AutomationEngine {
     }
   }
 
+  /** M6a PLT-2: evaluate all conditions for a rule against a file context. */
+  private conditionsMatch(
+    conditions: AutomationCondition[] | undefined,
+    filePath?: string
+  ): boolean {
+    if (!conditions || conditions.length === 0) return true
+    for (const cond of conditions) {
+      let actual = ''
+      if (cond.field === 'file_type') {
+        const rel = filePath ? path.relative(this.rootPath || '', filePath).replace(/\\/g, '/') : ''
+        const lower = rel.toLowerCase()
+        if (lower.startsWith('projects')) actual = 'project'
+        else if (lower.startsWith('tasks')) actual = 'task'
+        else if (lower.startsWith('people')) actual = 'people'
+        else if (lower.startsWith('knowledge')) actual = 'knowledge'
+        else if (lower.startsWith('daily')) actual = 'daily'
+        else if (lower.startsWith('sop')) actual = 'sop'
+        else actual = 'other'
+      } else if (cond.field === 'tags') {
+        actual = this.tagsOf(filePath)
+      } else if (cond.field === 'metadata' && filePath && cond.key) {
+        try {
+          const { content } = workspaceEngine.readFile(filePath)
+          const m = content.match(/^---\n([\s\S]*?)\n---/)
+          const fm = m ? m[1] : ''
+          const line = fm
+            .split('\n')
+            .map((l) => l.trim())
+            .find((l) => l.startsWith(`${cond.key}:`))
+          actual = line
+            ? line
+                .split(':')
+                .slice(1)
+                .join(':')
+                .trim()
+                .replace(/^["']|["']$/g, '')
+            : ''
+        } catch {
+          actual = ''
+        }
+      }
+      const expected = (cond.value || '').trim().toLowerCase()
+      const a = actual.toLowerCase()
+      const ok =
+        cond.op === 'equals'
+          ? a === expected
+          : cond.op === 'not_equals'
+            ? a !== expected
+            : cond.op === 'contains'
+              ? expected
+                  .split(',')
+                  .map((s) => s.trim())
+                  .filter(Boolean)
+                  .every((e) => a.includes(e))
+              : !expected
+                  .split(',')
+                  .map((s) => s.trim())
+                  .filter(Boolean)
+                  .some((e) => a.includes(e))
+      if (!ok) return false
+    }
+    return true
+  }
+
+  /** Comma/space-separated tags from a note's frontmatter (for conditions). */
+  private tagsOf(filePath?: string): string {
+    if (!filePath) return ''
+    try {
+      const { content } = workspaceEngine.readFile(filePath)
+      const m = content.match(/^---\n([\s\S]*?)\n---/)
+      if (!m) return ''
+      const fm = m[1]
+      const line = fm
+        .split('\n')
+        .map((l) => l.trim())
+        .find((l) => l.startsWith('tags:'))
+      if (!line) return ''
+      return line.replace(/^tags:\s*/, '').replace(/[[\]"']/g, '')
+    } catch {
+      return ''
+    }
+  }
+
   handleEvent(type: AutomationTriggerType, filePath?: string): void {
     if (!this.enabled || !this.rootPath) return
     // A1: stop runaway re-entry (rule write → watcher echo → same rule …).
@@ -237,6 +349,8 @@ export class AutomationEngine {
         if (!rule.enabled) continue
         if (rule.trigger.type !== type) continue
         if (filePath && !this.matchPath(rule.trigger.match, filePath)) continue
+        // M6a PLT-2: conditions gate the rule
+        if (!this.conditionsMatch(rule.conditions, filePath)) continue
 
         // A1 (async): the same rule must not re-process the same file within
         // the cooldown window — this is what actually stops append-to-own-file
@@ -331,6 +445,35 @@ export class AutomationEngine {
           this.pushLog(ruleId, `tag ${tag} → ${rel}`, true)
         }
       }
+    }
+
+    // M6a PLT-3: notify — broadcast to the renderer (plugin:notify channel)
+    if (action.type === 'notify') {
+      const msg = this.interpolate(action.message, ctx)
+      this.pushLog(ruleId, msg, true)
+      try {
+        for (const win of BrowserWindow.getAllWindows()) {
+          if (win.isDestroyed()) continue
+          win.webContents.send('plugin:notify', { message: msg })
+        }
+      } catch {
+        /* no windows / test env — notify is best-effort */
+      }
+      return
+    }
+
+    // M6a PLT-3: create_note — write a new .md file
+    if (action.type === 'create_note') {
+      const rel = this.interpolate(action.path, ctx)
+      const abs = path.join(this.rootPath!, rel)
+      assertPathInVault(abs, this.rootPath!)
+      const content = this.interpolate(action.content, ctx)
+      const dir = path.dirname(abs)
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
+      markSelfWrite(abs)
+      workspaceEngine.writeFile(abs, content)
+      this.pushLog(ruleId, `create → ${rel}`, true)
+      return
     }
   }
 
