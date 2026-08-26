@@ -29,6 +29,7 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { workspaceEngine } from '../engine/WorkspaceEngine'
+import { readPermissions } from '../security/Permissions'
 import type { ProviderTool } from '../ai/providers/BaseProvider'
 
 /** One registered MCP server (persisted to .workspacegraph/mcp.json). */
@@ -207,7 +208,10 @@ export class McpClientManager {
     return this.servers
   }
 
-  saveServers(servers: McpServerConfig[], root?: string | null): { ok: boolean; error?: string } {
+  saveServers(servers: unknown, root?: string | null): { ok: boolean; error?: string } {
+    // M8.1 (MCP-1): payload shape validated HERE too — a non-array from any
+    // caller must produce a clean error, not a TypeError from .filter.
+    if (!Array.isArray(servers)) return { ok: false, error: 'Invalid payload: expected an array' }
     // Distinguish "no root passed" (fall back to the loaded vault) from an
     // explicit null (no vault — must fail cleanly, never silently write to a
     // stale workspaceEngine root).
@@ -514,11 +518,22 @@ export class McpClientManager {
     }
   }
 
-  /** Wire vault lifecycle: fire-and-forget connect of every enabled server. */
+  /** Wire vault lifecycle: fire-and-forget connect of every enabled server.
+   * M8.1 (MCP-2 / ADR-0006): gated on `aiTools` — opening an untrusted vault
+   * must not spawn arbitrary MCP processes without explicit opt-in. */
   connectAll(): void {
     this.ensureLoaded()
+    try {
+      const perms = readPermissions(workspaceEngine.getSettings())
+      if (!perms.aiTools) return
+    } catch {
+      /* permission check unavailable — keep legacy behavior */
+    }
     for (const s of this.servers) {
-      if (s.enabled) this.connect(s.id).catch(() => {})
+      // M8.1 (MCP-4): a dead server at boot is logged, not silently swallowed
+      this.connect(s.id).catch((err) => {
+        console.warn(`[MCP] connect ${s.id} failed:`, err instanceof Error ? err.message : err)
+      })
     }
   }
 

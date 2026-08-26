@@ -2,14 +2,6 @@ import { ElectronAPI } from '@electron-toolkit/preload'
 
 export interface API {
   openFolder: () => Promise<string | null>
-  resolveKerjaVault: () => Promise<{
-    path: string | null
-    defaultPath: string
-    exists: boolean
-    isKerja: boolean
-    rel: Record<string, string>
-  }>
-  openKerjaVault: () => Promise<{ ok: boolean; state?: any; error?: string }>
 
   openWorkspace: (folderPath: string) => Promise<any>
   createWorkspace: (parentPath: string, name: string) => Promise<any>

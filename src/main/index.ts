@@ -106,15 +106,21 @@ function createWindow(): void {
    * - Allow Google Fonts / Material Symbols (fonts.google.com + gstatic)
    * - unsafe-eval needed by Vite React refresh in development
    * Previous overly-strict CSP caused blank UI (blocked fonts + HMR).
+   * M8.3 (SEC-4 / ADR-0007): production drops 'unsafe-eval' AND 'unsafe-inline'
+   * from script-src — React ships precompiled; only dev needs them for refresh.
    */
   mainWindow.webContents.session.webRequest.onHeadersReceived((details, callback) => {
+    const isDev = is.dev && Boolean(process.env['ELECTRON_RENDERER_URL'])
+    const scriptSrc = isDev
+      ? "script-src 'self' 'unsafe-eval' 'unsafe-inline'"
+      : "script-src 'self'"
     callback({
       responseHeaders: {
         ...details.responseHeaders,
         'Content-Security-Policy': [
           [
             "default-src 'self'",
-            "script-src 'self' 'unsafe-eval' 'unsafe-inline'",
+            scriptSrc,
             "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
             "font-src 'self' data: https://fonts.gstatic.com",
             "img-src 'self' data: blob:",

@@ -18,7 +18,9 @@ import type { DomainOverview } from '../engine/DomainEngine'
 import type { TemplateDef } from '../engine/TemplateEngine'
 
 export const InternalAPI = {
-  version: '0.5.0',
+  // M8.4 (API-2): track the app version so api:health reports the REAL
+  // release the consumer is talking to (was a stale independent '0.5.0').
+  version: '2.0.0',
 
   getVersion(): string {
     return this.version
