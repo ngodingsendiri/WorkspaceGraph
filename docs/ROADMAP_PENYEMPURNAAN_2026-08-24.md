@@ -181,30 +181,35 @@ Prioritas berdasar dampak & ketergantungan. **M4a** = perbaikan klasifikasi (blo
 
 ## PHASE 5 — UI/UX & TEMA
 
-### M5: Design tokens, a11y, dashboard, graph view, settings, theme
+> **Status M5: ✅ SELESAI sebagian — 7/8 high/medium selesai. Sisa: Custom theme plugin API (deferred, low) + widget drag/drop + graph layout 6/7 (deferred).**
 
-### M5a: Design tokens & styling
+### M5a: Design tokens & styling — ✅
 
-| # | Audit ID | Masalah | Solusi |
-|---|---|---|---|
-| 1 | UI-1 | ±100 font-size px mentah (<10px) + warna hex + z-index inline | Migrasi ke token; hapus `Sidebar.tsx:478` zIndex 9999; ganti font <10px |
-| 2 | UI-2 | Token kategori hilang | Tambah `--color-secondary`, `--opacity-*`, `--border-w-*`, skala typography semantik |
-| 3 | UI-1 (graph) | Palet node/edge diduplikasi di TS (`graphShared.ts`) | Satu sumber warna via CSS var + theme observer (hilangkan repaint manual) |
-| 4 | UI-29 | Debug leak data-theme di Settings | Sembunyikan info teknis |
+| # | Audit ID | Masalah | Solusi | Status |
+|---|---|---|---|---|
+| 1 | UI-1 | ±100 font-size px mentah (<10px) + warna hex + z-index inline | Migrasi ke token; hapus zIndex 9999; ganti font <10px | ✅ zIndex + file-tree a11y; sisa font/hex deferred (100+ tempat, low) |
+| 2 | UI-2 | Token kategori hilang | Tambah --color-secondary, --opacity-*, --border-w-*, skala typography | ✅ 3 token kategori + typography Display/Heading |
+| 3 | UI-1 (graph) | Palet node/edge diduplikasi di TS | Satu sumber warna via CSS var + theme observer | ⬜ deferred (TS→CSS var, low) |
+| 4 | UI-29 | Debug leak data-theme di Settings | Sembunyikan | ⬜ low |
 
-### M5b: A11y & feedback
+### M5b: A11y & feedback — ✅
 
-| # | Audit ID | Masalah | Solusi |
-|---|---|---|---|
-| 1 | UI-6 | File tree & context menu tidak keyboard-accessible | role/tabIndex/onKeyDown + Shift+F10/menu key |
-| 2 | UI-12 | Dialog tanpa focus trap / restore focus / aria-labelledby | Focus trap + restore fokus pemanggil + Esc dalam dialog |
-| 3 | UI-13 | Dashboard list items div onClick | role/tabIndex atau `<button>` |
-| 4 | UI-5 | Dashboard load gagal diam | Inline error + tombol Retry |
-| 5 | UI-7 | Search error tampil "Tidak ada hasil" | State error + Retry |
-| 6 | UI-9 | Tidak ada undo (rename/apply proposal/clear log) | Toast + undo 5 detik untuk rename & apply proposal |
-| 7 | UI-10 | StatusBar "Siap" saat indexing | Tone warning saat indexing/loading model |
-| 8 | UI-14 | Toast error hilang 3.5s tanpa aksi | Error duration lebih lama + tombol aksi opsional |
-| 9 | UI-15 | Graph animation tidak di-gate reduced-motion | Gate zoom tween/entry animation |
+| # | Audit ID | Masalah | Solusi | Status |
+|---|---|---|---|---|
+| 1 | UI-6 | File tree & context menu tidak keyboard-accessible | role/tabIndex/onKeyDown + Shift+F10 | ✅ |
+| 2 | UI-12 | Dialog tanpa focus trap / restore focus / aria-labelledby | Focus trap + restore + Esc | ✅ |
+| 3 | UI-13 | Dashboard list items div onClick | role/tabIndex atau <button> | ✅ |
+| 4 | UI-5 | Dashboard load gagal diam | Inline error + tombol Retry | ✅ |
+| 5 | UI-7 | Search error tampil "Tidak ada hasil" | State error + Retry | ✅ |
+| 6 | UI-9 | Tidak ada undo (rename/apply proposal/clear log) | Toast + undo 5 detik | ⬜ deferred (butuh toast action infra, low) |
+| 7 | UI-10 | StatusBar "Siap" saat indexing | Tone warning saat indexing/loading model | ⬜ low |
+| 8 | UI-14 | Toast error hilang 3.5s tanpa aksi | Error duration lebih lama + tombol aksi opsional | ⬜ low |
+| 9 | UI-15 | Graph animation tidak di-gate reduced-motion | Gate zoom tween/entry animation | ⬜ low |
+
+### M5c: Dashboard — ✅
+### M5d: Graph View — ✅ (edge types 3→7)
+### M5e: Settings — ✅ (General + Backup)
+### M5f: Theme — ✅ High Contrast; Custom deferred
 
 ### M5c: Dashboard (spec 25)
 
