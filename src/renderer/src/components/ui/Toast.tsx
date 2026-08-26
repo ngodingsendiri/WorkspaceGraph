@@ -41,11 +41,14 @@ const useToastStore = create<ToastStore>((set) => ({
 // eslint-disable-next-line react-refresh/only-export-components -- imperative toast API, not a component
 export function toast(message: string, opts?: { variant?: ToastVariant; duration?: number }): void {
   const id = Math.random().toString(36).slice(2)
+  // M5 UI-14: errors persist longer so users can read + react
+  const defaultDuration =
+    opts?.variant === 'error' ? 8000 : opts?.variant === 'warning' ? 5000 : 3500
   useToastStore.getState().add({
     id,
     message,
     variant: opts?.variant ?? 'info',
-    duration: opts?.duration ?? 3500
+    duration: opts?.duration ?? defaultDuration
   })
 }
 

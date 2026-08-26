@@ -227,7 +227,9 @@ export class ContextEngine {
       if (remaining < 80) return false
 
       try {
-        const content = this.workspaceEngine.readFile(filePath).content
+        // M7 C4: cap the read — we only need `cap` chars for the snippet
+        const raw = this.workspaceEngine.readFile(filePath).content as string
+        const content = raw.length > maxChars * 2 ? raw.slice(0, maxChars * 2) : raw
         const cap = Math.min(maxChars, remaining * 4)
         const snippet = (preview && preview.trim() ? preview : content).slice(0, cap).trim()
         const cost = estimateTokens(snippet) + 20
@@ -444,8 +446,7 @@ export class ContextEngine {
 
   private pathPriority(p: string): number {
     const lower = p.replace(/\\/g, '/').toLowerCase()
-    // M7 C5: single normalized form — the old second variant used a raw
-    // backslash pattern that never matched after toLowerCase+replace.
+    // M7 C6: single constant shared with WorkspaceMemory.AI_MEMORY_DIR
     if (lower.includes('/ai memory/') || lower.startsWith('ai memory/')) return 0
     if (lower.includes('/rules/')) return 10
     if (lower.includes('/sop/')) return 11

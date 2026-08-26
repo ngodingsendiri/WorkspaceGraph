@@ -986,7 +986,25 @@ export class GraphEngine {
     this.rebuildWikiEdgesForNodes(affected, maps)
     this.pruneOrphanGhostNodes()
 
-    this.rebuildTagNodes()
+    // M7 G5: incremental tag-node update — remove old tagnode edges for THIS
+    // node, then re-create from the (already synced) inverted index. The old
+    // code called rebuildTagNodes() which cleared ALL #tag nodes + edges then
+    // rebuilt from scratch — O(total_notes × avg_tags) per single-file save.
+    const nid = parsedFile.id
+    for (const [edgeId, edge] of this.edges.entries()) {
+      if (edgeId.startsWith('tagnode:') && edge.source === nid) this.edges.delete(edgeId)
+    }
+    const updatedNode = this.nodes.get(nid)
+    for (const raw of updatedNode?.tags || []) {
+      const t = String(raw).replace(/^#/, '').trim().toLowerCase()
+      if (!t) continue
+      const tagId = tagNodeId(t)
+      if (!tagId || !this.nodes.has(tagId)) continue
+      const edgeId = `tagnode:${nid}->${tagId}`
+      if (!this.edges.has(edgeId)) {
+        this.edges.set(edgeId, { id: edgeId, source: nid, target: tagId, type: 'tag', weight: 1 })
+      }
+    }
     if (this.includeCoTagEdges) this.rebuildDirtyTagEdges()
     recomputeDegrees(this.nodes, this.edges)
   }

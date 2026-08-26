@@ -380,6 +380,16 @@ export class WorkspaceEngine {
   }
 
   private initializeWorkspaceStructure(workspacePath: string): void {
+    // M7 W1: create the manifest sub-structure per spec 05
+    const cfgDir = path.join(workspacePath, '.workspacegraph')
+    for (const sub of ['logs', 'cache']) {
+      const p = path.join(cfgDir, sub)
+      if (!fs.existsSync(p)) fs.mkdirSync(p, { recursive: true })
+    }
+    const pluginsJson = path.join(cfgDir, 'plugins.json')
+    if (!fs.existsSync(pluginsJson)) {
+      fs.writeFileSync(pluginsJson, JSON.stringify({ version: 1, enabled: [] }, null, 2), 'utf-8')
+    }
     // If it's an existing Obsidian vault, skip creating our default folders to keep it clean.
     const isObsidian = fs.existsSync(path.join(workspacePath, '.obsidian'))
     if (isObsidian) {
@@ -398,6 +408,29 @@ export class WorkspaceEngine {
     } catch (err) {
       console.error('Failed to seed templates:', err)
     }
+  }
+
+  /**
+   * M7 W3: validate that an opened vault has the expected structure.
+   * Returns warnings (not errors) — a vault is usable even without standard folders.
+   */
+  validateWorkspaceStructure(): string[] {
+    const root = this.state.rootPath
+    if (!root) return []
+    const warnings: string[] = []
+    for (const folder of STANDARD_FOLDERS) {
+      if (!fs.existsSync(path.join(root, folder))) {
+        warnings.push(
+          `Folder standar "${folder}/" tidak ditemukan — akan dibuat otomatis saat save.`
+        )
+      }
+    }
+    if (!fs.existsSync(path.join(root, '.workspacegraph', 'workspace.json'))) {
+      warnings.push(
+        '.workspacegraph/workspace.json tidak ada — vault baru atau belum pernah dibuka.'
+      )
+    }
+    return warnings
   }
 
   createWorkspace(parentPath: string, name: string): WorkspaceState {

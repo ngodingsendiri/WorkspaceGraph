@@ -380,7 +380,60 @@ export class SearchEngine {
     if (tagMatch) {
       return this.searchByTagExact(tagMatch[1], limit)
     }
+    // M7 S1: metadata search — `metadata:type project`, `metadata:status active`
+    const metaMatch = q.match(/^metadata:(\w+)[\s:](.+)$/i)
+    if (metaMatch) {
+      return this.searchByMetadata(
+        metaMatch[1].toLowerCase(),
+        metaMatch[2].trim().toLowerCase(),
+        limit
+      )
+    }
     return null
+  }
+
+  /**
+   * M7 S1: search notes by frontmatter key/value. Reads the raw content of
+   * each indexed note and matches `key: value` patterns in the YAML block.
+   */
+  private searchByMetadata(key: string, value: string, limit: number): SearchResult[] {
+    const out: SearchResult[] = []
+    for (const entry of this.index.values()) {
+      if (out.length >= limit) break
+      try {
+        const raw = entry.rawContent || entry.content || ''
+        const fmMatch = raw.match(/^---\n([\s\S]*?)\n---/)
+        if (!fmMatch) continue
+        const line = fmMatch[1]
+          .split('\n')
+          .map((l) => l.trim())
+          .find((l) => l.startsWith(`${key}:`))
+        if (!line) continue
+        const val = line
+          .split(':')
+          .slice(1)
+          .join(':')
+          .trim()
+          .replace(/^["'[]|["'\]]$/g, '')
+          .toLowerCase()
+        if (!val.includes(value)) continue
+        out.push({
+          id: entry.id,
+          title: entry.title,
+          path: entry.path,
+          relativePath: entry.relativePath,
+          type: entry.type,
+          tags: entry.tags,
+          score: 100,
+          preview: `${key}: ${val}`,
+          matchedField: 'content',
+          source: 'fts'
+        })
+      } catch {
+        /* skip */
+      }
+    }
+    return out
   }
 
   /** WB-5: build SearchResult[] from raw Fuse hits (preview + matched field). */

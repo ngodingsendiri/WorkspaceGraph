@@ -1987,6 +1987,15 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
       const fromY = t.y
       const start = performance.now()
       showInteractiveCanvas()
+      // M5 UI-15: skip zoom tween when user prefers reduced motion
+      if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+        setCameraTransformRef.current(d3.zoomIdentity.translate(fx, fy).scale(targetK), {
+          user: true,
+          save: true,
+          tween: false
+        })
+        return
+      }
       const step = (now: number): void => {
         const p = easeOutCubic((now - start) / ZOOM_EASE_MS)
         const k = fromK + (targetK - fromK) * p

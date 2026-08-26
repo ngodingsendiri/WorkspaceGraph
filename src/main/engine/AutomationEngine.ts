@@ -74,6 +74,8 @@ export type AutomationAction =
   | { type: 'set_frontmatter_tag'; path: string; tag: string }
   | { type: 'notify'; message: string }
   | { type: 'create_note'; path: string; content: string }
+  /** M6a PLT-7: run a plugin command — pluginId/commandId */
+  | { type: 'plugin_run'; pluginId: string; commandId: string }
 
 export interface AutomationLogEntry {
   at: string
@@ -493,6 +495,22 @@ export class AutomationEngine {
       this.pushLog(ruleId, `create → ${rel}`, true)
       return
     }
+
+    // M6a PLT-7: run a plugin command via PluginHost
+    if (action.type === 'plugin_run') {
+      this.pushLog(ruleId, `plugin_run → ${action.pluginId}/${action.commandId}`, true)
+      // Fire-and-forget — the runner is async and may spawn workers
+      import('../plugin/PluginHost')
+        .then(({ pluginHost }) => pluginHost.runCommand(action.pluginId, action.commandId, {}))
+        .catch((err) => {
+          this.pushLog(
+            ruleId,
+            `plugin_run failed: ${err instanceof Error ? err.message : err}`,
+            false
+          )
+        })
+      return
+    }
   }
 
   private pushLog(ruleId: string, message: string, ok: boolean): void {
@@ -660,7 +678,8 @@ export class AutomationEngine {
       'append_to_note',
       'set_frontmatter_tag',
       'notify',
-      'create_note'
+      'create_note',
+      'plugin_run'
     ])
     for (const rule of config.rules) {
       const label = rule.name || rule.id
