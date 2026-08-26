@@ -186,7 +186,8 @@ export class PluginHost {
       version: '0.1.0',
       author: 'WorkspaceGraph',
       description: 'JS sandbox sample — count notes & notify',
-      enabled: true,
+      // M6b PLG-8: default OFF, konsisten ADR-0003 — pengguna mengaktifkan eksplisit
+      enabled: false,
       main: 'main.js',
       permissions: ['read'],
       commands: [

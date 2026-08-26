@@ -669,27 +669,32 @@ tags: []
   }
 
   createDailyNoteTemplate(date: string): string {
+    // M7 T2: aligned with builtin-daily (TemplateEngine) so every daily-note
+    // entry point produces the SAME structure — frontmatter tags:[daily] and
+    // identical sections. One canonical shape, no per-entrypoint drift.
     return `---
 title: ${date}
 type: daily
 date: ${date}
+tags: [daily]
 ---
 
 # ${date}
 
-## 🎯 Today's Focus
-
-
-## 📝 Notes
-
-
-## ✅ Tasks
+## Focus
 
 - [ ] 
 
-## 🔗 Links
+## Notes
 
 
+## Tasks
+
+- [ ] 
+
+## Links
+
+- 
 `
   }
 }

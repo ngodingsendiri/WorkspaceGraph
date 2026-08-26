@@ -39,6 +39,7 @@ export class SearchEngine {
   /** Drop in-memory search state (workspace close / switch). SQLite closed separately. */
   clear(): void {
     this.index.clear()
+    this.byPath.clear()
     this.fuse = null
     this.searchWorker = null
     this.orphanIds = new Set()
@@ -154,6 +155,7 @@ export class SearchEngine {
 
   async buildIndex(parsedFiles: ParsedMarkdown[]): Promise<void> {
     this.index.clear()
+    this.byPath.clear()
     this.pendingFuseUpdates.clear()
     this.pendingFuseRemoves.clear()
     if (this.fuseFlushTimer) {
@@ -185,6 +187,7 @@ export class SearchEngine {
         ].join(' ')
       }
       this.index.set(file.id, entry)
+      this.byPath.set(entry.path.replace(/\\/g, '/').toLowerCase(), entry)
       entries.push(entry)
       if (tasks.length > 0) {
         ftsFiles.push({
@@ -242,6 +245,7 @@ export class SearchEngine {
       headings: (file.headings || []).map((h) => h.text).join(' ')
     }
     this.index.set(file.id, entry)
+    this.byPath.set(entry.path.replace(/\\/g, '/').toLowerCase(), entry)
     if (writeDb && indexDatabase.isOpen()) {
       indexDatabase.upsertNote(file)
     }
@@ -776,23 +780,36 @@ export class SearchEngine {
       .sort((a, b) => b.count - a.count)
   }
 
-  /** Paths under Rules/SOP/Templates for context auto-include */
+  /** Paths under Rules/SOP/Prompt for context auto-include.
+   * M7 S6: Templates/ excluded — F-1/F-2 already keep template files OUT of
+   * the index, so including the prefix here returned nothing and contradicted
+   * the indexing policy. */
   getSystemFolderNotes(): IndexEntry[] {
     return Array.from(this.index.values()).filter((e) => {
       const p = e.relativePath.replace(/\\/g, '/').toLowerCase()
-      return (
-        p.startsWith('rules/') ||
-        p.startsWith('sop/') ||
-        p.startsWith('templates/') ||
-        p.startsWith('prompt/')
-      )
+      return p.startsWith('rules/') || p.startsWith('sop/') || p.startsWith('prompt/')
     })
   }
 
-  getEntryByPath(filePath: string): IndexEntry | undefined {
-    const norm = filePath.replace(/\\/g, '/')
+  /** M7 S8: normalized-path → entry map for O(1) semantic-hit resolution. */
+  private byPath = new Map<string, IndexEntry>()
+
+  private reindexByPath(): void {
+    this.byPath.clear()
     for (const e of this.index.values()) {
-      if (e.path.replace(/\\/g, '/') === norm) return e
+      this.byPath.set(e.path.replace(/\\/g, '/').toLowerCase(), e)
+    }
+  }
+
+  getEntryByPath(filePath: string): IndexEntry | undefined {
+    const norm = filePath.replace(/\\/g, '/').toLowerCase()
+    // Fast path; rebuild lazily when the main index changed underneath us.
+    let e = this.byPath.get(norm)
+    if (e) return e
+    if (this.byPath.size !== this.index.size) {
+      this.reindexByPath()
+      e = this.byPath.get(norm)
+      if (e) return e
     }
     return undefined
   }

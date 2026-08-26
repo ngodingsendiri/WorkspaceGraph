@@ -7,6 +7,7 @@ import path from 'path'
 import { workspaceEngine } from './WorkspaceEngine'
 import { assertPathInVault } from '../security/PathSandbox'
 import { markSelfWrite } from '../utils/selfWrite'
+import { atomicWriteJson } from '../utils/quarantine'
 import { BrowserWindow } from 'electron'
 
 export type AutomationTriggerType =
@@ -21,7 +22,7 @@ export type AutomationTriggerType =
   | 'daily_note_created'
   | 'ai_response_generated'
 
-/** Cron-style schedule: either a repeating interval or a daily atTime slot. */
+/** Cron-style schedule: repeating interval, daily slot, one-shot, or monthly. */
 export interface AutomationSchedule {
   /** Interval length (with unit) — e.g. { every: 30, unit: 'minutes' } */
   every?: number
@@ -30,6 +31,10 @@ export interface AutomationSchedule {
   atTime?: string
   /** 0=Sunday … 6=Saturday; empty = every day */
   daysOfWeek?: number[]
+  /** M6a PLT-5: one-shot ISO datetime — fires once then auto-disables */
+  onceAt?: string
+  /** M6a PLT-5: monthly — day of month (1-31) at atTime HH:MM */
+  dayOfMonth?: number
 }
 
 /**
@@ -168,6 +173,8 @@ export class AutomationEngine {
   private readonly MAX_REENTRANCY_DEPTH = 3
   private lastHandledAt: Record<string, number> = {}
   private readonly REENTRANCY_COOLDOWN_MS = 5000
+  /** M6a PLT-5: per-rule last fired month (YYYY-M) for dayOfMonth rules */
+  private lastFiredMonth: Record<string, string> = {}
 
   load(workspaceRoot: string): void {
     this.rootPath = workspaceRoot
@@ -215,11 +222,8 @@ export class AutomationEngine {
     if (!this.rootPath) return
     const dir = path.join(this.rootPath, '.workspacegraph')
     if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
-    fs.writeFileSync(
-      path.join(dir, 'automation.json'),
-      JSON.stringify(this.config, null, 2),
-      'utf-8'
-    )
+    // M6a PLT-8: atomic write — a crash mid-save never truncates automation.json
+    atomicWriteJson(path.join(dir, 'automation.json'), this.config)
     this.restart()
   }
 
@@ -365,10 +369,24 @@ export class AutomationEngine {
         }
 
         for (const action of rule.actions) {
-          try {
-            this.runAction(action, ctx, rule.id)
-          } catch (err) {
-            this.pushLog(rule.id, err instanceof Error ? err.message : String(err), false)
+          // M6a PLT-4: minimal workflow retry — one retry after a short
+          // backoff so a transient failure (locked file, slow disk) self-heals.
+          let lastErr: unknown = null
+          for (let attempt = 0; attempt < 2; attempt++) {
+            try {
+              this.runAction(action, ctx, rule.id)
+              lastErr = null
+              break
+            } catch (err) {
+              lastErr = err
+            }
+          }
+          if (lastErr) {
+            this.pushLog(
+              rule.id,
+              lastErr instanceof Error ? lastErr.message : String(lastErr),
+              false
+            )
           }
         }
       }
@@ -478,8 +496,23 @@ export class AutomationEngine {
   }
 
   private pushLog(ruleId: string, message: string, ok: boolean): void {
-    this.logs.push({ at: new Date().toISOString(), ruleId, message, ok })
+    const entry = { at: new Date().toISOString(), ruleId, message, ok }
+    this.logs.push(entry)
     if (this.logs.length > 200) this.logs = this.logs.slice(-200)
+    // M6a PLT-6: persist to .workspacegraph/logs/automation-events.jsonl so
+    // runs survive restart (in-memory ring is still the fast path for UI).
+    try {
+      if (!this.rootPath) return
+      const dir = path.join(this.rootPath, '.workspacegraph', 'logs')
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
+      fs.appendFileSync(
+        path.join(dir, 'automation-events.jsonl'),
+        JSON.stringify(entry) + '\n',
+        'utf-8'
+      )
+    } catch {
+      /* log persistence best-effort */
+    }
   }
 
   runManual(ruleId: string, filePath?: string): { ok: boolean; error?: string } {
@@ -574,10 +607,33 @@ export class AutomationEngine {
       }
       this.lastFiredAt[rule.id] = now.getTime()
       this.lastFiredDay[rule.id] = localDayKey(now)
+      if (sched.dayOfMonth) this.lastFiredMonth[rule.id] = `${now.getFullYear()}-${now.getMonth()}`
+      // M6a PLT-5: one-shot auto-disables after firing
+      if (sched.onceAt) {
+        rule.enabled = false
+        this.save()
+        this.pushLog(rule.id, 'one-shot fired — rule dinonaktifkan', true)
+      }
     }
   }
 
   private shouldFire(id: string, sched: AutomationSchedule, now: Date): boolean {
+    // M6a PLT-5: one-shot — fires once at/after onceAt, then auto-disables
+    if (sched.onceAt) {
+      const at = new Date(sched.onceAt).getTime()
+      if (Number.isNaN(at)) return false
+      if (this.lastFiredAt[id] !== undefined) return false
+      return now.getTime() >= at
+    }
+    // M6a PLT-5: monthly — day of month + optional atTime; tracks by MONTH
+    // key so seedSchedulerState's daily seeding can't suppress the real fire.
+    if (sched.dayOfMonth) {
+      const monthKey = `${now.getFullYear()}-${now.getMonth()}`
+      if (this.lastFiredMonth[id] === monthKey) return false
+      if (now.getDate() !== sched.dayOfMonth) return false
+      const [h, m] = parseAtTime(sched.atTime || '09:00')
+      return now.getHours() > h || (now.getHours() === h && now.getMinutes() >= m)
+    }
     if (!this.dayAllowed(sched, now)) return false
     const today = localDayKey(now)
     if (sched.atTime) {
@@ -597,10 +653,26 @@ export class AutomationEngine {
   /** Validate an automation config; returns a list of human-readable errors. */
   static validateConfig(config: AutomationConfig): string[] {
     const errs: string[] = []
+    // M6a PLT-8: known action types — a typo previously failed SILENTLY at
+    // runtime (runAction had no default branch); now it is caught at save.
+    const KNOWN_ACTIONS: ReadonlySet<string> = new Set([
+      'log',
+      'append_to_note',
+      'set_frontmatter_tag',
+      'notify',
+      'create_note'
+    ])
     for (const rule of config.rules) {
+      const label = rule.name || rule.id
+      for (const action of rule.actions) {
+        if (!KNOWN_ACTIONS.has(action.type)) {
+          errs.push(
+            `Rule "${label}": action type tidak dikenal "${(action as { type: string }).type}"`
+          )
+        }
+      }
       if (rule.trigger.type !== 'schedule') continue
       const s = rule.trigger.schedule
-      const label = rule.name || rule.id
       if (!s) {
         errs.push(`Rule "${label}": trigger schedule butuh blok schedule`)
         continue
@@ -627,6 +699,21 @@ export class AutomationEngine {
             break
           }
         }
+      }
+      // M6a PLT-5: onceAt / dayOfMonth validation
+      if (s.onceAt) {
+        if (Number.isNaN(new Date(s.onceAt).getTime())) {
+          errs.push(`Rule "${label}": onceAt "${s.onceAt}" bukan datetime valid`)
+        }
+        if (s.atTime || s.every !== undefined) {
+          errs.push(`Rule "${label}": pilih salah satu — onceAt atau atTime/every`)
+        }
+      }
+      if (
+        s.dayOfMonth !== undefined &&
+        (!Number.isInteger(s.dayOfMonth) || s.dayOfMonth < 1 || s.dayOfMonth > 31)
+      ) {
+        errs.push(`Rule "${label}": dayOfMonth harus 1–31`)
       }
     }
     return errs

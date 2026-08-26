@@ -22,3 +22,14 @@ export function isSelfWriteEcho(filePath: string, windowMs = 2500): boolean {
   }
   return true
 }
+
+/**
+ * M7 FW1: purge expired markers — called periodically (vault open / watcher
+ * attach) so the Map cannot grow unbounded across a long-lived session.
+ */
+export function pruneSelfWrites(maxAgeMs = 60_000): void {
+  const now = Date.now()
+  for (const [key, ts] of selfWriteIgnore) {
+    if (now - ts > maxAgeMs) selfWriteIgnore.delete(key)
+  }
+}

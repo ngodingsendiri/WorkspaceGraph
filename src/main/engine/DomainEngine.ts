@@ -63,7 +63,12 @@ function typeFromParsed(file: ParsedMarkdown): DomainType {
   ) {
     return fmType as DomainType
   }
-  const rel = file.relativePath.replace(/\\/g, '/').toLowerCase()
+  // M7 D1/CST-2: mirror WorkspaceEngine.fileTypeFromPath — strip Archive/ so
+  // archived items keep their domain type (ADR-0012), and map the remaining
+  // standard folders that were previously 'other'.
+  let rel = file.relativePath.replace(/\\/g, '/').toLowerCase()
+  if (rel.startsWith('archive/')) rel = rel.slice(8)
+  else if (rel.includes('/archive/')) rel = rel.replace('/archive/', '/')
   if (rel.startsWith('projects/')) return 'project'
   if (rel.startsWith('tasks/')) return 'task'
   if (rel.startsWith('people/')) return 'people'
@@ -71,6 +76,9 @@ function typeFromParsed(file: ParsedMarkdown): DomainType {
   if (rel.startsWith('daily/')) return 'daily'
   if (rel.startsWith('sop/')) return 'sop'
   if (rel.startsWith('documents/')) return 'document'
+  if (rel.startsWith('journal/') || rel.startsWith('rules/') || rel.startsWith('prompt/')) {
+    return 'knowledge'
+  }
   return 'other'
 }
 

@@ -444,7 +444,9 @@ export class ContextEngine {
 
   private pathPriority(p: string): number {
     const lower = p.replace(/\\/g, '/').toLowerCase()
-    if (lower.includes('/ai memory/') || lower.includes('\\ai memory\\')) return 0
+    // M7 C5: single normalized form — the old second variant used a raw
+    // backslash pattern that never matched after toLowerCase+replace.
+    if (lower.includes('/ai memory/') || lower.startsWith('ai memory/')) return 0
     if (lower.includes('/rules/')) return 10
     if (lower.includes('/sop/')) return 11
     if (lower.includes('/templates/')) return 12

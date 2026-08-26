@@ -13,7 +13,7 @@ import { aiMiddleware } from '../ai/AIMiddleware'
 import { embeddingEngine } from '../ai/EmbeddingEngine'
 import { automationEngine } from '../engine/AutomationEngine'
 import { readPermissions } from '../security/Permissions'
-import { markSelfWrite, isSelfWriteEcho } from '../utils/selfWrite'
+import { markSelfWrite, isSelfWriteEcho, pruneSelfWrites } from '../utils/selfWrite'
 
 // Re-export for handlers that import markSelfWrite from shared (back-compat).
 export { markSelfWrite }
@@ -372,6 +372,8 @@ export function flushWatcherQueue(): void {
 
 /** Shared attach for open + create vault (prevents create without live reindex) */
 export function attachFileWatcher(folderPath: string): void {
+  // M7 FW1: purge expired self-write markers so the Map stays bounded
+  pruneSelfWrites()
   fileWatcher.start(folderPath)
   fileWatcher.removeAllListeners('change')
   // WA-1: an EventEmitter that emit('error') with NO listener throws (uncaught

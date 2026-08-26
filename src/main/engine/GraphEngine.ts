@@ -46,6 +46,9 @@ export interface GraphNode {
    * inflated by shared #tags. `degree` remains the visual degree (wiki + tag).
    */
   wikiDegree?: number
+  /** M7 G1: temporal metadata from frontmatter (spec 08 node attributes) */
+  created?: string
+  updated?: string
   pinned?: boolean
   x?: number
   y?: number
@@ -898,6 +901,13 @@ export class GraphEngine {
     const aliases = Array.isArray(parsedFile.frontmatter?.aliases)
       ? parsedFile.frontmatter.aliases.map(String)
       : []
+    // M7 G1: temporal metadata from frontmatter (spec 08 node attributes)
+    const created = parsedFile.frontmatter.created
+      ? String(parsedFile.frontmatter.created)
+      : undefined
+    const updated = parsedFile.frontmatter.updated
+      ? String(parsedFile.frontmatter.updated)
+      : undefined
     const existing = this.nodes.get(parsedFile.id)
     const wasReal = !!(existing && !existing.isAttachment && !existing.isTag && !existing.isGhost)
     const oldKeys = wasReal && existing ? this.identityKeys(existing) : new Set<string>()
@@ -916,6 +926,8 @@ export class GraphEngine {
       existing.relativePath = parsedFile.relativePath
       existing.type = nodeType
       existing.outLinks = outLinks
+      if (created) existing.created = created
+      if (updated) existing.updated = updated
     } else if (existing && existing.isAttachment) {
       // WB-10: file flipped from attachment to note (e.g. .png → .md). Convert
       // in place instead of leaving a stale attachment node until a full
@@ -928,6 +940,8 @@ export class GraphEngine {
       existing.relativePath = parsedFile.relativePath
       existing.type = nodeType
       existing.outLinks = outLinks
+      if (created) existing.created = created
+      if (updated) existing.updated = updated
       existing.isAttachment = false
       this.attachments = this.attachments.filter(
         (a) => a.id !== parsedFile.id && a.path !== parsedFile.filePath
@@ -942,7 +956,9 @@ export class GraphEngine {
         tags: parsedFile.tags,
         aliases,
         outLinks,
-        degree: 0
+        degree: 0,
+        ...(created ? { created } : {}),
+        ...(updated ? { updated } : {})
       })
     }
 

@@ -5,6 +5,7 @@
 import fs from 'fs'
 import path from 'path'
 import crypto from 'crypto'
+import { markSelfWrite } from '../utils/selfWrite'
 
 /** "Project" == "project" == "Project.md" == "Daily Note" == "Daily-Note" */
 function normalizeTemplateName(name: string): string {
@@ -483,6 +484,8 @@ export class TemplateEngine {
     for (const t of this.getBuiltinTemplates()) {
       const file = path.join(dir, `${t.name.replace(/\s+/g, '-')}.md`)
       if (!fs.existsSync(file)) {
+        // M7 T3: mark self-write so the watcher doesn't echo 8 seed files
+        markSelfWrite(file)
         fs.writeFileSync(file, t.body, 'utf-8')
         n++
       }

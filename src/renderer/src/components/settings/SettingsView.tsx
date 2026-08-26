@@ -2497,12 +2497,7 @@ export const SettingsView: React.FC = () => {
                 </button>
               ))}
             </div>
-            <p style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 10 }}>
-              data-theme=
-              {typeof document !== 'undefined'
-                ? document.documentElement.getAttribute('data-theme') || 'dark'
-                : '—'}
-            </p>
+            {/* M5 UI-29: debug leak removed — active theme is visible in the picker above */}
           </div>
         )}
 
