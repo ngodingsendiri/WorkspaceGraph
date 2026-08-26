@@ -6,7 +6,7 @@ import { confirmProviderDelete } from './providerDeleteConfirm'
 import { buildRowSaveFlash, providerLabel } from './providerSaveKeyConfirm'
 
 type Section =
-  'ai' | 'appearance' | 'index' | 'security' | 'automation' | 'plugins' | 'mcp' | 'logs' | 'about'
+  'ai' | 'appearance' | 'index' | 'security' | 'automation' | 'plugins' | 'mcp' | 'logs' | 'about' | 'general' | 'backup'
 
 /** R0-1 MCP server config (shape mirrors main's McpServerConfig). */
 interface McpServerCfg {
@@ -945,9 +945,11 @@ export const SettingsView: React.FC = () => {
   const ollamaRow = providers.find((p) => p.id === 'ollama')
 
   const nav: { id: Section; label: string }[] = [
+    { id: 'general', label: 'General' },
     { id: 'ai', label: 'AI Providers' },
     { id: 'index', label: 'Search Index' },
     { id: 'security', label: 'Security' },
+    { id: 'backup', label: 'Backup' },
     { id: 'automation', label: 'Automation' },
     { id: 'plugins', label: 'Plugins' },
     { id: 'mcp', label: 'MCP' },
@@ -988,6 +990,44 @@ export const SettingsView: React.FC = () => {
             style={{ marginBottom: 'var(--space-4)', padding: 'var(--space-2) var(--space-4)' }}
           >
             {savedStatus}
+          </div>
+        )}
+
+        {section === 'general' && (
+          <div className="settings-section">
+            <h2>General</h2>
+            <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-muted)', marginBottom: 'var(--space-3)' }}>
+              Pengaturan umum aplikasi.
+            </p>
+            <div className="settings-row">
+              <div>
+                <div style={{ fontWeight: 600 }}>Bahasa</div>
+                <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
+                  Saat ini: Indonesia (UI). English tersedia di versi mendatang.
+                </div>
+              </div>
+              <span className="badge">ID</span>
+            </div>
+            <div className="settings-row">
+              <div>
+                <div style={{ fontWeight: 600 }}>Autosave</div>
+                <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
+                  Simpan otomatis setiap 700ms setelah mengetik (editor).
+                </div>
+              </div>
+              <span className="badge" style={{ background: 'var(--color-success-subtle)', color: 'var(--color-success)' }}>
+                Aktif
+              </span>
+            </div>
+            <div className="settings-row">
+              <div>
+                <div style={{ fontWeight: 600 }}>Format tanggal</div>
+                <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
+                  ISO 8601 (YYYY-MM-DD) — konsisten dengan daily notes.
+                </div>
+              </div>
+              <span className="badge">ISO</span>
+            </div>
           </div>
         )}
 
@@ -1639,6 +1679,61 @@ export const SettingsView: React.FC = () => {
               ditolak. Plugin JS jalan di sandbox vm + worker; operasi tulis butuh prompt izin.
               Automation & Plugins default nonaktif (WC-4) — aktifkan di sini jika dipakai.
             </p>
+          </div>
+        )}
+
+        {section === 'backup' && (
+          <div className="settings-section">
+            <h2>Backup & Restore</h2>
+            <p style={{ fontSize: 'var(--text-sm)', color: 'var(--text-muted)', marginBottom: 'var(--space-3)' }}>
+              Cadangan & pemulihan data workspace.
+            </p>
+            <div className="settings-row">
+              <div>
+                <div style={{ fontWeight: 600 }}>Backup vault</div>
+                <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
+                  Salin folder vault secara manual — semua data adalah Markdown + .workspacegraph.
+                </div>
+              </div>
+              <span className="badge">Manual</span>
+            </div>
+            <div className="settings-row">
+              <div>
+                <div style={{ fontWeight: 600 }}>Export settings</div>
+                <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
+                  Pengaturan tersimpan di userData/workspacegraph/settings.json
+                </div>
+              </div>
+              <button
+                className="btn btn-sm btn-surface"
+                onClick={async () => {
+                  try {
+                    const s = await window.api.getSettings()
+                    const blob = new Blob([JSON.stringify(s, null, 2)], { type: 'application/json' })
+                    const url = URL.createObjectURL(blob)
+                    const a = document.createElement('a')
+                    a.href = url
+                    a.download = 'workspacegraph-settings.json'
+                    a.click()
+                    URL.revokeObjectURL(url)
+                    flash('Settings diekspor')
+                  } catch (err) {
+                    flash(err instanceof Error ? err.message : String(err))
+                  }
+                }}
+              >
+                Export
+              </button>
+            </div>
+            <div className="settings-row">
+              <div>
+                <div style={{ fontWeight: 600 }}>Restore point</div>
+                <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
+                  Backup otomatis terjadwal — tersedia di versi mendatang (M8).
+                </div>
+              </div>
+              <span className="badge">Soon</span>
+            </div>
           </div>
         )}
 
