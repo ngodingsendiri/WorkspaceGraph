@@ -322,7 +322,7 @@ export const SettingsView: React.FC = () => {
     try {
       const settings = (await window.api.getSettings()) as {
         ai?: Record<string, { apiKey?: string; baseUrl?: string }>
-        theme?: 'dark' | 'light' | 'system'
+        theme?: 'dark' | 'light' | 'system' | 'high-contrast'
         permissions?: typeof permissions
         semanticContext?: boolean
         trashEnabled?: boolean
@@ -2314,7 +2314,7 @@ export const SettingsView: React.FC = () => {
               Active mode follows preference immediately across all views.
             </p>
             <div className="flex gap-2">
-              {(['dark', 'light', 'system'] as const).map((t) => (
+              {(['dark', 'light', 'system', 'high-contrast'] as const).map((t) => (
                 <button
                   key={t}
                   className={`btn btn-sm ${theme === t ? 'btn-primary' : 'btn-surface'}`}

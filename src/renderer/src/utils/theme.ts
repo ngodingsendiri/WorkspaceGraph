@@ -1,21 +1,22 @@
 /** Theme preference + apply helpers (shared by AppShell, Settings, Editor). */
 
-export type ThemePreference = 'dark' | 'light' | 'system'
-export type ThemeMode = 'dark' | 'light'
+export type ThemePreference = 'dark' | 'light' | 'system' | 'high-contrast'
+export type ThemeMode = 'dark' | 'light' | 'high-contrast'
 
 const STORAGE_KEY = 'wg-theme'
 
 export function resolveMode(pref: ThemePreference): ThemeMode {
+  if (pref === 'high-contrast') return 'high-contrast'
   if (pref === 'system') {
     return window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'
   }
-  return pref
+  return pref as ThemeMode
 }
 
 export function getCachedThemePref(): ThemePreference {
   try {
     const v = localStorage.getItem(STORAGE_KEY)
-    if (v === 'dark' || v === 'light' || v === 'system') return v
+    if (v === 'dark' || v === 'light' || v === 'system' || v === 'high-contrast') return v
   } catch {
     /* ignore */
   }
@@ -32,9 +33,10 @@ export function applyTheme(pref: ThemePreference): ThemeMode {
   } catch {
     /* ignore */
   }
-  // Sync Electron window chrome (title bar overlay)
+  // Sync Electron window chrome (title bar overlay) — high-contrast maps to dark chrome
   try {
-    void window.api?.setTitleBarTheme?.(mode)
+    const chromeMode = mode === 'high-contrast' ? 'dark' : mode
+    void window.api?.setTitleBarTheme?.(chromeMode)
   } catch {
     /* ignore */
   }
@@ -64,7 +66,9 @@ export function subscribeThemePreferenceChange(onChange: (mode: ThemeMode) => vo
   mq.addEventListener('change', onMq)
 
   const obs = new MutationObserver(() => {
-    const mode = document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark'
+    const attr = document.documentElement.getAttribute('data-theme')
+    const mode: ThemeMode =
+      attr === 'light' ? 'light' : attr === 'high-contrast' ? 'high-contrast' : 'dark'
     onChange(mode)
   })
   obs.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] })
@@ -76,5 +80,8 @@ export function subscribeThemePreferenceChange(onChange: (mode: ThemeMode) => vo
 }
 
 export function getActiveMode(): ThemeMode {
-  return document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark'
+  const attr = document.documentElement.getAttribute('data-theme')
+  if (attr === 'light') return 'light'
+  if (attr === 'high-contrast') return 'high-contrast'
+  return 'dark'
 }

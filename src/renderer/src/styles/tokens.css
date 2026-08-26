@@ -293,3 +293,32 @@
   --titlebar-overlay-bg: #ffffff;
   --titlebar-overlay-symbol: #64748b;
 }
+
+/* ---- High Contrast Theme — WCAG AAA, maximal contrast ---- */
+[data-theme='high-contrast'] {
+  --bg-app: hsl(0, 0%, 0%);
+  --bg-surface: hsl(0, 0%, 8%);
+  --bg-panel: hsl(0, 0%, 12%);
+  --bg-hover: hsl(0, 0%, 18%);
+  --bg-active: hsl(0, 0%, 24%);
+  --bg-input: hsl(0, 0%, 6%);
+
+  --border-subtle: hsl(0, 0%, 30%);
+  --border-default: hsl(0, 0%, 50%);
+  --border-strong: hsl(0, 0%, 70%);
+
+  --color-primary: hsl(60, 100%, 50%);
+  --color-primary-hover: hsl(60, 100%, 60%);
+  --color-primary-active: hsl(60, 100%, 40%);
+  --color-success: hsl(120, 100%, 50%);
+  --color-warning: hsl(45, 100%, 50%);
+  --color-error: hsl(0, 100%, 60%);
+
+  --text-primary: hsl(0, 0%, 100%);
+  --text-secondary: hsl(0, 0%, 85%);
+  --text-muted: hsl(0, 0%, 70%);
+  --text-inverse: hsl(0, 0%, 0%);
+
+  --note-text: hsl(0, 0%, 100%);
+  --note-link: hsl(60, 100%, 50%);
+}
