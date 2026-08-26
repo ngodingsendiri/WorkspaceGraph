@@ -327,9 +327,11 @@ export class IndexDatabase {
     const terms = query
       .trim()
       .split(/\s+/)
-      // Strip FTS5 special chars that break MATCH (^ * ( ) " ' ~ { } [ ] \)
-      .map((t) => t.replace(/["'*()^~{}[\]\\]/g, '').trim())
-      .filter((t) => t.length > 0 && !t.includes(':'))
+      // M7.6a (S9): strip FTS5 special chars INCLUDING ':' — a token like
+      // `status:active` used to be dropped entirely; now the colon is removed
+      // and both halves stay searchable (`status active`).
+      .map((t) => t.replace(/["'*()^~{}[\]\\:]/g, '').trim())
+      .filter((t) => t.length > 0)
       .slice(0, 12)
 
     if (terms.length === 0) return []

@@ -191,7 +191,9 @@ export class ContextEngine {
     query: string,
     activeFilePath?: string,
     agentRole: AgentRole = 'general',
-    tokenBudget = ROLE_PROFILES[agentRole]?.budget ?? DEFAULT_TOKEN_BUDGET
+    tokenBudget = ROLE_PROFILES[agentRole]?.budget ?? DEFAULT_TOKEN_BUDGET,
+    /** M7.6c (C1): user-selected text (spec 09 priority #2) — injected verbatim. */
+    selection?: string
   ): ContextPackage {
     const relevantFiles: ContextPackage['relevantFiles'] = []
     const citations: { title: string; path: string }[] = []
@@ -381,6 +383,37 @@ export class ContextEngine {
         parts.push(f.snippet)
       }
     }
+
+    // M7.6c (C1): user-selected text — spec 09 priority #2, injected verbatim
+    const sel = (selection || '').trim()
+    if (sel) {
+      parts.push('\n[USER SELECTION] (teks yang sedang dipilih user — prioritas tinggi):')
+      parts.push(sel.slice(0, 1200))
+    }
+
+    // M7.6c (C2): related projects/tasks via domain classification of the
+    // active note's graph neighbors (spec 09 Context Package items 6-7).
+    if (graphNeighbors && graphNeighbors.length > 0) {
+      const projects: string[] = []
+      const tasks: string[] = []
+      for (const gn of graphNeighbors) {
+        const lower = gn.path.replace(/\\/g, '/').toLowerCase()
+        if (lower.startsWith('projects/') && projects.length < 3) {
+          projects.push(`[[${gn.title}]] (${gn.path})`)
+        } else if (lower.startsWith('tasks/') && tasks.length < 5) {
+          tasks.push(`[[${gn.title}]] (${gn.path})`)
+        }
+      }
+      if (projects.length > 0) {
+        parts.push('\nRelated projects:')
+        for (const p of projects) parts.push(`- ${p}`)
+      }
+      if (tasks.length > 0) {
+        parts.push('\nRelevant tasks:')
+        for (const t of tasks) parts.push(`- ${t}`)
+      }
+    }
+
     parts.push('=== END OF WORKSPACE CONTEXT ===\n')
 
     let formattedContext = parts.join('\n')
@@ -430,10 +463,11 @@ export class ContextEngine {
     query: string,
     activeFilePath?: string,
     agentRole: AgentRole = 'general',
-    tokenBudget = ROLE_PROFILES[agentRole]?.budget ?? DEFAULT_TOKEN_BUDGET
+    tokenBudget = ROLE_PROFILES[agentRole]?.budget ?? DEFAULT_TOKEN_BUDGET,
+    selection?: string
   ): Promise<ContextPackage> {
     // Build the base synchronous package first
-    const pkg = this.buildContextPackage(query, activeFilePath, agentRole, tokenBudget)
+    const pkg = this.buildContextPackage(query, activeFilePath, agentRole, tokenBudget, selection)
     const profile = ROLE_PROFILES[agentRole] || ROLE_PROFILES.general
 
     // User toggle: semanticContext !== false (default on) gates the vector tier.

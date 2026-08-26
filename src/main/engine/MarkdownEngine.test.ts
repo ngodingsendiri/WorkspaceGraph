@@ -247,6 +247,25 @@ describe('MarkdownEngine', () => {
       const insideCode = engine.renderToHtml('```\n§§WIKI0§§ literal inside code\n```')
       expect(insideCode).toContain('§§WIKI0§§')
     })
+
+    it('M7.6b (M3/M4): local image renders as <img> with safe src', () => {
+      const html = engine.renderToHtml('![Diagram](assets/diagram.png)')
+      expect(html).toContain('<img class="md-img-local" src="assets/diagram.png"')
+    })
+
+    it('M7.6b: javascript:/data:text image src ditolak (tetap teks)', () => {
+      const html = engine.renderToHtml('![x](javascript:alert(1))')
+      expect(html).not.toContain('<img')
+      const html2 = engine.renderToHtml('![x](data:text/html;base64,AAAA)')
+      expect(html2).not.toContain('<img')
+    })
+
+    it('M7.6b (M3/M4): local .md link dirender sebagai wiki-link yang bisa diklik', () => {
+      const html = engine.renderToHtml('Lihat [Catatan](Notes/Catatan.md) terkait.')
+      expect(html).toContain('class="wiki-link"')
+      expect(html).toContain('data-target="Notes/Catatan.md"')
+      expect(html).toContain('>Catatan<')
+    })
   })
 
   describe('resolveWikiLink', () => {

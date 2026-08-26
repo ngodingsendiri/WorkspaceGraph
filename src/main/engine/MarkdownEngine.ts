@@ -334,6 +334,36 @@ function renderMarkdownToHtml(content: string): string {
     }
   )
 
+  // M7.6b (M3/M4): LOCAL images & links — spec 06 lists Image + Link as
+  // supported; previously only http(s)/mailto were rendered.
+  // Local image: ![alt](assets/pic.png) — src restricted to safe values
+  // (relative path or data:image/*); javascript:/data:text rejected.
+  const isSafeLocalSrc = (u: string): boolean =>
+    !/^\s*(javascript|vbscript|data:text)/i.test(u) && !/[<>"]/.test(u)
+  src = src.replace(/!\[([^\]]*?)\]\(([^)]+)\)/gi, (m, alt: string, url: string) => {
+    const trimmed = url.trim()
+    if (/^(https?:|mailto:)/i.test(trimmed)) return m // already handled above
+    if (!isSafeLocalSrc(trimmed)) return m
+    const idx = extSlots.length
+    extSlots.push(
+      `<img class="md-img-local" src="${escapeHtml(trimmed)}" alt="${escapeHtml(alt)}" loading="lazy" />`
+    )
+    return `§§EXT${idx}§§`
+  })
+  // Local link to a note (.md) → wiki-link span (existing click handler opens
+  // it); other local paths → inert styled span with the target as title.
+  src = src.replace(
+    /\[([^\]]+?)\]\(([^)#]+\.md)(#[^)]*)?\)/gi,
+    (m, label: string, target: string) => {
+      const trimmed = target.trim()
+      if (/^(https?:|mailto:)/i.test(trimmed)) return m
+      if (!isSafeLocalSrc(trimmed)) return m
+      const idx = wikiSlots.length
+      wikiSlots.push({ target: trimmed, label })
+      return `§§WIKI${idx}§§`
+    }
+  )
+
   const lines = src.split('\n')
   const out: string[] = []
   let i = 0

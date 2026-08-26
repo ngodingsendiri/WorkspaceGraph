@@ -608,7 +608,9 @@ export class AIMiddleware {
           const ctxPackage = await this.contextEngine.buildContextPackageAsync(
             lastUserMsg.content,
             activeFilePath,
-            agentRole
+            agentRole,
+            undefined,
+            request.selection
           )
           systemPrompt += '\n\n' + ctxPackage.formattedContext
           citations = ctxPackage.citations

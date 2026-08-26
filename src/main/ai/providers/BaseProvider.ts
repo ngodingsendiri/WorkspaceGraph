@@ -50,6 +50,8 @@ export interface AIRequest {
   tool_choice?: ProviderToolChoice
   /** Images attached to the CURRENT prompt (attached to the last user message). */
   images?: ImageAttachment[]
+  /** M7.6c (C1): user-selected text in the editor (spec 09 context priority #2). */
+  selection?: string
 }
 
 export interface AIResponse {
