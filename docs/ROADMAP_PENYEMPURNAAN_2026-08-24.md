@@ -153,16 +153,16 @@ Prioritas berdasar dampak & ketergantungan. **M4a** = perbaikan klasifikasi (blo
 | 6 | DOM-12 | Priority task free-text | Enum Critical/High/Medium/Low + validasi | ✅ `DomainEngine` normalisasi priority enum |
 | 7 | CST-2 | `fileTypeFromPath` tidak petakan Journal/Rules/Prompt/Archive | Lengkapi pemetaan folder standar | ✅ `fileTypeFromPath` + `Journal/Rules/Prompt` |
 
-### M4b: Minimal viable management per sistem
+### M4b: Minimal viable management per sistem — 5/6 selesai (daily timeline deferred)
 
-| # | Audit ID | Sistem | Solusi minimal |
-|---|---|---|---|
-| 1 | DOM-3 (proyek) | Project | Dashboard project: status breakdown (`projectsByStatus` — DOM-15 sudah hitung tapi tak ditampilkan), progress checklist, daftar task terkait |
-| 2 | DOM-3 (task) | Task | Task Center: status breakdown Inbox/To Do/In Progress/Review/Done, overdue, per-prioritas |
-| 3 | DOM-3 (daily) | Daily | Timeline harian sederhana (daftar harian kronologis + filter minggu/bulan) |
-| 4 | DOM-3 (people) | People | Wire `peopleLinkedTo` (dead code) ke UI: timeline per orang |
-| 5 | DOM-2/DOM-4 | Document | Index attachment by name/path; metadata panel (MIME/size) minimal |
-| 6 | DOM-10/11 | Template | TemplatePicker: input owner/project per kind; context menu pakai template folder |
+| # | Audit ID | Sistem | Solusi minimal | Status |
+|---|---|---|---|---|
+| 1 | DOM-3 (proyek) | Project | Dashboard project: status breakdown (`projectsByStatus` — DOM-15 sudah hitung tapi tak ditampilkan), progress checklist, daftar task terkait | ✅ pills + progress % |
+| 2 | DOM-3 (task) | Task | Task Center: status breakdown Inbox/To Do/In Progress/Review/Done, overdue, per-prioritas | ✅ status pills |
+| 3 | DOM-3 (daily) | Daily | Timeline harian sederhana (daftar harian kronologis + filter minggu/bulan) | ⬜ deferred (butuh UI baru) |
+| 4 | DOM-3 (people) | People | Wire `peopleLinkedTo` (dead code) ke UI: timeline per orang | ✅ IPC `domain:peopleLinkedTo` + preload |
+| 5 | DOM-2/DOM-4 | Document | Index attachment by name/path; metadata panel (MIME/size) minimal | ✅ search index attachment |
+| 6 | DOM-10/11 | Template | TemplatePicker: input owner/project per kind; context menu pakai template folder | ✅ owner/project inputs |
 
 ### M4c: Fitur spesifikasi lanjutan (roadmap)
 
