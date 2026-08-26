@@ -14,6 +14,19 @@ export interface SearchOptions {
   searchIn?: ('title' | 'content' | 'tags' | 'path')[]
 }
 
+/** M7.5a (S4): open `- [ ] task` lines, capped per note. */
+export function extractOpenTasks(content: string, cap = 50): string[] {
+  const out: string[] = []
+  const re = /^\s*[-*+]\s+\[ \]\s+(.+)$/gm
+  let m: RegExpExecArray | null
+  while ((m = re.exec(content)) !== null) {
+    const text = m[1].trim()
+    if (text) out.push(text)
+    if (out.length >= cap) break
+  }
+  return out
+}
+
 export class SearchEngine {
   private index: Map<string, IndexEntry> = new Map()
   private fuse: Fuse<IndexEntry> | null = null
@@ -148,7 +161,11 @@ export class SearchEngine {
       this.fuseFlushTimer = null
     }
     const entries: IndexEntry[] = []
+    // M7.5a (S4): FTS rebuild gets task lines as synthetic headings so
+    // searching task text finds the containing note.
+    const ftsFiles: ParsedMarkdown[] = []
     for (const file of parsedFiles) {
+      const tasks = extractOpenTasks(file.content)
       const entry: IndexEntry = {
         id: file.id,
         title: file.title,
@@ -162,14 +179,28 @@ export class SearchEngine {
           this.coerceDate(file.frontmatter.updated) ||
           this.coerceDate(file.frontmatter.date) ||
           undefined,
-        headings: (file.headings || []).map((h) => h.text).join(' ')
+        headings: [
+          ...(file.headings || []).map((h) => h.text),
+          ...tasks.map((t) => `[task] ${t}`)
+        ].join(' ')
       }
       this.index.set(file.id, entry)
       entries.push(entry)
+      if (tasks.length > 0) {
+        ftsFiles.push({
+          ...file,
+          headings: [
+            ...(file.headings || []),
+            ...tasks.map((t) => ({ level: 6, text: `[task] ${t}` }))
+          ]
+        })
+      } else {
+        ftsFiles.push(file)
+      }
     }
     await this.buildFuseWorker(entries)
     if (indexDatabase.isOpen()) {
-      indexDatabase.rebuild(parsedFiles)
+      indexDatabase.rebuild(ftsFiles)
     }
   }
 
@@ -312,7 +343,19 @@ export class SearchEngine {
       if (results.length >= limit) break
     }
 
-    return results.slice(0, limit)
+    // M7.5b (S3): backlink-count ranking signal. ADR-0005 keeps the absolute
+    // keyword/semantic blend; this applies a bounded multiplicative nudge so
+    // well-connected notes rise among otherwise-similar scores (cap +15%,
+    // saturating at 15 backlinks — never dominates exact matches).
+    const boosted = results.map((r) => {
+      const node = graphEngine.getNodeById(r.id)
+      if (!node || node.degree <= 0) return r
+      const factor = 1 + Math.min(node.degree, 15) * 0.01
+      return { ...r, score: Math.min(100, r.score * factor) }
+    })
+    boosted.sort((a, b) => b.score - a.score)
+
+    return boosted.slice(0, limit)
   }
 
   /** WB-5: special query syntax (orphan/backlink/path/#tag) shared by both entry points. */

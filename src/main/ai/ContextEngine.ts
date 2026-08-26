@@ -383,7 +383,19 @@ export class ContextEngine {
     }
     parts.push('=== END OF WORKSPACE CONTEXT ===\n')
 
-    const formattedContext = parts.join('\n')
+    let formattedContext = parts.join('\n')
+    // M7.5c (C3): the sync path tracked per-snippet tokens but never capped
+    // the FINAL text — headers/boilerplate could push it past the budget.
+    // Hard-cap at budget×4 chars (chars≈tokens/4), cutting at a line boundary.
+    {
+      const capChars = Math.max(0, tokenBudget) * 4
+      if (formattedContext.length > capChars) {
+        const cut = formattedContext.lastIndexOf('\n', capChars)
+        formattedContext =
+          formattedContext.slice(0, cut > 0 ? cut : capChars).trimEnd() +
+          '\n…[context dipangkas agar muat budget]'
+      }
+    }
     return {
       query,
       activeFile,

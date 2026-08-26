@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'
-import { SearchEngine } from './SearchEngine'
+import { SearchEngine, extractOpenTasks } from './SearchEngine'
 import { MarkdownEngine, type ParsedMarkdown } from './MarkdownEngine'
 import { embeddingEngine } from '../ai/EmbeddingEngine'
 
@@ -35,6 +35,25 @@ describe('SearchEngine', () => {
       buildIndex([parse('/vault/A.md', '# A')])
       buildIndex([parse('/vault/B.md', '# B')])
       expect(search.getIndexSize()).toBe(1)
+    })
+
+    it('M7.5a (S4): open task lines are indexed — search finds the containing note', async () => {
+      buildIndex([
+        parse(
+          '/vault/Notes/Todo.md',
+          '# Todo\n\n- [x] done thing\n- [ ] belajar TypeScript generics\n'
+        )
+      ])
+      const results = await search.search({ query: 'belajar TypeScript', limit: 10 })
+      expect(results.some((r) => r.relativePath === 'Notes/Todo.md')).toBe(true)
+    })
+
+    it('extractOpenTasks: hanya checkbox terbuka, cap 50', () => {
+      const content = '- [ ] satu\n- [x] dua\n* [ ] tiga\n+ [ ] empat\n'
+      const tasks = extractOpenTasks(content)
+      expect(tasks).toEqual(['satu', 'tiga', 'empat'])
+      const many = Array.from({ length: 60 }, (_, i) => `- [ ] t${i}`).join('\n')
+      expect(extractOpenTasks(many)).toHaveLength(50)
     })
   })
 
