@@ -284,7 +284,7 @@ Prioritas berdasar dampak & ketergantungan. **M4a** = perbaikan klasifikasi (blo
 
 ---
 
-> **Status M7: 🔄 SEBAGIAN — 16/20 selesai. Sisa: W2 async scan (invasif), S6 low, G3 deferred, M1/M2 footnote/id, L1/L2 low.**
+> **Status M7: 🔄 SEBAGIAN — 19/20 selesai. Sisa: W2 async scan (invasif — defer).**
 
 ### M7: Skala & kualitas engine (spec 05-09)
 
@@ -297,7 +297,7 @@ Prioritas berdasar dampak & ketergantungan. **M4a** = perbaikan klasifikasi (blo
 | 5 | S7 | `rebuildSqliteFromMemory` kata-per-heading → noise | Simpan heading string asli | ✅ satu entri heading gabungan; FTS text sama tanpa noise |
 | 6 | S6 | Kontradiksi template (listSystemNotes) | Sinkronkan kebijakan Templates/ | ✅ templates/ dibuang dari system-folder filter |
 | 7 | G1/G2 | Node/edge attrs Created/Updated/Color MISSING | Tambah metadata temporal + color category | 🔶 created/updated node attrs ✅; color category deferred |
-| 8 | G3 | Edge `folder` dideklarasikan tak pernah dibuat | Buat folder edges | ⬜ deferred (risiko edge explosion) |
+| 8 | G3 | Edge `folder` dideklarasikan tak pernah dibuat | Buat folder edges | ✅ folder edges (file→parent-dir, bounded 1/file, opt-in `includeFolders`) |
 | 9 | G4 | Tag nodes terisolasi di jalur produksi | Selalu buat note→#tag edges | ✅ guard basi pre-WB-3 dihapus + regression test produksi |
 | 10 | G5 | Update single-file rebuild penuh tag/degree | Incremental (hanya node tersentuh) | ✅ incremental tagnode edges per node tersentuh |
 | 11 | G7 | getNeighbors O(depth×nodes×edges) | Adjacency list | ✅ adjacency O(E)/panggilan + BFS O(V+E) |
@@ -352,7 +352,7 @@ Prioritas berdasar dampak & ketergantungan. **M4a** = perbaikan klasifikasi (blo
 | # | Audit ID | Masalah | Solusi |
 |---|---|---|---|
 | 1 | TST-1 | Tidak ada E2E renderer | Playwright/Electron E2E: buka vault fixture → buat note → link wiki → graph → chat (mock provider) |
-| 2 | TST-2 | AI evaluation tidak ada | Golden-set kecil untuk prompt template + konsistensi output + token efficiency |
+| 2 | TST-2 | AI evaluation tidak ada | Golden-set kecil untuk prompt template + konsistensi output + token efficiency | ✅ golden-set 6 prompt (anti-drift) di `PromptRegistry.test.ts` |
 | 3 | TST-3 | Cross-platform tidak di CI | Job `windows-latest` untuk test (path + safeStorage) |
 | 4 | TST-4 | Security testing tidak ada kategori | Fuzz IPC input + leak-sweep otomatis + `npm audit` job |
 | 5 | TST-5 | Performance tanpa baseline gate | 2-3 metrik dengan threshold longgar sebagai gate |
