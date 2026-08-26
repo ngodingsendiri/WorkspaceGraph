@@ -262,10 +262,10 @@ Prioritas berdasar dampak & ketergantungan. **M4a** = perbaikan klasifikasi (blo
 | 1 | PLT-1 | 4 trigger MISSING (project_created/task_completed/daily_note_created/ai_response_generated) | Pancarkan event dari sumbernya (TemplateEngine/DomainEngine/AIMiddleware → automationEngine.handleEvent) | ✅ wired di `template:createNote` + `stream_end` |
 | 2 | PLT-2 | Conditions TIDAK ADA | Tambah `conditions?: AutomationCondition[]` + evaluator (File Type/Tags/Metadata dulu — murah) | ✅ `AutomationCondition` + `conditionsMatch` + test |
 | 3 | PLT-3 | Actions terbatas (3/8) | Prioritaskan `notify` (channel ada) + `create_task`/`create_knowledge` via engine; lalu `run_agent`, `add_backlink`, `archive` | ✅ `notify` + `create_note` (5/8 total); run_agent/archive deferred |
-| 4 | PLT-4 | Workflow engine tidak ada | Minimal retry (count + backoff) per action; multi-step/branch/parallel sebagai roadmap | ⬜ |
-| 5 | PLT-5 | Scheduling tidak lengkap | `onceAt` + `monthly` | ⬜ |
-| 6 | PLT-6 | Logging in-memory | Persist ke `.workspacegraph/logs/automation-events.jsonl` + field trigger/status/durasi/error/hasil | ⬜ |
-| 7 | PLT-8 | `save()` non-atomic; aksi typo gagal senyap | Atomic write + validasi `action.type` + default branch log error | ⬜ |
+| 4 | PLT-4 | Workflow engine tidak ada | Minimal retry (count + backoff) per action; multi-step/branch/parallel sebagai roadmap | ✅ retry 1x per action |
+| 5 | PLT-5 | Scheduling tidak lengkap | `onceAt` + `monthly` | ✅ onceAt (auto-disable) + dayOfMonth |
+| 6 | PLT-6 | Logging in-memory | Persist ke `.workspacegraph/logs/automation-events.jsonl` + field trigger/status/durasi/error/hasil | ✅ persist jsonl |
+| 7 | PLT-8 | `save()` non-atomic; aksi typo gagal senyap | Atomic write + validasi `action.type` + default branch log error | ✅ atomicWriteJson + validateConfig tolak typo |
 | 8 | PLT-7 | Plugin tidak bisa memperluas Automation | Mulai action `plugin.run <id> <command>` | ⬜ |
 
 ### M6b: Plugin SDK (spec 28)
@@ -278,7 +278,7 @@ Prioritas berdasar dampak & ketergantungan. **M4a** = perbaikan klasifikasi (blo
 | 4 | PLG-5 | SDK APIs jauh dari spesifikasi | Tambah read-only Project/Task/Knowledge (via DomainEngine) + `settings.set` + Event subscribe | ✅ `domain.list` read-only (settings.set/event deferred) |
 | 5 | PLG-6 | Event system TIDAK ADA | Minimal `events.subscribe(channel, cb)` dibatasi event yang ada | ⬜ deferred |
 | 6 | PLG-7 | Resource limits tanpa cap memori | `resourceLimits: { maxOldGenerationSizeMb }` pada Worker | ✅ 256MB old / 64MB young |
-| 7 | PLG-8 | Contoh plugin `enabled: true` | Ubah ke `false` (konsisten ADR-0003) | ⬜ low |
+| 7 | PLG-8 | Contoh plugin `enabled: true` | Ubah ke `false` (konsisten ADR-0003) | ✅ |
 
 **Verifikasi M6:** test automation (trigger baru, conditions, persist log, re-entrancy masih aman), test plugin (permission enforcement — PLG-4 di M1 — + extension point baru + minSdk gate + resource limit).
 
@@ -295,9 +295,9 @@ Prioritas berdasar dampak & ketergantungan. **M4a** = perbaikan klasifikasi (blo
 | 3 | S3 | Ranking tanpa backlink-count/graph proximity/status | Tambah sinyal ranking dari graph + domain | ✅ backlink-count boost (cap +15%, saturasi 15); proximity/status deferred |
 | 4 | S4 | Tasks tidak diindeks | Parse checkbox → index | ✅ `extractOpenTasks` → Fuse headings + FTS level-6 synthetic |
 | 5 | S7 | `rebuildSqliteFromMemory` kata-per-heading → noise | Simpan heading string asli | ✅ satu entri heading gabungan; FTS text sama tanpa noise |
-| 6 | S6 | Kontradiksi template (listSystemNotes) | Sinkronkan kebijakan Templates/ | ⬜ low |
-| 7 | G1/G2 | Node/edge attrs Created/Updated/Color MISSING | Tambah metadata temporal + color category | ⬜ |
-| 8 | G3 | Edge `folder` dideklarasikan tak pernah dibuat | Buat folder edges | ⬜ |
+| 6 | S6 | Kontradiksi template (listSystemNotes) | Sinkronkan kebijakan Templates/ | ✅ templates/ dibuang dari system-folder filter |
+| 7 | G1/G2 | Node/edge attrs Created/Updated/Color MISSING | Tambah metadata temporal + color category | 🔶 created/updated node attrs ✅; color category deferred |
+| 8 | G3 | Edge `folder` dideklarasikan tak pernah dibuat | Buat folder edges | ⬜ deferred (risiko edge explosion) |
 | 9 | G4 | Tag nodes terisolasi di jalur produksi | Selalu buat note→#tag edges | ✅ guard basi pre-WB-3 dihapus + regression test produksi |
 | 10 | G5 | Update single-file rebuild penuh tag/degree | Incremental (hanya node tersentuh) | ⬜ |
 | 11 | G7 | getNeighbors O(depth×nodes×edges) | Adjacency list | ✅ adjacency O(E)/panggilan + BFS O(V+E) |
@@ -309,7 +309,9 @@ Prioritas berdasar dampak & ketergantungan. **M4a** = perbaikan klasifikasi (blo
 | 17 | M1/M2/M3/M4 | Footnote/id/Image lokal/link lokal | Implementasikan per spec 06 | 🔶 M3 image lokal + M4 link lokal .md ✅ (safe-src guard); M1 footnote/M2 id deferred |
 | 18 | W1/W3 | Manifest tidak lengkap; tanpa validateWorkspaceStructure | Lengkapi manifest + validasi | ⬜ |
 | 19 | S2/S5/S8/S9 | Link search parsial, recent tanpa "dibuka", O(N) path, token `:` dibuang | Perbaikan parsial | ✅ S9 colon token di-strip bukan dibuang; sisanya low |
-| 20 | C4/C5/C6, D1/D2, T2/T3, L1/L2, FW1 | Polish kecil | Lihat detail audit | ⬜ |
+| 20 | C4/C5/C6, D1/D2, T2/T3, L1/L2, FW1 | Polish kecil | 🔶 C5 lowercase ✅ · D1 mapping ✅ · T2 daily selaras ✅ · T3 markSelfWrite ✅ · FW1 prune ✅ · S6 templates ✅ · PLG-8 enabled:false ✅ · UI-29 debug ✅ · PLT-4 retry ✅ · PLT-5 onceAt/monthly ✅ · PLT-6 persist ✅ · PLT-8 atomic+validasi ✅; L1/L2 + C4/C6 low deferred |
+
+**Verifikasi M7:** test graph 31 ✅ · search 30 ✅ · automation 23 ✅ (+4 baru); full suite 1168 hijau.
 
 **Verifikasi M7:** benchmark (10k file scan, search latency, graph update single-file), test search metadata, test graph incremental.
 
