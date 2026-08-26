@@ -300,9 +300,11 @@ export const DashboardView: React.FC<{ onOpenSearch: () => void }> = ({ onOpenSe
   const [domain, setDomain] = useState<DomainOverview | null>(null)
   const [tplOpen, setTplOpen] = useState(false)
   const [loading, setLoading] = useState(true)
+  const [loadError, setLoadError] = useState<string | null>(null)
 
   const loadDashboardData = async (): Promise<void> => {
     setLoading(true)
+    setLoadError(null)
     try {
       const recent = await window.api.getRecentNotes(6)
       setRecentNotes(recent || [])
@@ -312,6 +314,7 @@ export const DashboardView: React.FC<{ onOpenSearch: () => void }> = ({ onOpenSe
       setDomain(ov || null)
     } catch (err) {
       console.error('Failed to load dashboard data:', err)
+      setLoadError(err instanceof Error ? err.message : String(err))
     } finally {
       setLoading(false)
     }
@@ -526,6 +529,28 @@ export const DashboardView: React.FC<{ onOpenSearch: () => void }> = ({ onOpenSe
           </button>
         </div>
       </div>
+
+      {/* M5b UI-5: inline error + retry when dashboard load fails */}
+      {loadError && (
+        <div
+          className="dash-error"
+          style={{
+            padding: 'var(--space-3)',
+            marginBottom: 'var(--space-3)',
+            borderRadius: 'var(--radius-md)',
+            background: 'var(--color-error-subtle)',
+            color: 'var(--color-error)',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 'var(--space-2)'
+          }}
+        >
+          <span style={{ flex: 1 }}>Gagal memuat dashboard: {loadError}</span>
+          <button className="btn btn-sm btn-surface" onClick={() => void loadDashboardData()}>
+            Coba lagi
+          </button>
+        </div>
+      )}
 
       <div className="dash-metrics">
         {metrics.map((m) => (

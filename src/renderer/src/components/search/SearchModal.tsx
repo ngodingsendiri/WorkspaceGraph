@@ -20,6 +20,7 @@ export const SearchModal: React.FC<{ isOpen: boolean; onClose: () => void }> = (
   const [results, setResults] = useState<SearchResultItem[]>([])
   const [selectedIndex, setSelectedIndex] = useState(0)
   const [searching, setSearching] = useState(false)
+  const [searchError, setSearchError] = useState<string | null>(null)
   const openTab = useEditorStore((s) => s.openTab)
   const setActiveView = useWorkspaceStore((s) => s.setActiveView)
   const inputRef = useRef<HTMLInputElement>(null)
@@ -53,6 +54,7 @@ export const SearchModal: React.FC<{ isOpen: boolean; onClose: () => void }> = (
     let cancelled = false
     const fetchResults = async (): Promise<void> => {
       setSearching(true)
+      setSearchError(null)
       try {
         if (!query.trim()) {
           const recent = await window.api.getRecentNotes(12)
@@ -61,8 +63,11 @@ export const SearchModal: React.FC<{ isOpen: boolean; onClose: () => void }> = (
           const searched = await window.api.searchQuery({ query, limit: 20 })
           if (!cancelled) setResults(searched || [])
         }
-      } catch {
-        if (!cancelled) setResults([])
+      } catch (err) {
+        if (!cancelled) {
+          setResults([])
+          setSearchError(err instanceof Error ? err.message : 'Pencarian gagal')
+        }
       } finally {
         if (!cancelled) setSearching(false)
       }
@@ -131,7 +136,26 @@ export const SearchModal: React.FC<{ isOpen: boolean; onClose: () => void }> = (
           role="listbox"
           aria-label="Hasil pencarian"
         >
-          {results.length === 0 ? (
+          {searchError ? (
+            <div
+              style={{
+                padding: 'var(--space-6)',
+                textAlign: 'center',
+                color: 'var(--color-error)'
+              }}
+            >
+              <div style={{ marginBottom: 'var(--space-2)' }}>Pencarian gagal: {searchError}</div>
+              <button
+                className="btn btn-sm btn-surface"
+                onClick={() => {
+                  setSearchError(null)
+                  setQuery((q) => q)
+                }}
+              >
+                Coba lagi
+              </button>
+            </div>
+          ) : results.length === 0 ? (
             <div
               style={{ padding: 'var(--space-6)', textAlign: 'center', color: 'var(--text-muted)' }}
             >
