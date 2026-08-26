@@ -114,7 +114,7 @@
 
 ### M3: Patuhi Law 004/005 & spec 19/20/21
 
-> **Status M3: ✅ SELESAI sebagian — 9/12 item selesai. Sisa: AI-4 full validation, PromptEntry history (deferred).**
+> **Status M3: 🔄 SEBAGIAN — 10/12 item selesai. Sisa: AI-4 formal schema validation (deferred), pipeline/renderer prompt migration (low).**
 
 | # | Audit ID | Masalah | Solusi | Status |
 |---|---|---|---|---|
@@ -127,7 +127,7 @@
 | 7 | AI-4 | Output validation tidak formal | Validasi skema/structured output sebelum dianggap sukses | ✅ `verifyCitations` + `validateToolArgs` sudah ada; formal schema deferred (low) |
 | 8 | AI-1 | Permission gate hanya di IPC, bukan middleware | Double-gate: cek `perms` di dalam `streamMessage`/`sendMessage` | ✅ double-gate di `runStreamInner` |
 | 9 | AI-6 | Capability detection kurang (reasoning/structured output) | Perluas `ProviderCapabilities` | ✅ `reasoning` + `structuredOutput` di 7 provider |
-| 10 | AI-11/13/14 | PromptEntry kurang field; versioning tanpa history; kategori prompt minim | Field Name/Author/Description/Status/LastUpdated; snapshot versi + rollback; kategori Writing/Research/Knowledge/Project/Task/Search/Automation/Agent | 🔶 sebagian — `planMode`/`subAgent` ditambah; field/history deferred (low, vault-editable) |
+| 10 | AI-11/13/14 | PromptEntry kurang field; versioning tanpa history; kategori prompt minim | Field Name/Author/Description/Status/LastUpdated; snapshot versi + rollback; kategori Writing/Research/Knowledge/Project/Task/Search/Automation/Agent | ✅ fields + categories + `snapshotPromptHistory`/`getPromptHistory`; UI rollback deferred (low) |
 | 11 | AI-22 | Export conversation tidak ada | `chat:export` (Markdown/JSON) | ✅ `exportConversation` + IPC `chat:export` |
 | 12 | AI-2 | Timeout hardcoded | Ambil dari settings/ProviderConfig, fallback default | ✅ `STREAM_TIMEOUT_MS` via `settings.aiStreamTimeoutMs` |
 
@@ -331,14 +331,14 @@ Prioritas berdasar dampak & ketergantungan. **M4a** = perbaikan klasifikasi (blo
 | 6 | SEC-2 | Backup protection tidak ada | Backup folder manual + checksum + restore point | ✅ `security/Backup.ts` + IPC backup:create/list + Settings UI; terjadwal deferred |
 | 7 | SEC-3 | Enkripsi hanya API keys AI | Terapkan ke env MCP (dengan MCP-3) | ✅ redaction; safeStorage deferred (env di disk tetap, tak terekspos ke renderer) |
 | 8 | SEC-4 | CSP lemah + sandbox off | Pisahkan dev/prod CSP (ADR-0007); verifikasi contextIsolation | ✅ prod tanpa unsafe-eval/inline |
-| 9 | API-1 | InternalAPI bukan kontrak | Migrasi bertahap handler ke InternalAPI (read-only dulu) | ⬜ |
+| 9 | API-1 | InternalAPI bukan kontrak | Migrasi bertahap handler ke InternalAPI (read-only dulu) | 🔶 plugins handler sudah via InternalAPI; search handler tipis; full migration bertahap |
 | 10 | API-2 | Versioning tidak nyata | Sinkronkan apiVersion dengan app | ✅ '2.0.0' |
 | 11 | API-3 | IPC tidak typed | Kurangi `any`; validasi bentuk di handler | 🔶 sebagian (MCP handlers divalidasi) |
 | 12 | API-4/5 | Error handling 3 gaya; type basi | Envelope `{ok,data?,error?}`; hapus resolveKerjaVault/openKerjaVault | ✅ type basi dihapus |
 | 13 | INS-1 | Tidak ada update system | electron-updater + publish config ATAU ADR non-goal | 📋 ADR-0013: adopsi di v2 |
 | 14 | INS-2 | Migrasi tanpa backup config | Snapshot sebelum migrasi + validasi hasil | ⬜ |
 | 15 | INS-3 | Uninstall tanpa pilihan | Custom NSIS page | ⬜ |
-| 16 | INS-4 | Tanpa checksum publik | Generate + publish sha256 per artifact | ⬜ |
+| 16 | INS-4 | Tanpa checksum publik | Generate + publish sha256 per artifact | ✅ SHA256SUMS di release workflow |
 | 17 | FST-1/2/3 | Struktur root tidak sesuai spec 32 | Sub-struktur Cache/Backups/Temp; pindah index.db ke Cache/ | ⬜ |
 
 **Verifikasi M8:** security test (MCP gate, secret leak), test backup/restore, test API kontrak, test installer (checksum hadir di release).
