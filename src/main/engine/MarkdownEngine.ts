@@ -592,7 +592,11 @@ export class MarkdownEngine {
     }
 
     const frontmatter = { ...(parsed.data as ParsedFrontmatter) }
-    // gray-matter/js-yaml may parse bare dates as Date objects — normalize for UI/index
+    // M7 M2 (ADR-0011): honor frontmatter `id` as the node identity when
+    // present and clean — rename-safe. Fallback stays the path hash.
+    const fmId = typeof frontmatter.id === 'string' ? frontmatter.id.trim() : ''
+    const canonicalId = fmId && /^[a-zA-Z0-9_-]{1,64}$/.test(fmId) ? fmId : generateId(filePath)
+    // for Date normalization
     for (const key of ['date', 'created', 'updated'] as const) {
       const v: unknown = frontmatter[key]
       if (Object.prototype.toString.call(v) === '[object Date]') {
@@ -609,7 +613,7 @@ export class MarkdownEngine {
     // Light: editor open — skip expensive scans (hangs on dense pegawai notes)
     if (opts?.light) {
       return {
-        id: generateId(filePath),
+        id: canonicalId,
         filePath,
         relativePath,
         title,
@@ -629,7 +633,7 @@ export class MarkdownEngine {
     const tags = Array.from(new Set([...fmTags, ...inlineTags]))
 
     return {
-      id: generateId(filePath),
+      id: canonicalId,
       filePath,
       relativePath,
       title,

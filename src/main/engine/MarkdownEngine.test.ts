@@ -284,6 +284,31 @@ describe('MarkdownEngine', () => {
       expect(html).toContain('[^missing]')
       expect(html).not.toContain('<section class="footnotes">')
     })
+
+    it('M7 M2 (ADR-0011): frontmatter id dipakai sebagai canonical id jika valid', () => {
+      const p = engine.parseFile(
+        '/vault/Notes/Renamed.md',
+        '---\nid: my-steady-id\ntitle: My Note\n---\n# Content',
+        '/vault'
+      )
+      expect(p.id).toBe('my-steady-id')
+    })
+
+    it('M7 M2: id tanpa frontmatter id tetap hash path', () => {
+      const p = engine.parseFile('/vault/Notes/Note.md', '# Note\n\nContent', '/vault')
+      // hash of /vault/notes/note.md (lowercased) — 24 hex chars
+      expect(p.id).toMatch(/^[0-9a-f]{24}$/)
+    })
+
+    it('M7 M2: id yang tidak valid (terlalu panjang, spasi) fallback ke hash', () => {
+      const p = engine.parseFile(
+        '/vault/Notes/X.md',
+        `---\nid: ${'a'.repeat(100)}\n---\n# X`,
+        '/vault'
+      )
+      expect(p.id).not.toBe('a'.repeat(100))
+      expect(p.id).toMatch(/^[0-9a-f]{24}$/)
+    })
   })
 
   describe('resolveWikiLink', () => {
