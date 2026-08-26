@@ -480,7 +480,19 @@ export const DashboardView: React.FC<{ onOpenSearch: () => void }> = ({ onOpenSe
     onClick: () => void,
     badge?: string
   ): React.JSX.Element => (
-    <div key={`${title}\u0000${sub}`} className="dash-list-item" onClick={onClick}>
+    <div
+      key={`${title}\u0000${sub}`}
+      className="dash-list-item"
+      role="button"
+      tabIndex={0}
+      onClick={onClick}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          onClick()
+        }
+      }}
+    >
       <div style={{ minWidth: 0 }}>
         <div className="dash-list-title truncate">{title}</div>
         <div className="dash-list-sub truncate">{sub}</div>

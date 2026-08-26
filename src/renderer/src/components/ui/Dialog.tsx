@@ -99,16 +99,51 @@ function DialogView({ dialog }: { dialog: ActiveDialog }): React.JSX.Element {
   const [value, setValue] = useState(dialog.initialValue ?? '')
   const inputRef = useRef<HTMLInputElement>(null)
   const okRef = useRef<HTMLButtonElement>(null)
+  const dialogRef = useRef<HTMLDivElement>(null)
+  const prevFocusRef = useRef<HTMLElement | null>(null)
   const { options, mode } = dialog
   const isPrompt = mode === 'prompt'
 
   useEffect(() => {
+    prevFocusRef.current = document.activeElement as HTMLElement | null
     const t = window.setTimeout(() => {
       if (isPrompt) inputRef.current?.focus()
       else okRef.current?.focus()
     }, 20)
-    return () => window.clearTimeout(t)
+    return () => {
+      window.clearTimeout(t)
+      // Restore focus to the element that opened the dialog
+      try {
+        prevFocusRef.current?.focus()
+      } catch {
+        /* ignore */
+      }
+    }
   }, [isPrompt, dialog])
+
+  // M5b UI-12: focus trap — Tab cycles within dialog
+  useEffect(() => {
+    const root = dialogRef.current
+    if (!root) return
+    const onKeyDown = (e: KeyboardEvent): void => {
+      if (e.key !== 'Tab') return
+      const focusable = root.querySelectorAll<HTMLElement>(
+        'button:not([disabled]), input:not([disabled]), [tabindex]:not([tabindex="-1"])'
+      )
+      if (focusable.length === 0) return
+      const first = focusable[0]
+      const last = focusable[focusable.length - 1]
+      if (e.shiftKey && document.activeElement === first) {
+        e.preventDefault()
+        last.focus()
+      } else if (!e.shiftKey && document.activeElement === last) {
+        e.preventDefault()
+        first.focus()
+      }
+    }
+    root.addEventListener('keydown', onKeyDown)
+    return () => root.removeEventListener('keydown', onKeyDown)
+  }, [])
 
   const cancel = (): void => close(isPrompt ? null : false)
   const submit = (): void => {
@@ -130,15 +165,25 @@ function DialogView({ dialog }: { dialog: ActiveDialog }): React.JSX.Element {
       }}
     >
       <div
+        ref={dialogRef}
         className="wg-dialog"
         role="dialog"
         aria-modal="true"
-        aria-label={options.title}
+        aria-labelledby="wg-dialog-title"
         onClick={(e) => e.stopPropagation()}
+        onKeyDown={(e) => {
+          if (e.key === 'Escape') {
+            e.preventDefault()
+            e.stopPropagation()
+            cancel()
+          }
+        }}
       >
         <div className={`wg-dialog-head ${options.danger ? 'danger' : ''}`}>
           <Icon name={headIcon} size={18} />
-          <span className="wg-dialog-title">{options.title}</span>
+          <span id="wg-dialog-title" className="wg-dialog-title">
+            {options.title}
+          </span>
         </div>
 
         {options.message && <p className="wg-dialog-msg">{options.message}</p>}

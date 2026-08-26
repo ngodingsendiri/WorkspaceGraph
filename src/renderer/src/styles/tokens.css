@@ -33,6 +33,19 @@
   --color-error-subtle: hsl(0, 60%, 12%);
   --color-info: hsl(210, 80%, 60%);
 
+  --color-secondary: hsl(240, 8%, 55%);
+  --color-secondary-hover: hsl(240, 8%, 65%);
+  --color-secondary-subtle: hsla(240, 8%, 55%, 0.12);
+
+  --opacity-disabled: 0.4;
+  --opacity-muted: 0.6;
+  --opacity-subtle: 0.75;
+  --opacity-strong: 0.9;
+
+  --border-w-thin: 1px;
+  --border-w-default: 1px;
+  --border-w-strong: 2px;
+
   --text-primary: hsl(240, 6%, 86%);
   --text-secondary: hsl(240, 5%, 65%);
   --text-muted: hsl(240, 4%, 45%);
@@ -114,6 +127,14 @@
   --text-xl: 1.25rem;
   --text-2xl: 1.5rem;
   --text-3xl: 1.875rem;
+
+  /* Semantic typography scale (Display/Heading/Title/Body/Caption/Mono) */
+  --text-display: var(--text-3xl);
+  --text-heading: var(--text-2xl);
+  --text-title: var(--text-xl);
+  --text-body: var(--text-base);
+  --text-caption: var(--text-xs);
+  --text-mono: var(--text-sm);
 
   --leading-tight: 1.25;
   --leading-normal: 1.5;
@@ -213,6 +234,10 @@
   --color-error: hsl(0, 70%, 45%);
   --color-error-subtle: hsla(0, 70%, 45%, 0.12);
   --color-info: hsl(210, 70%, 42%);
+
+  --color-secondary: hsl(220, 10%, 45%);
+  --color-secondary-hover: hsl(220, 10%, 38%);
+  --color-secondary-subtle: hsla(220, 10%, 45%, 0.12);
 
   --text-primary: hsl(220, 22%, 14%);
   --text-secondary: hsl(220, 12%, 36%);

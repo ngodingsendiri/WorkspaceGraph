@@ -55,8 +55,21 @@ const FileTreeItemNode = memo(function FileTreeItemNode({
       <div
         className={`file-tree-item ${isActive ? 'active' : ''} ${isInTrash ? 'is-trash' : ''}`}
         style={{ '--depth': depth } as React.CSSProperties}
+        role="button"
+        tabIndex={0}
+        aria-label={`${item.name}${item.isDirectory ? ' (folder)' : ''}`}
         onClick={handleClick}
         onContextMenu={(e) => onContextMenu(e, item)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault()
+            handleClick()
+          }
+          if (e.key === 'ContextMenu' || (e.shiftKey && e.key === 'F10')) {
+            e.preventDefault()
+            onContextMenu(e as unknown as React.MouseEvent, item)
+          }
+        }}
       >
         {item.isDirectory ? (
           <Icon
@@ -530,7 +543,7 @@ export const Sidebar: React.FC<{ onOpenSearch: () => void }> = ({ onOpenSearch }
         <div
           ref={menuRef}
           className="ctx-menu"
-          style={{ position: 'fixed', left: ctx.x, top: ctx.y, zIndex: 9999 }}
+          style={{ position: 'fixed', left: ctx.x, top: ctx.y, zIndex: 'var(--z-dropdown)' } as React.CSSProperties}
           onContextMenu={(e) => e.preventDefault()}
         >
           {(() => {
