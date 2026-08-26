@@ -73,6 +73,42 @@ jobs:
       - run: npm ci
       - run: npm run test:flaky
 
+  # M9 (TST-3): cross-platform gate — Windows path handling + safeStorage +
+  # native better-sqlite3 build only run on ubuntu otherwise; regressions
+  # surface at release time when they are most expensive to fix.
+  test-windows:
+    name: Unit Tests (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+      - run: npm ci
+      - run: npx vitest run
+
+  # M9 (TST-4): dependency vulnerability scan — blocks on known high/critical
+  # CVEs in the production dependency tree.
+  audit:
+    name: Security Audit (TST-4)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+      - run: npm ci
+      - name: Fail on high/critical vulnerabilities
+        run: npm audit --omit=dev --audit-level=high
+      - name: Secret leak sweep — API keys must never reach renderer-facing files
+        shell: bash
+        run: |
+          ! grep -rnE "(sk-[A-Za-z0-9]{20}|AIza[A-Za-z0-9_-]{30}|xai-[A-Za-z0-9]{20})" \
+            src/preload/ src/renderer/ --include='*.ts' --include='*.tsx' \
+          || { echo "::error::API key literal found in preload/renderer"; exit 1; }
+
   build:
     name: Build
     needs: [typecheck, lint, test, test-flaky]

@@ -14,6 +14,14 @@ export default defineConfig({
       provider: 'v8',
       reporter: ['text', 'json', 'html'],
       exclude: ['**/*.d.ts', '**/test/**', '**/workers/**', 'electron.vite.config.ts'],
+      // M9 (TST-6): soft floors — catch catastrophic coverage drops without
+      // blocking legitimate refactors. Raise gradually as coverage improves.
+      thresholds: {
+        lines: 40,
+        functions: 35,
+        statements: 40,
+        branches: 30
+      }
     },
     testTimeout: 30000,
     hookTimeout: 30000,
