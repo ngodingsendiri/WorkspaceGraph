@@ -141,17 +141,17 @@
 
 Prioritas berdasar dampak & ketergantungan. **M4a** = perbaikan klasifikasi (blokir semua), **M4b** = minimal viable management, **M4c** = fitur spesifikasi lanjutan.
 
-### M4a: Perbaikan klasifikasi & konsistensi (dulu — semua bergantung)
+### M4a: Perbaikan klasifikasi & konsistensi (dulu — semua bergantung) ✅ SELESAI (2026-08-26)
 
-| # | Audit ID | Masalah | Solusi |
-|---|---|---|---|
-| 1 | DOM-1 | Folder `Archive/` merusak klasifikasi → entitas hilang dari dashboard | Petakan `archive/` ke tipe asal ATAU hormati status `archived` di frontmatter (keputusan ADR-0012) |
-| 2 | DOM-6 | Ctrl+Shift+D error bila daily note sudah ada | Pakai `createFromTemplate`/open-existing seperti Dashboard |
-| 3 | DOM-7 | 3 struktur daily note berbeda (Dashboard/AppShell/TemplatePicker) | Satu jalur pembuatan daily terpusat |
-| 4 | DOM-11 | Context menu "Note baru" di folder Projects/Tasks/People buat type `note` | Deteksi folder → pilih template/type yang sesuai |
-| 5 | DOM-5 | Task `archived` dihitung open di dashboard, done di engine | Samakan semantik archived (DashboardView vs DomainEngine) |
-| 6 | DOM-12 | Priority task free-text | Enum Critical/High/Medium/Low + validasi |
-| 7 | CST-2 | `fileTypeFromPath` tidak petakan Journal/Rules/Prompt/Archive | Lengkapi pemetaan folder standar |
+| # | Audit ID | Masalah | Solusi | Status |
+|---|---|---|---|---|
+| 1 | DOM-1 | Folder `Archive/` merusak klasifikasi → entitas hilang dari dashboard | Petakan `archive/` ke tipe asal ATAU hormati status `archived` di frontmatter (keputusan ADR-0012) | ✅ `fileTypeFromPath` Archive/ → tipe asal + Journal/Rules/Prompt → knowledge |
+| 2 | DOM-6 | Ctrl+Shift+D error bila daily note sudah ada | Pakai `createFromTemplate`/open-existing seperti Dashboard | ✅ `AppShell.createDailyNote` via `createFromTemplate` |
+| 3 | DOM-7 | 3 struktur daily note berbeda (Dashboard/AppShell/TemplatePicker) | Satu jalur pembuatan daily terpusat | ✅ `AppShell` kini 1 jalur (`createFromTemplate` + fallback) |
+| 4 | DOM-11 | Context menu "Note baru" di folder Projects/Tasks/People buat type `note` | Deteksi folder → pilih template/type yang sesuai | ✅ `Sidebar.handleNewNote` deteksi folder → template/type |
+| 5 | DOM-5 | Task `archived` dihitung open di dashboard, done di engine | Samakan semantik archived (DashboardView vs DomainEngine) | ✅ `DashboardView` filter `archived` |
+| 6 | DOM-12 | Priority task free-text | Enum Critical/High/Medium/Low + validasi | ✅ `DomainEngine` normalisasi priority enum |
+| 7 | CST-2 | `fileTypeFromPath` tidak petakan Journal/Rules/Prompt/Archive | Lengkapi pemetaan folder standar | ✅ `fileTypeFromPath` + `Journal/Rules/Prompt` |
 
 ### M4b: Minimal viable management per sistem
 
