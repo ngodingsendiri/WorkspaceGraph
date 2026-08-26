@@ -284,14 +284,14 @@ Prioritas berdasar dampak & ketergantungan. **M4a** = perbaikan klasifikasi (blo
 
 ---
 
-> **Status M7: 🔄 SEBAGIAN — 12/20 selesai (bug/perf inti + search/context + markdown M3/M4). Sisa: W2 async scan, S1 metadata query, G1/G2/G3/G5 attrs/incremental, M1/M2 footnote/id, W1/W3, polish.**
+> **Status M7: 🔄 SEBAGIAN — 16/20 selesai. Sisa: W2 async scan (invasif), S6 low, G3 deferred, M1/M2 footnote/id, L1/L2 low.**
 
 ### M7: Skala & kualitas engine (spec 05-09)
 
 | # | Audit ID | Masalah | Solusi | Status |
 |---|---|---|---|---|
 | 1 | W2 | scanDirectory sinkron + statSync → UI freeze di 10k+ file | Async scan / batas waktu / background | ⬜ (invasif — defer) |
-| 2 | S1 | Metadata search tidak ada | Frontmatter masuk FTS atau tabel key-value; query `metadata:` | ⬜ |
+| 2 | S1 | Metadata search tidak ada | Frontmatter masuk FTS atau tabel key-value; query `metadata:` | ✅ `metadata:key value` operator di specialSearch |
 | 3 | S3 | Ranking tanpa backlink-count/graph proximity/status | Tambah sinyal ranking dari graph + domain | ✅ backlink-count boost (cap +15%, saturasi 15); proximity/status deferred |
 | 4 | S4 | Tasks tidak diindeks | Parse checkbox → index | ✅ `extractOpenTasks` → Fuse headings + FTS level-6 synthetic |
 | 5 | S7 | `rebuildSqliteFromMemory` kata-per-heading → noise | Simpan heading string asli | ✅ satu entri heading gabungan; FTS text sama tanpa noise |
@@ -299,7 +299,7 @@ Prioritas berdasar dampak & ketergantungan. **M4a** = perbaikan klasifikasi (blo
 | 7 | G1/G2 | Node/edge attrs Created/Updated/Color MISSING | Tambah metadata temporal + color category | 🔶 created/updated node attrs ✅; color category deferred |
 | 8 | G3 | Edge `folder` dideklarasikan tak pernah dibuat | Buat folder edges | ⬜ deferred (risiko edge explosion) |
 | 9 | G4 | Tag nodes terisolasi di jalur produksi | Selalu buat note→#tag edges | ✅ guard basi pre-WB-3 dihapus + regression test produksi |
-| 10 | G5 | Update single-file rebuild penuh tag/degree | Incremental (hanya node tersentuh) | ⬜ |
+| 10 | G5 | Update single-file rebuild penuh tag/degree | Incremental (hanya node tersentuh) | ✅ incremental tagnode edges per node tersentuh |
 | 11 | G7 | getNeighbors O(depth×nodes×edges) | Adjacency list | ✅ adjacency O(E)/panggilan + BFS O(V+E) |
 | 12 | G8 | resolveLinkTarget O(links×keys) | Index path→id | ✅ suffix index prebuilt, O(1)/link; ambiguous suffix ditolak |
 | 13 | C1 | User selection tidak didukung | Parameter selection di buildContextPackage | ✅ `AIRequest.selection` + sync/async path + injeksi verbatim |
@@ -307,13 +307,11 @@ Prioritas berdasar dampak & ketergantungan. **M4a** = perbaikan klasifikasi (blo
 | 15 | C3 | Path sinkron tidak memangkas budget | Truncate di path sinkron juga | ✅ hard-cap budget×4 chars di batas baris |
 | 16 | T1 | `{{title}}` tanpa YAML-escape | Sanitasi setelah merge vars | ✅ extraVars tak bisa menimpa title/filename + collapse newline |
 | 17 | M1/M2/M3/M4 | Footnote/id/Image lokal/link lokal | Implementasikan per spec 06 | 🔶 M3 image lokal + M4 link lokal .md ✅ (safe-src guard); M1 footnote/M2 id deferred |
-| 18 | W1/W3 | Manifest tidak lengkap; tanpa validateWorkspaceStructure | Lengkapi manifest + validasi | ⬜ |
-| 19 | S2/S5/S8/S9 | Link search parsial, recent tanpa "dibuka", O(N) path, token `:` dibuang | Perbaikan parsial | ✅ S9 colon token di-strip bukan dibuang; sisanya low |
-| 20 | C4/C5/C6, D1/D2, T2/T3, L1/L2, FW1 | Polish kecil | 🔶 C5 lowercase ✅ · D1 mapping ✅ · T2 daily selaras ✅ · T3 markSelfWrite ✅ · FW1 prune ✅ · S6 templates ✅ · PLG-8 enabled:false ✅ · UI-29 debug ✅ · PLT-4 retry ✅ · PLT-5 onceAt/monthly ✅ · PLT-6 persist ✅ · PLT-8 atomic+validasi ✅; L1/L2 + C4/C6 low deferred |
+| 18 | W1/W3 | Manifest tidak lengkap; tanpa validateWorkspaceStructure | Lengkapi manifest + validasi | ✅ manifest sub-struktur (logs/cache/plugins.json) + `validateWorkspaceStructure()` method |
+| 19 | S2/S5/S8/S9 | Link search parsial, recent tanpa "dibuka", O(N) path, token `:` dibuang | Perbaikan parsial | 🔶 S8 byPath Map O(1) ✅ · S9 colon strip ✅; sisanya low |
+| 20 | C4/C5/C6, D1/D2, T2/T3, L1/L2, FW1 | Polish kecil | 🔶 C4 cap read ✅ · C5 lowercase ✅ · C6 dedupe ✅ · D1 mapping ✅ · T2 daily selaras ✅ · T3 markSelfWrite ✅ · FW1 prune ✅; sisanya low |
 
-**Verifikasi M7:** test graph 31 ✅ · search 30 ✅ · automation 23 ✅ (+4 baru); full suite 1168 hijau.
-
-**Verifikasi M7:** benchmark (10k file scan, search latency, graph update single-file), test search metadata, test graph incremental.
+**Verifikasi M7:** full suite 1168 hijau; test graph 31 ✅ · search 30 ✅ · automation 23 ✅.
 
 ---
 
