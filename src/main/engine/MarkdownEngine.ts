@@ -543,6 +543,34 @@ function renderMarkdownToHtml(content: string): string {
   // they were created AFTER the escape, so this pass only touches user text).
   html = html.replace(/\uE001/g, '\uE000').replace(/\uE000/g, '§')
 
+  // M7 M1: footnote rendering — `[^label]` inline refs + `[^label]: text` definitions.
+  // Two passes: (1) collect definitions, (2) replace inline refs with sup links,
+  // (3) append a footnotes <section> at the bottom if any refs were resolved.
+  {
+    const defs = new Map<string, string>()
+    html = html.replace(/<p>(\[\^([^\]]+)\]: .+?)<\/p>/g, (_m, def: string, label: string) => {
+      defs.set(label, def.replace(/^\[\^[^\]]+\]:\s*/, ''))
+      return '' // strip definition paragraph from body
+    })
+    if (defs.size > 0) {
+      let fnIdx = 0
+      const footnotes: string[] = []
+      html = html.replace(/\[\^([^\]]+)\]/g, (m, label: string) => {
+        const text = defs.get(label)
+        if (!text) return m // unresolvable → keep literal
+        fnIdx++
+        const anchor = `fn-${fnIdx}-${label.replace(/[^a-zA-Z0-9-]/g, '')}`
+        footnotes.push(
+          `<li id="${anchor}">${escapeHtml(text)}</li>`
+        )
+        return `<sup class="footnote-ref"><a href="#${anchor}">[${fnIdx}]</a></sup>`
+      })
+      if (footnotes.length > 0) {
+        html += `\n<section class="footnotes"><hr><ol>${footnotes.join('\n')}</ol></section>`
+      }
+    }
+  }
+
   return html
 }
 

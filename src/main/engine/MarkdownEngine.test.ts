@@ -266,6 +266,23 @@ describe('MarkdownEngine', () => {
       expect(html).toContain('data-target="Notes/Catatan.md"')
       expect(html).toContain('>Catatan<')
     })
+
+    it('M7 M1: footnote refs + definitions render sebagai sup links + section', () => {
+      const md = 'Text with a note[^1] and another[^note].\n\n[^1]: First footnote\n[^note]: Named footnote'
+      const html = engine.renderToHtml(md)
+      expect(html).toContain('<sup class="footnote-ref">')
+      expect(html).toContain('<section class="footnotes">')
+      expect(html).toContain('First footnote')
+      expect(html).toContain('Named footnote')
+      // Definitions stripped from body
+      expect(html).not.toContain('[^1]:')
+    })
+
+    it('M7 M1: unresolvable footnote refs tetap literal', () => {
+      const html = engine.renderToHtml('Ref [^missing] without definition.')
+      expect(html).toContain('[^missing]')
+      expect(html).not.toContain('<section class="footnotes">')
+    })
   })
 
   describe('resolveWikiLink', () => {
