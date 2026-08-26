@@ -474,8 +474,9 @@ export const DashboardView: React.FC<{ onOpenSearch: () => void }> = ({ onOpenSe
     </div>
   )
 
-  const openTasks = (domain?.tasks.filter((t) => t.status !== 'done' && t.status !== 'completed') ||
-    []) as DomainOverview['tasks']
+  const openTasks = (domain?.tasks.filter(
+    (t) => t.status !== 'done' && t.status !== 'completed' && t.status !== 'archived'
+  ) || []) as DomainOverview['tasks']
 
   return (
     <div className="dashboard-view">

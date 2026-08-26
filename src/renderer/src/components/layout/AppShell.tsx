@@ -139,28 +139,37 @@ export const AppShell: React.FC = () => {
   const createDailyNote = useCallback(async () => {
     if (!rootPath) return
     const today = new Date().toISOString().split('T')[0]
+    try {
+      const res = await window.api.createFromTemplate({
+        templateId: 'builtin-daily',
+        title: today
+      })
+      if (res.ok && res.path) {
+        await fetchState()
+        await openTab(res.path)
+        setActiveView('editor')
+        return
+      }
+      if (res.path) {
+        await fetchState()
+        await openTab(res.path)
+        setActiveView('editor')
+        return
+      }
+    } catch (err) {
+      console.error('Daily note via template failed:', err)
+    }
+    // Fallback: manual creation
     const sep = rootPath.includes('\\') ? '\\' : '/'
     const filePath = `${rootPath}${sep}Daily${sep}${today}.md`
-    const content = `---
-title: ${today}
-type: daily
-date: ${today}
----
-
-# ${today}
-
-## Today's Focus
-
-
-## Notes
-
-
-## Tasks
-
-- [ ] 
-
-`
-    await window.api.createFile(filePath, content)
+    try {
+      await window.api.createFile(
+        filePath,
+        `---\ntitle: ${today}\ntype: daily\ndate: ${today}\n---\n\n# ${today}\n\n## Focus\n\n- [ ] \n`
+      )
+    } catch {
+      /* already exists — open it */
+    }
     await fetchState()
     await openTab(filePath)
     setActiveView('editor')

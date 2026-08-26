@@ -155,7 +155,62 @@ export const Sidebar: React.FC<{ onOpenSearch: () => void }> = ({ onOpenSearch }
     const stamp = Date.now().toString().slice(-4)
     const title = `Note-${stamp}`
     const filePath = `${base}${base.includes('\\') ? '\\' : '/'}${title}.md`
-    await window.api.createFile(filePath, noteTemplate(title, 'knowledge'))
+    // M4a DOM-11: detect folder → use the matching template/type instead of
+    // always 'knowledge' (otherwise Projects/Tasks/People notes are
+    // misclassified as knowledge/other in DomainEngine).
+    const lowerBase = base.toLowerCase().replace(/\\/g, '/')
+    let templateId: string | null = null
+    let noteType = 'knowledge'
+    if (lowerBase.includes('/projects')) {
+      templateId = 'builtin-project'
+      noteType = 'project'
+    } else if (lowerBase.includes('/tasks')) {
+      templateId = 'builtin-task'
+      noteType = 'task'
+    } else if (lowerBase.includes('/people')) {
+      templateId = 'builtin-people'
+      noteType = 'people'
+    } else if (lowerBase.includes('/daily')) {
+      templateId = 'builtin-daily'
+      noteType = 'daily'
+    } else if (lowerBase.includes('/documents')) {
+      templateId = 'builtin-document'
+      noteType = 'document'
+    } else if (lowerBase.includes('/sop')) {
+      templateId = 'builtin-sop'
+      noteType = 'sop'
+    }
+    if (templateId) {
+      try {
+        const res = await window.api.createFromTemplate({ templateId, title })
+        if (res.ok && res.path) {
+          // Move to the requested folder if template created elsewhere
+          const expectedDir = base.replace(/\\/g, '/').toLowerCase()
+          const actualDir = res.path.replace(/\\/g, '/').toLowerCase()
+          if (!actualDir.startsWith(expectedDir)) {
+            const newPath = `${base}${base.includes('\\') ? '\\' : '/'}${title}.md`
+            try {
+              await window.api.createFile(newPath, await window.api.readFile(res.path).then((d: { content: string }) => d.content))
+            } catch {
+              /* fallback: open template location */
+              await fetchState()
+              await openTab(res.path)
+              setActiveView('editor')
+              setCtx(null)
+              return
+            }
+          }
+          await fetchState()
+          await openTab(res.path)
+          setActiveView('editor')
+          setCtx(null)
+          return
+        }
+      } catch {
+        /* fallback to direct create */
+      }
+    }
+    await window.api.createFile(filePath, noteTemplate(title, noteType))
     await fetchState()
     await openTab(filePath)
     setActiveView('editor')

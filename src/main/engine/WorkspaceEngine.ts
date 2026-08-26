@@ -106,7 +106,12 @@ const STANDARD_FOLDERS = [
 ]
 
 function fileTypeFromPath(filePath: string, rootPath: string): WorkspaceFile['type'] {
-  const lower = path.relative(rootPath, filePath).toLowerCase().replace(/\\/g, '/')
+  let lower = path.relative(rootPath, filePath).toLowerCase().replace(/\\/g, '/')
+  // M4a DOM-1 (ADR-0012): Archive/ is not a type — strip it and resolve the
+  // segment after it (e.g. Archive/Projects/foo.md → project). Archived items
+  // keep their domain type; lifecycle is status frontmatter, not folder.
+  if (lower.startsWith('archive/')) lower = lower.slice(8)
+  else if (lower.includes('/archive/')) lower = lower.replace('/archive/', '/')
   if (lower.startsWith('knowledge') || lower.includes('/knowledge/')) return 'knowledge'
   if (lower.startsWith('projects') || lower.includes('/projects/')) return 'project'
   if (lower.startsWith('tasks') || lower.includes('/tasks/')) return 'task'
@@ -115,6 +120,10 @@ function fileTypeFromPath(filePath: string, rootPath: string): WorkspaceFile['ty
   if (lower.startsWith('documents') || lower.includes('/documents/')) return 'document'
   if (lower.startsWith('people') || lower.includes('/people/')) return 'people'
   if (lower.startsWith('sop') || lower.includes('/sop/')) return 'sop'
+  // M4a CST-2: map remaining standard folders that were previously 'other'
+  if (lower.startsWith('journal') || lower.includes('/journal/')) return 'knowledge'
+  if (lower.startsWith('rules') || lower.includes('/rules/')) return 'knowledge'
+  if (lower.startsWith('prompt') || lower.includes('/prompt/')) return 'knowledge'
   return 'other'
 }
 

@@ -135,7 +135,16 @@ export class DomainEngine {
     for (const file of this.cache) {
       const type = typeFromParsed(file)
       const status = String(file.frontmatter.status || '').toLowerCase() || undefined
-      const priority = String(file.frontmatter.priority || '').toLowerCase() || undefined
+      // M4a DOM-12: normalize priority to the spec enum; unknown values fall
+      // back to undefined so the dashboard does not display misleading badges.
+      const rawPriority = String(file.frontmatter.priority || '').toLowerCase()
+      const priority =
+        rawPriority === 'critical' ||
+        rawPriority === 'high' ||
+        rawPriority === 'medium' ||
+        rawPriority === 'low'
+          ? rawPriority
+          : undefined
       const boxes = parseCheckboxes(file.content, file.title, file.filePath)
       const open = boxes.filter((b) => !b.done).length
       const done = boxes.filter((b) => b.done).length
