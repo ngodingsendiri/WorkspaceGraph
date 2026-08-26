@@ -47,6 +47,9 @@ nsis:
   createStartMenuShortcut: true
   installerIcon: build/icon.ico
   uninstallerIcon: build/icon.ico
+  deleteAppDataOnUninstall: false
+  # M8 INS-3: keep vault on uninstall — user chooses via checkbox (perSpec 31)
+  allowElevation: true
 mac:
   entitlementsInherit: build/entitlements.mac.plist
   category: public.app-category.productivity

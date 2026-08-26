@@ -448,9 +448,9 @@ export class WorkspaceEngine {
   }
 
   private initializeWorkspaceStructure(workspacePath: string): void {
-    // M7 W1: create the manifest sub-structure per spec 05
+    // M7 W1 + M8 FST-1/2: create the manifest sub-structure per spec 05/32
     const cfgDir = path.join(workspacePath, '.workspacegraph')
-    for (const sub of ['logs', 'cache']) {
+    for (const sub of ['logs', 'cache', 'backups', 'temp']) {
       const p = path.join(cfgDir, sub)
       if (!fs.existsSync(p)) fs.mkdirSync(p, { recursive: true })
     }
@@ -808,6 +808,16 @@ export class WorkspaceEngine {
   private migrateSettings(raw: Record<string, unknown>): Record<string, unknown> {
     const version = (raw.version as number) || 0
     if (version >= SETTINGS_VERSION) return raw
+
+    // M8 INS-2: snapshot before migration — rollback if new version breaks
+    try {
+      const backupPath = path.join(this.configDir, `settings.backup-v${version}.json`)
+      if (!fs.existsSync(backupPath)) {
+        fs.writeFileSync(backupPath, JSON.stringify(raw, null, 2), 'utf-8')
+      }
+    } catch {
+      /* backup best-effort */
+    }
 
     const migrated = { ...raw }
 

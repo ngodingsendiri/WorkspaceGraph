@@ -69,7 +69,19 @@ export class IndexDatabase {
       const Database = require('better-sqlite3') as new (path: string) => SqliteDb
       const dir = path.join(workspaceRoot, '.workspacegraph')
       if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
-      this.dbPath = path.join(dir, 'index.db')
+      // M8 FST-1/2: index.db lives in cache/ (disposable) — migrate old location
+      const cacheDir = path.join(dir, 'cache')
+      if (!fs.existsSync(cacheDir)) fs.mkdirSync(cacheDir, { recursive: true })
+      const oldPath = path.join(dir, 'index.db')
+      const newPath = path.join(cacheDir, 'index.db')
+      if (!fs.existsSync(newPath) && fs.existsSync(oldPath)) {
+        try {
+          fs.renameSync(oldPath, newPath)
+        } catch {
+          fs.copyFileSync(oldPath, newPath)
+        }
+      }
+      this.dbPath = newPath
       this.db = new Database(this.dbPath)
       this.db.pragma('journal_mode = WAL')
       this.db.pragma('synchronous = NORMAL')
