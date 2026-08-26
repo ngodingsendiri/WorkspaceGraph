@@ -2,6 +2,7 @@ import { ipcMain } from 'electron'
 import { mcpManager, type McpServerConfig } from '../../mcp/McpClientManager'
 import { workspaceEngine } from '../../engine/WorkspaceEngine'
 import { readPermissions } from '../../security/Permissions'
+import { logAudit } from '../../security/AuditLog'
 
 /**
  * R0-1 — MCP server registry IPC. Settings → MCP drives these; the agent side
@@ -52,6 +53,12 @@ export function registerMcpHandlers(): void {
       return { ok: false, error: 'Invalid payload: expected an array of servers' }
     }
     if (!mcpAllowed()) {
+      // M8.5 (SEC-1): denied MCP config writes are audited
+      logAudit({
+        kind: 'permission_denied',
+        target: 'mcp:saveServers',
+        status: 'denied'
+      })
       return { ok: false, error: 'MCP dinonaktifkan — aktifkan AI Tools di Settings → Security' }
     }
     // Merge: keep the REAL env of existing servers; honor new env from the
@@ -68,6 +75,12 @@ export function registerMcpHandlers(): void {
     })
     const res = mcpManager.saveServers(merged)
     if (!res.ok) return { ok: false, error: res.error }
+    // M8.5 (SEC-1): MCP config changes spawn processes — always audited
+    logAudit({
+      kind: 'mcp_config_changed',
+      target: merged.map((s) => s.id).join(','),
+      status: 'ok'
+    })
     const statuses = await mcpManager.ensureConnected().catch(() => mcpManager.getStatus())
     return { ok: true, statuses }
   })

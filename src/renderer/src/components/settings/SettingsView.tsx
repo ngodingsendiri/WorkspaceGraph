@@ -154,6 +154,10 @@ export const SettingsView: React.FC = () => {
   const keyInputRefs = useRef<Record<string, HTMLInputElement | null>>({})
   const [savedStatus, setSavedStatus] = useState('')
   const [theme, setTheme] = useState<ThemePreference>(() => getCachedThemePref())
+  // M8.6 (SEC-2): existing backups shown in the Backup section
+  const [backupList, setBackupList] = useState<{ name: string; dir: string; createdAt: string }[]>(
+    []
+  )
   const [section, setSection] = useState<Section>('ai')
   const [indexStats, setIndexStats] = useState<{
     memoryCount: number
@@ -1701,68 +1705,115 @@ export const SettingsView: React.FC = () => {
           </div>
         )}
 
-        {section === 'backup' && (
-          <div className="settings-section">
-            <h2>Backup & Restore</h2>
-            <p
-              style={{
-                fontSize: 'var(--text-sm)',
-                color: 'var(--text-muted)',
-                marginBottom: 'var(--space-3)'
-              }}
-            >
-              Cadangan & pemulihan data workspace.
-            </p>
-            <div className="settings-row">
-              <div>
-                <div style={{ fontWeight: 600 }}>Backup vault</div>
-                <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
-                  Salin folder vault secara manual — semua data adalah Markdown + .workspacegraph.
+        {section === 'backup' &&
+          (() => {
+            // Load backup list each time the section opens
+            void window.api.listBackups().then((list) => setBackupList(list || []))
+            return (
+              <div className="settings-section">
+                <h2>Backup & Restore</h2>
+                <p
+                  style={{
+                    fontSize: 'var(--text-sm)',
+                    color: 'var(--text-muted)',
+                    marginBottom: 'var(--space-3)'
+                  }}
+                >
+                  Cadangan & pemulihan data workspace.
+                </p>
+                <div className="settings-row">
+                  <div>
+                    <div style={{ fontWeight: 600 }}>Backup vault</div>
+                    <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
+                      Salin seluruh data vault (Markdown + config) ke .workspacegraph/backups/
+                      dengan checksum sha256.
+                    </div>
+                  </div>
+                  <button
+                    className="btn btn-sm btn-surface"
+                    onClick={async () => {
+                      try {
+                        const res = await window.api.createBackup()
+                        if (res.ok) {
+                          flash(
+                            `Backup dibuat — ${res.files} file (${Math.round((res.bytes ?? 0) / 1024)} KB)`
+                          )
+                        } else {
+                          flash(res.error || 'Backup gagal')
+                        }
+                      } catch (err) {
+                        flash(err instanceof Error ? err.message : String(err))
+                      }
+                    }}
+                  >
+                    Buat backup
+                  </button>
                 </div>
-              </div>
-              <span className="badge">Manual</span>
-            </div>
-            <div className="settings-row">
-              <div>
-                <div style={{ fontWeight: 600 }}>Export settings</div>
-                <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
-                  Pengaturan tersimpan di userData/workspacegraph/settings.json
+                <div className="settings-row">
+                  <div>
+                    <div style={{ fontWeight: 600 }}>Export settings</div>
+                    <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
+                      Pengaturan tersimpan di userData/workspacegraph/settings.json
+                    </div>
+                  </div>
+                  <button
+                    className="btn btn-sm btn-surface"
+                    onClick={async () => {
+                      try {
+                        const s = await window.api.getSettings()
+                        const blob = new Blob([JSON.stringify(s, null, 2)], {
+                          type: 'application/json'
+                        })
+                        const url = URL.createObjectURL(blob)
+                        const a = document.createElement('a')
+                        a.href = url
+                        a.download = 'workspacegraph-settings.json'
+                        a.click()
+                        URL.revokeObjectURL(url)
+                        flash('Settings diekspor')
+                      } catch (err) {
+                        flash(err instanceof Error ? err.message : String(err))
+                      }
+                    }}
+                  >
+                    Export
+                  </button>
                 </div>
-              </div>
-              <button
-                className="btn btn-sm btn-surface"
-                onClick={async () => {
-                  try {
-                    const s = await window.api.getSettings()
-                    const blob = new Blob([JSON.stringify(s, null, 2)], {
-                      type: 'application/json'
-                    })
-                    const url = URL.createObjectURL(blob)
-                    const a = document.createElement('a')
-                    a.href = url
-                    a.download = 'workspacegraph-settings.json'
-                    a.click()
-                    URL.revokeObjectURL(url)
-                    flash('Settings diekspor')
-                  } catch (err) {
-                    flash(err instanceof Error ? err.message : String(err))
-                  }
-                }}
-              >
-                Export
-              </button>
-            </div>
-            <div className="settings-row">
-              <div>
-                <div style={{ fontWeight: 600 }}>Restore point</div>
-                <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
-                  Backup otomatis terjadwal — tersedia di versi mendatang (M8).
+                <div className="settings-row">
+                  <div>
+                    <div style={{ fontWeight: 600 }}>Restore point</div>
+                    <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
+                      Backup otomatis terjadwal — tersedia di versi mendatang (M8).
+                    </div>
+                  </div>
+                  <span className="badge">Soon</span>
                 </div>
+                {backupList.length > 0 && (
+                  <div
+                    className="settings-row"
+                    style={{ flexDirection: 'column', alignItems: 'stretch' }}
+                  >
+                    <div style={{ fontWeight: 600, marginBottom: 6 }}>
+                      Backup tersedia ({backupList.length})
+                    </div>
+                    {backupList.slice(0, 5).map((b) => (
+                      <div
+                        key={b.name}
+                        style={{
+                          fontSize: 'var(--text-xs)',
+                          color: 'var(--text-muted)',
+                          padding: '2px 0',
+                          fontFamily: 'var(--font-monospace)'
+                        }}
+                      >
+                        {b.name}
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
-              <span className="badge">Soon</span>
-            </div>
-          </div>
-        )}
+            )
+          })()}
 
         {section === 'automation' && (
           <div className="settings-section">

@@ -527,6 +527,16 @@ export interface API {
 
   getSettings: () => Promise<any>
   saveSettings: (settings: Record<string, any>) => Promise<boolean>
+  // M8.6 (SEC-2)
+  createBackup: () => Promise<{
+    ok: boolean
+    dir?: string
+    files?: number
+    bytes?: number
+    checksum?: string
+    error?: string
+  }>
+  listBackups: () => Promise<{ name: string; dir: string; createdAt: string }[]>
 
   setTitleBarTheme: (mode: 'dark' | 'light') => Promise<boolean>
 }

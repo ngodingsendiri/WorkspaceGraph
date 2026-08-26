@@ -341,6 +341,10 @@ const api = {
   saveSettings: (settings: Record<string, unknown>) =>
     ipcRenderer.invoke('settings:save', settings),
 
+  // M8.6 (SEC-2): manual vault backup
+  createBackup: () => ipcRenderer.invoke('backup:create'),
+  listBackups: () => ipcRenderer.invoke('backup:list'),
+
   // Window chrome (title bar overlay colors for light/dark)
   setTitleBarTheme: (mode: 'dark' | 'light') => ipcRenderer.invoke('window:setTitleBarTheme', mode)
 }

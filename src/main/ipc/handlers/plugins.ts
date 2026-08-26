@@ -4,6 +4,7 @@ import { pluginHost } from '../../plugin/PluginHost'
 import { InternalAPI } from '../../api/InternalAPI'
 import { readPermissions } from '../../security/Permissions'
 import { isEncryptedForm, decryptSecret } from '../../security/SecretsStore'
+import { logAudit } from '../../security/AuditLog'
 
 export function registerPluginsHandlers(): void {
   ipcMain.handle('plugins:list', async () => {
@@ -20,6 +21,8 @@ export function registerPluginsHandlers(): void {
     const perms = readPermissions(workspaceEngine.getSettings())
     pluginHost.setAllowed(perms.plugins)
     pluginHost.load(root)
+    // M8.5 (SEC-1): plugin load is security-relevant (code entering the app)
+    logAudit({ kind: 'plugin_loaded', target: `${pluginHost.list().length} plugins`, status: 'ok' })
     return { ok: true, count: pluginHost.list().length }
   })
 
@@ -27,13 +30,29 @@ export function registerPluginsHandlers(): void {
     'plugins:runCommand',
     async (_, payload: { pluginId: string; commandId: string; args?: Record<string, unknown> }) => {
       const perms = readPermissions(workspaceEngine.getSettings())
-      if (!perms.plugins) return { ok: false, error: 'Plugin permission disabled' }
+      if (!perms.plugins) {
+        // M8.5 (SEC-1): denied execution attempts are audited
+        logAudit({
+          kind: 'permission_denied',
+          target: `plugins:runCommand ${payload?.pluginId}/${payload?.commandId}`,
+          status: 'denied'
+        })
+        return { ok: false, error: 'Plugin permission disabled' }
+      }
+      // M8.5 (SEC-1): every plugin command invocation is audited
+      logAudit({
+        kind: 'plugin_command',
+        target: `${payload?.pluginId}/${payload?.commandId}`,
+        status: 'ok'
+      })
       return pluginHost.runCommand(payload.pluginId, payload.commandId, payload.args || {})
     }
   )
 
   ipcMain.handle('plugins:revoke', async (_, pluginId: string) => {
     pluginHost.revokePermissions(pluginId)
+    // M8.5 (SEC-1): permission revocation is audited
+    logAudit({ kind: 'plugin_permission_revoked', target: pluginId, status: 'ok' })
     return { ok: true }
   })
 

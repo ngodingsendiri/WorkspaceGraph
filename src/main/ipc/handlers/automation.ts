@@ -2,6 +2,7 @@ import { ipcMain } from 'electron'
 import { workspaceEngine } from '../../engine/WorkspaceEngine'
 import { automationEngine, AutomationEngine } from '../../engine/AutomationEngine'
 import { readPermissions } from '../../security/Permissions'
+import { logAudit } from '../../security/AuditLog'
 
 export function registerAutomationHandlers(): void {
   ipcMain.handle('automation:get', async () => {
@@ -19,6 +20,8 @@ export function registerAutomationHandlers(): void {
     const errs = AutomationEngine.validateConfig(config as never)
     if (errs.length > 0) return { ok: false, error: errs.join('; ') }
     automationEngine.save(config as never)
+    // M8.5 (SEC-1): automation config changes are audited
+    logAudit({ kind: 'automation_config_changed', status: 'ok' })
     return { ok: true }
   })
 
