@@ -24,12 +24,34 @@ import { workspaceEngine } from '../engine/WorkspaceEngine'
 import { atomicWriteJson } from '../utils/quarantine'
 
 export type PromptId = 'kernel' | 'bootstrap' | 'toolsHead' | 'toolsTail' | 'planMode' | 'subAgent'
-export type PromptCategory = 'system' | 'user'
+
+/** M3 AI-11/14: prompt categories per spec 19 */
+export type PromptCategory =
+  | 'system'
+  | 'user'
+  | 'writing'
+  | 'research'
+  | 'knowledge'
+  | 'project'
+  | 'task'
+  | 'search'
+  | 'automation'
+  | 'agent'
 
 export interface PromptEntry {
   version: number
   category: PromptCategory
   template: string
+  /** M3 AI-11: human-readable name */
+  name?: string
+  /** M3 AI-11: author of the prompt */
+  author?: string
+  /** M3 AI-11: what the prompt does */
+  description?: string
+  /** M3 AI-11/13: lifecycle status */
+  status?: 'active' | 'deprecated' | 'draft'
+  /** M3 AI-11: last updated ISO date */
+  lastUpdated?: string
 }
 
 const nowIsoDate = (): string => new Date().toISOString().split('T')[0]
@@ -39,6 +61,9 @@ export const PROMPT_DEFAULTS: Record<PromptId, PromptEntry> = {
   kernel: {
     version: 1,
     category: 'system',
+    name: '',
+    author: 'WorkspaceGraph',
+    status: 'active' as const,
     template: `## WorkspaceGraph AI Kernel
 
 You are the **workspace kernel assistant** — not a generic chatbot.
@@ -52,6 +77,9 @@ You are the **workspace kernel assistant** — not a generic chatbot.
   bootstrap: {
     version: 1,
     category: 'user',
+    name: '',
+    author: 'WorkspaceGraph',
+    status: 'active' as const,
     template: `Mode: **PELAJARI WORKSPACE** (bootstrap memori).
 
 Tugasmu:
@@ -73,6 +101,9 @@ Mulai sekarang: list_dir root, lalu baca AI Memory/00 Index.md.`
   toolsHead: {
     version: 1,
     category: 'system',
+    name: '',
+    author: 'WorkspaceGraph',
+    status: 'active' as const,
     template: `
 ## Workspace Tools (AI Kernel)
 
@@ -88,6 +119,9 @@ Available tools:
   toolsTail: {
     version: 1,
     category: 'system',
+    name: '',
+    author: 'WorkspaceGraph',
+    status: 'active' as const,
     template: `
 
 Memory / graph rules:
@@ -102,6 +136,9 @@ Memory / graph rules:
   planMode: {
     version: 1,
     category: 'system',
+    name: '',
+    author: 'WorkspaceGraph',
+    status: 'active' as const,
     template: `[PLAN MODE — R1-3]
 Anda dalam PLAN MODE: JANGAN panggil tool tulis (write_note/append_note/create_note/create_from_template) atau MCP write.
 Kerjakan: (1) ANALISIS singkat situasi, (2) daftar LANGKAH implementasi bernomor, (3) panggil create_plan {title, goal, steps} sebagai langkah TERAKHIR agar rencana menjadi proposal yang bisa ditinjau user.
@@ -110,6 +147,9 @@ Tulis seluruh analisis SEBELUM create_plan — stream berhenti setelah proposal 
   subAgent: {
     version: 1,
     category: 'system',
+    name: '',
+    author: 'WorkspaceGraph',
+    status: 'active' as const,
     template: `[Sub-agent — {{role}}]
 Anda adalah sub-agent dengan peran "{{role}}" yang didelegasikan oleh agent utama. Selesaikan tugas di atas menggunakan tool yang tersedia. Balas HANYA dengan hasil kerja Anda — tanpa basa-basi, tanpa mengulang isi tugas.`
   }
@@ -130,6 +170,43 @@ export function promptsDir(root: string): string {
 
 export function promptsFilePath(root: string): string {
   return path.join(promptsDir(root), 'prompts.json')
+}
+
+/**
+ * M3 AI-13: save a version snapshot before overwriting — enables rollback.
+ * Snapshots stored as prompts.history.json (bounded to last 10 versions per id).
+ */
+export function snapshotPromptHistory(root: string, id: PromptId, entry: PromptEntry): void {
+  const histFile = path.join(promptsDir(root), 'prompts.history.json')
+  let history: Record<string, PromptEntry[]> = {}
+  try {
+    if (fs.existsSync(histFile)) {
+      history = JSON.parse(fs.readFileSync(histFile, 'utf-8'))
+    }
+  } catch {
+    /* corrupt history → fresh */
+  }
+  if (!history[id]) history[id] = []
+  history[id].push({ ...entry, lastUpdated: new Date().toISOString() })
+  // Keep last 10 versions per prompt
+  if (history[id].length > 10) history[id] = history[id].slice(-10)
+  try {
+    atomicWriteJson(histFile, history)
+  } catch {
+    /* best-effort */
+  }
+}
+
+/** M3 AI-13: list version snapshots for a prompt id. */
+export function getPromptHistory(root: string, id: PromptId): PromptEntry[] {
+  const histFile = path.join(promptsDir(root), 'prompts.history.json')
+  try {
+    if (!fs.existsSync(histFile)) return []
+    const all = JSON.parse(fs.readFileSync(histFile, 'utf-8'))
+    return all[id] || []
+  } catch {
+    return []
+  }
 }
 
 /**

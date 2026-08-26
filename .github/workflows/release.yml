@@ -168,10 +168,17 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
-      - name: Publish release with installers
+      # M8 INS-4: generate sha256 checksums for all artifacts before publishing
+      - name: Generate checksums
+        run: |
+          cd artifacts
+          find . -type f \( -name '*.exe' -o -name '*.dmg' \) -exec sha256sum {} \; | sed 's|artifacts/||' > SHA256SUMS
+          cat SHA256SUMS
+      - name: Publish release with installers + checksums
         uses: softprops/action-gh-release@v2
         with:
           files: |
             artifacts/installer-win/*
             artifacts/installer-mac/*
-          generate_release_notes: true
+            artifacts/SHA256SUMS
+        generate_release_notes: true
