@@ -18,6 +18,7 @@ import { workspaceEngine } from '../engine/WorkspaceEngine'
 import { searchEngine } from '../engine/SearchEngine'
 import { graphEngine } from '../engine/GraphEngine'
 import { automationEngine } from '../engine/AutomationEngine'
+import { domainEngine } from '../engine/DomainEngine'
 import { resolveVaultRelative } from '../security/PathSandbox'
 import { scrubSettingsSecrets } from '../security/SecretsStore'
 
@@ -52,6 +53,8 @@ export interface JsPluginProviders {
   runRule(id: string): { ok: boolean; error?: string }
   getSetting(key: string): unknown
   notify(message: string): void
+  /** M6b PLG-5: domain read-only access (projects/tasks/people/knowledge) */
+  domainList(type: 'project' | 'task' | 'people' | 'knowledge'): unknown
 }
 
 export interface PermissionGate {
@@ -96,6 +99,10 @@ export const defaultProviders: JsPluginProviders = {
   getSetting: (key) => {
     const scrubbed = scrubSettingsSecrets(workspaceEngine.getSettings())
     return scrubbed[key]
+  },
+  domainList: (type) => {
+    // M6b PLG-5: read-only domain listing (projects/tasks/people/knowledge)
+    return domainEngine.listByType(type)
   },
   notify: (message) => {
     for (const win of BrowserWindow.getAllWindows()) {
@@ -172,6 +179,7 @@ const OP_MANIFEST_PERM: Record<string, string | undefined> = {
   'graph.getBacklinks': 'read',
   'automation.listRules': 'automation',
   'automation.runRule': 'automation',
+  'domain.list': 'read',
   'settings.get': undefined,
   'ui.notify': undefined
 }
@@ -248,6 +256,17 @@ async function execApi(
         return { ok: true, value: providers.graphBacklinks(String(callArgs[0] ?? '')) }
       case 'automation.listRules':
         return { ok: true, value: providers.listRules() }
+      // M6b PLG-5: read-only domain access
+      case 'domain.list': {
+        const t = String(callArgs[0] ?? '')
+        if (!['project', 'task', 'people', 'knowledge'].includes(t)) {
+          return { ok: false, value: { error: `Unknown domain type: ${t}` } }
+        }
+        return {
+          ok: true,
+          value: providers.domainList(t as 'project' | 'task' | 'people' | 'knowledge')
+        }
+      }
       case 'automation.runRule': {
         if (!(await gate.check(plugin, op))) {
           return { ok: false, value: { error: `Permission denied: ${op}` } }
@@ -289,7 +308,12 @@ function workerScriptPath(): string {
 export function createWorkerTransport(): JsPluginTransport {
   return {
     start(workerData) {
-      const worker = new Worker(workerScriptPath(), { workerData })
+      // M6b PLG-7: cap worker heap so a runaway plugin cannot OOM the main
+      // process (worker threads share the process memory space).
+      const worker = new Worker(workerScriptPath(), {
+        workerData,
+        resourceLimits: { maxOldGenerationSizeMb: 256, maxYoungGenerationSizeMb: 64 }
+      })
       return {
         post: (msg) => worker.postMessage(msg),
         onMessage: (cb) => worker.on('message', cb),

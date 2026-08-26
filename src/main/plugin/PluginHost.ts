@@ -29,6 +29,23 @@ export interface PluginManifest {
   enabled?: boolean
   /** JS plugin entry (relative to plugin dir) — sandboxed */
   main?: string
+  /** M6b PLG-3: minimum SDK version this plugin requires */
+  minSdkVersion?: string
+  /** M6b PLG-3: other plugins this one depends on (ids) */
+  dependencies?: string[]
+}
+
+/** Current plugin SDK version — bump on breaking api.* surface changes. */
+export const PLUGIN_SDK_VERSION = '1.0.0'
+
+/** Compare two semver-ish strings: true when `have` >= `need`. */
+function sdkSatisfies(have: string, need: string): boolean {
+  const parse = (v: string): number[] => v.split('.').map((p) => Number.parseInt(p, 10) || 0)
+  const [h1, h2, h3] = parse(have)
+  const [n1, n2, n3] = parse(need)
+  if (h1 !== n1) return h1 > n1
+  if (h2 !== n2) return h2 > n2
+  return h3 >= n3
 }
 
 export interface LoadedPlugin {
@@ -73,6 +90,14 @@ export class PluginHost {
             ['read', 'search', 'template', 'automation'].includes(p)
           )
           manifest.permissions = safePerms
+          // M6b PLG-3: SDK compatibility gate — a plugin built for a NEWER SDK
+          // must not load silently and fail at runtime.
+          if (manifest.minSdkVersion && !sdkSatisfies(PLUGIN_SDK_VERSION, manifest.minSdkVersion)) {
+            console.warn(
+              `[PluginHost] ${manifest.id}: butuh SDK >= ${manifest.minSdkVersion} (host ${PLUGIN_SDK_VERSION}) — tidak dimuat`
+            )
+            continue
+          }
           const pluginDir = path.join(dir, e.name)
           let jsEntry: string | null = null
           if (manifest.main) {

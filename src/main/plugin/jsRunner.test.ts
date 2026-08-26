@@ -57,7 +57,8 @@ function fakeProviders(root: string): JsPluginProviders {
     listRules: () => [{ id: 'r1' }],
     runRule: () => ({ ok: true }),
     getSetting: () => 'dark',
-    notify: () => {}
+    notify: () => {},
+    domainList: () => []
   }
 }
 
@@ -575,6 +576,62 @@ describe('M1.5 — manifest permission enforcement (PLG-4)', () => {
     )
     expect(res.ok).toBe(false)
     expect(res.error).toMatch(/Permission denied: search.query/)
+  })
+
+  it('M6b PLG-5: domain.list returns items for a declared read permission', async () => {
+    const plugin: JsPluginRuntimeInfo = {
+      pluginId: 'dom',
+      pluginName: 'Dom',
+      dir: root,
+      entry: path.join(root, 'main.js'),
+      permissions: ['read']
+    }
+    fs.writeFileSync(
+      path.join(root, 'main.js'),
+      'module.exports = { main: async (ctx) => ctx.api.domain.list("project") }',
+      'utf-8'
+    )
+    const providers = fakeProviders(root)
+    providers.domainList = () => [{ title: 'Alpha', relativePath: 'Projects/Alpha.md' }]
+    const res = await runJsPluginCommand(
+      plugin,
+      'main',
+      {},
+      {
+        transport: inProcessTransport(),
+        providers,
+        gate: fakeGate()
+      }
+    )
+    expect(res.ok).toBe(true)
+    expect(res.result).toEqual([{ title: 'Alpha', relativePath: 'Projects/Alpha.md' }])
+  })
+
+  it('M6b PLG-5: domain.list ditolak tanpa read permission', async () => {
+    const plugin: JsPluginRuntimeInfo = {
+      pluginId: 'dom2',
+      pluginName: 'Dom2',
+      dir: root,
+      entry: path.join(root, 'main2.js'),
+      permissions: []
+    }
+    fs.writeFileSync(
+      path.join(root, 'main2.js'),
+      'module.exports = { main: async (ctx) => ctx.api.domain.list("project") }',
+      'utf-8'
+    )
+    const res = await runJsPluginCommand(
+      plugin,
+      'main',
+      {},
+      {
+        transport: inProcessTransport(),
+        providers: fakeProviders(root),
+        gate: fakeGate()
+      }
+    )
+    expect(res.ok).toBe(false)
+    expect(res.error).toMatch(/Permission denied: domain\.list/)
   })
 })
 
