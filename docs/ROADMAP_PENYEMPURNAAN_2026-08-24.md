@@ -114,20 +114,22 @@
 
 ### M3: Patuhi Law 004/005 & spec 19/20/21
 
-| # | Audit ID | Masalah | Solusi |
-|---|---|---|---|
-| 1 | CST-1/AI-17 | Sub-agent skip Context Engine (`useContext=false`) | Beri opsi `useContext=true` dengan task-aware context (bukan skip total); enforce Law 004/005 |
-| 2 | AI-10 | Middleware menyusun prompt manual (plan/pipeline/sub-agent hardcoded) | Pindahkan semua blok instruksi (planInstruction, stage pipeline, sub-agent system, resume/rephrase/follow-up preamble) ke PromptRegistry; middleware hanya `renderPrompt(id, vars)` |
-| 3 | AI-15 | 2 dari 6 agent MISSING (Project Manager, Document Analyst) | Tambah role + profil ContextEngine + tool matrix |
-| 4 | AI-19 | Struktur conversation kurang relasi & summary | Tambah field Related Knowledge/Projects/Tasks/Documents, Summary, Status |
-| 5 | AI-20 | Rename & Archive session hilang | Tambah `chat:rename` + `chat:archive` (pindah ke chats-archive + status) |
-| 6 | AI-21 | Tidak ada summarization & conversation search | `chat:summarize` via middleware + index chats ke SearchEngine (title/content/summary) |
-| 7 | AI-4 | Output validation tidak formal | Validasi skema/structured output sebelum dianggap sukses |
-| 8 | AI-1 | Permission gate hanya di IPC, bukan middleware | Double-gate: cek `perms` di dalam `streamMessage`/`sendMessage` |
-| 9 | AI-6 | Capability detection kurang (reasoning/structured output) | Perluas `ProviderCapabilities` |
-| 10 | AI-11/13/14 | PromptEntry kurang field; versioning tanpa history; kategori prompt minim | Field Name/Author/Description/Status/LastUpdated; snapshot versi + rollback; kategori Writing/Research/Knowledge/Project/Task/Search/Automation/Agent |
-| 11 | AI-22 | Export conversation tidak ada | `chat:export` (Markdown/JSON) |
-| 12 | AI-2 | Timeout hardcoded | Ambil dari settings/ProviderConfig, fallback default |
+> **Status M3: 🔄 sebagian — 5/12 item selesai (M3.1-3.3 + AI-6/AI-1/AI-2). Sisa: M3.4 conversation + PromptEntry/history.**
+
+| # | Audit ID | Masalah | Solusi | Status |
+|---|---|---|---|---|
+| 1 | CST-1/AI-17 | Sub-agent skip Context Engine (`useContext=false`) | Beri opsi `useContext=true` dengan task-aware context (bukan skip total); enforce Law 004/005 | ✅ `runSubAgent` kini `useContext=true` |
+| 2 | AI-10 | Middleware menyusun prompt manual (plan/pipeline/sub-agent hardcoded) | Pindahkan semua blok instruksi (planInstruction, stage pipeline, sub-agent system, resume/rephrase/follow-up preamble) ke PromptRegistry; middleware hanya `renderPrompt(id, vars)` | 🔶 sebagian — `planMode` + `subAgent` dipindah ke `PromptRegistry`; pipeline & renderer followUp masih hardcoded |
+| 3 | AI-15 | 2 dari 6 agent MISSING (Project Manager, Document Analyst) | Tambah role + profil ContextEngine + tool matrix | ✅ `projectManager`/`documentAnalyst` + `ROLE_PROFILES` + `ROLE_TOOL_PERMISSIONS` + UI picker |
+| 4 | AI-19 | Struktur conversation kurang relasi & summary | Tambah field Related Knowledge/Projects/Tasks/Documents, Summary, Status | ⬜ |
+| 5 | AI-20 | Rename & Archive session hilang | Tambah `chat:rename` + `chat:archive` (pindah ke chats-archive + status) | ⬜ |
+| 6 | AI-21 | Tidak ada summarization & conversation search | `chat:summarize` via middleware + index chats ke SearchEngine (title/content/summary) | ⬜ |
+| 7 | AI-4 | Output validation tidak formal | Validasi skema/structured output sebelum dianggap sukses | ⬜ (verifyCitations + validasi args sudah ada) |
+| 8 | AI-1 | Permission gate hanya di IPC, bukan middleware | Double-gate: cek `perms` di dalam `streamMessage`/`sendMessage` | ✅ double-gate di `runStreamInner` |
+| 9 | AI-6 | Capability detection kurang (reasoning/structured output) | Perluas `ProviderCapabilities` | ✅ `reasoning` + `structuredOutput` di 7 provider |
+| 10 | AI-11/13/14 | PromptEntry kurang field; versioning tanpa history; kategori prompt minim | Field Name/Author/Description/Status/LastUpdated; snapshot versi + rollback; kategori Writing/Research/Knowledge/Project/Task/Search/Automation/Agent | ⬜ |
+| 11 | AI-22 | Export conversation tidak ada | `chat:export` (Markdown/JSON) | ⬜ |
+| 12 | AI-2 | Timeout hardcoded | Ambil dari settings/ProviderConfig, fallback default | ✅ `STREAM_TIMEOUT_MS` via `settings.aiStreamTimeoutMs` |
 
 **Verifikasi M3:** test konteks sub-agent (ContextEngine terpanggil), test PromptRegistry (semua blok prompt via registry, tidak ada string hardcoded yang lolos lint custom), test conversation (rename/archive/search/summarize).
 
