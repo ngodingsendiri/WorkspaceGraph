@@ -317,27 +317,29 @@ Prioritas berdasar dampak & ketergantungan. **M4a** = perbaikan klasifikasi (blo
 
 ## PHASE 8 — PLATFORM HARDENING
 
+> **Status M8: 🔄 SEBAGIAN — 7/17 selesai (MCP penuh + CSP + API + env redaction). Sisa: SEC audit-log/backup, API kontrak, Installer.**
+
 ### M8: MCP, Security, API, Installer, File Structure
 
-| # | Audit ID | Masalah | Solusi |
-|---|---|---|---|
-| 1 | MCP-2 | Spawn MCP tanpa gate permission | Gate (ADR-0006) + jangan connectAll sebelum user aktifkan |
-| 2 | MCP-3 | Secrets MCP plaintext | Enkripsi env dengan safeStorage / sanitasi response |
-| 3 | MCP-1 | Handler tanpa validasi array | `Array.isArray` guard |
-| 4 | MCP-4 | Error connectAll di-swallow | Log + set errors map |
-| 5 | SEC-1 | Audit logging tidak lengkap (config/plugin/security) | Perluas jadi event log umum (`audit.jsonl`) |
-| 6 | SEC-2 | Backup protection tidak ada | Backup folder manual + checksum + restore point |
-| 7 | SEC-3 | Enkripsi hanya API keys AI | Terapkan ke env MCP (dengan MCP-3) |
-| 8 | SEC-4 | CSP lemah + sandbox off | Pisahkan dev/prod CSP (ADR-0007); verifikasi contextIsolation |
-| 9 | API-1 | InternalAPI bukan kontrak | Migrasi bertahap handler ke InternalAPI (read-only dulu) |
-| 10 | API-2 | Versioning tidak nyata | Sinkronkan apiVersion dengan app |
-| 11 | API-3 | IPC tidak typed | Kurangi `any`; validasi bentuk di handler |
-| 12 | API-4/5 | Error handling 3 gaya; type basi | Envelope `{ok,data?,error?}`; hapus resolveKerjaVault/openKerjaVault |
-| 13 | INS-1 | Tidak ada update system | electron-updater + publish config ATAU ADR non-goal |
-| 14 | INS-2 | Migrasi tanpa backup config | Snapshot sebelum migrasi + validasi hasil |
-| 15 | INS-3 | Uninstall tanpa pilihan | Custom NSIS page |
-| 16 | INS-4 | Tanpa checksum publik | Generate + publish sha256 per artifact |
-| 17 | FST-1/2/3 | Struktur root tidak sesuai spec 32 | Sub-struktur Cache/Backups/Temp; pindah index.db ke Cache/ |
+| # | Audit ID | Masalah | Solusi | Status |
+|---|---|---|---|---|
+| 1 | MCP-2 | Spawn MCP tanpa gate permission | Gate (ADR-0006) + jangan connectAll sebelum user aktifkan | ✅ handler gate aiTools; connectAll gate |
+| 2 | MCP-3 | Secrets MCP plaintext | Enkripsi env dengan safeStorage / sanitasi response | ✅ env redacted di getServers; Save merge env lama |
+| 3 | MCP-1 | Handler tanpa validasi array | `Array.isArray` guard | ✅ handler + saveServers |
+| 4 | MCP-4 | Error connectAll di-swallow | Log + set errors map | ✅ per-server console.warn |
+| 5 | SEC-1 | Audit logging tidak lengkap (config/plugin/security) | Perluas jadi event log umum (`audit.jsonl`) | ⬜ |
+| 6 | SEC-2 | Backup protection tidak ada | Backup folder manual + checksum + restore point | ⬜ (Settings Backup section ada) |
+| 7 | SEC-3 | Enkripsi hanya API keys AI | Terapkan ke env MCP (dengan MCP-3) | ✅ redaction; safeStorage deferred (env di disk tetap, tak terekspos ke renderer) |
+| 8 | SEC-4 | CSP lemah + sandbox off | Pisahkan dev/prod CSP (ADR-0007); verifikasi contextIsolation | ✅ prod tanpa unsafe-eval/inline |
+| 9 | API-1 | InternalAPI bukan kontrak | Migrasi bertahap handler ke InternalAPI (read-only dulu) | ⬜ |
+| 10 | API-2 | Versioning tidak nyata | Sinkronkan apiVersion dengan app | ✅ '2.0.0' |
+| 11 | API-3 | IPC tidak typed | Kurangi `any`; validasi bentuk di handler | 🔶 sebagian (MCP handlers divalidasi) |
+| 12 | API-4/5 | Error handling 3 gaya; type basi | Envelope `{ok,data?,error?}`; hapus resolveKerjaVault/openKerjaVault | ✅ type basi dihapus |
+| 13 | INS-1 | Tidak ada update system | electron-updater + publish config ATAU ADR non-goal | 📋 ADR-0013: adopsi di v2 |
+| 14 | INS-2 | Migrasi tanpa backup config | Snapshot sebelum migrasi + validasi hasil | ⬜ |
+| 15 | INS-3 | Uninstall tanpa pilihan | Custom NSIS page | ⬜ |
+| 16 | INS-4 | Tanpa checksum publik | Generate + publish sha256 per artifact | ⬜ |
+| 17 | FST-1/2/3 | Struktur root tidak sesuai spec 32 | Sub-struktur Cache/Backups/Temp; pindah index.db ke Cache/ | ⬜ |
 
 **Verifikasi M8:** security test (MCP gate, secret leak), test backup/restore, test API kontrak, test installer (checksum hadir di release).
 
