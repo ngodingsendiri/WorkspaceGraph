@@ -306,7 +306,7 @@ Prioritas berdasar dampak & ketergantungan. **M4a** = perbaikan klasifikasi (blo
 | 14 | C2 | Context package tanpa Project/Tasks | Lookup project/task terkait dokumen aktif | ✅ neighbors Projects//Tasks/ → Related projects/tasks |
 | 15 | C3 | Path sinkron tidak memangkas budget | Truncate di path sinkron juga | ✅ hard-cap budget×4 chars di batas baris |
 | 16 | T1 | `{{title}}` tanpa YAML-escape | Sanitasi setelah merge vars | ✅ extraVars tak bisa menimpa title/filename + collapse newline |
-| 17 | M1/M2/M3/M4 | Footnote/id/Image lokal/link lokal | Implementasikan per spec 06 | 🔶 M3 image lokal + M4 link lokal .md ✅ (safe-src guard); M1 footnote/M2 id deferred |
+| 17 | M1/M2/M3/M4 | Footnote/id/Image lokal/link lokal | Implementasikan per spec 06 | ✅ M1 footnote ✅ · M2 frontmatter id (ADR-0011) ✅ · M3 image lokal + M4 link lokal .md ✅ (safe-src guard) |
 | 18 | W1/W3 | Manifest tidak lengkap; tanpa validateWorkspaceStructure | Lengkapi manifest + validasi | ✅ manifest sub-struktur (logs/cache/plugins.json) + `validateWorkspaceStructure()` method |
 | 19 | S2/S5/S8/S9 | Link search parsial, recent tanpa "dibuka", O(N) path, token `:` dibuang | Perbaikan parsial | 🔶 S8 byPath Map O(1) ✅ · S9 colon strip ✅; sisanya low |
 | 20 | C4/C5/C6, D1/D2, T2/T3, L1/L2, FW1 | Polish kecil | 🔶 C4 cap read ✅ · C5 lowercase ✅ · C6 dedupe ✅ · D1 mapping ✅ · T2 daily selaras ✅ · T3 markSelfWrite ✅ · FW1 prune ✅; sisanya low |
