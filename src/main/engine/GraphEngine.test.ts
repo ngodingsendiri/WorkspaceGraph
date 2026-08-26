@@ -115,6 +115,27 @@ describe('GraphEngine', () => {
       const data = graph.getGraphData()
       expect(data.nodes.some((n) => n.isTag && n.title === '#inline-tag')).toBe(true)
     })
+
+    it('M7.1 (G4): production path (co-tag on) keeps note→#tag edges — no isolated islands', () => {
+      const notes = [
+        parseNote('/vault/A.md', '---\ntags: [shared]\n---\n# A\n\n[[B]]'),
+        parseNote('/vault/B.md', '---\ntags: [shared]\n---\n# B')
+      ]
+      // Production path: syncWorkspaceData calls buildFromParsedFiles(parsed, true)
+      graph.buildFromParsedFiles(notes, true)
+
+      const data = graph.getGraphData()
+      const tagNode = data.nodes.find((n) => n.isTag && n.title === '#shared')
+      expect(tagNode).toBeDefined()
+      // Both notes must connect to the #shared tag node
+      const tagnodeEdges = data.edges.filter(
+        (e) => e.type === 'tag' && (e.target === tagNode!.id || e.source === tagNode!.id)
+      )
+      expect(tagnodeEdges.length).toBe(2)
+      // Tag node degree must reflect its connections (not an isolated island)
+      const refreshed = data.nodes.find((n) => n.isTag && n.title === '#shared')
+      expect(refreshed?.degree).toBeGreaterThan(0)
+    })
   })
 
   describe('Local graph', () => {

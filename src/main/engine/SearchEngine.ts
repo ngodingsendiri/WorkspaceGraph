@@ -256,10 +256,11 @@ export class SearchEngine {
       wikiLinks: [],
       tags: e.tags,
       wordCount: 0,
-      headings: (e.headings || '')
-        .split(/\s+/)
-        .filter(Boolean)
-        .map((text) => ({ level: 1, text }))
+      // M7.2 (S7): keep the joined headings string as ONE heading entry.
+      // Splitting on whitespace produced a fake level-1 heading per WORD,
+      // polluting the FTS headings column after every memory rebuild.
+      // Searchability is unchanged (same text indexed); no per-word noise.
+      headings: e.headings ? [{ level: 1, text: e.headings }] : []
     }))
     return indexDatabase.rebuild(files as ParsedMarkdown[])
   }

@@ -99,6 +99,12 @@ type LookupMaps = {
   unique: Map<string, string>
   /** key → all matching ids (for diagnostics) */
   multi: Map<string, string[]>
+  /** M7.4 (G8): path-suffix → id ; ambiguous suffixes omitted. Built once at
+   * buildLookupMaps so resolveLinkTarget does O(1) lookups instead of
+   * scanning every unique entry per link (O(links × keys)). */
+  suffixUnique: Map<string, string>
+  /** path-suffix → all candidate ids (step-4 disambiguation) */
+  suffixMulti: Map<string, Set<string>>
 }
 
 function nodeTypeFromPath(relativePath: string): GraphNode['type'] {
@@ -141,6 +147,16 @@ function addKey(maps: LookupMaps, key: string, id: string): void {
   }
 }
 
+/** M7.4 (G8): index one path suffix into the unique/multi suffix maps. */
+function addSuffix(maps: LookupMaps, suffix: string, id: string): void {
+  if (!suffix) return
+  let set = maps.suffixMulti.get(suffix)
+  if (!set) maps.suffixMulti.set(suffix, (set = new Set<string>()))
+  set.add(id)
+  if (set.size === 1) maps.suffixUnique.set(suffix, id)
+  else maps.suffixUnique.delete(suffix)
+}
+
 /**
  * Resolve [[wikilink]] like Obsidian:
  * - exact relative path
@@ -154,30 +170,23 @@ export function resolveLinkTarget(rawTarget: string, maps: LookupMaps): string |
   // 1) exact unique match (path, title, name, alias)
   if (maps.unique.has(key)) return maps.unique.get(key)!
 
-  // 2) basename of path link
+  // 2) path link: full-path suffix via prebuilt index (O(1)), then basename
   if (key.includes('/')) {
     const base = key.split('/').pop()!
     // Prefer full path suffix match first
-    for (const [p, id] of maps.unique.entries()) {
-      if (p === key || p.endsWith('/' + key)) return id
-    }
+    const suf = maps.suffixUnique.get(key)
+    if (suf) return suf
     // Unique basename only
     if (maps.unique.has(base)) return maps.unique.get(base)!
   }
 
-  // 3) ends-with unique path (e.g. "Kerjaan/Cuti/00 Index Cuti")
-  for (const [p, id] of maps.unique.entries()) {
-    if (p.endsWith('/' + key) || p === key) return id
-  }
+  // 3) ends-with unique path (e.g. "Kerjaan/Cuti/00 Index Cuti") — O(1) via index
+  const suf3 = maps.suffixUnique.get(key)
+  if (suf3) return suf3
 
   // 4) multi-map: if exactly one path ends with key
-  const candidates = new Set<string>()
-  for (const [p, ids] of maps.multi.entries()) {
-    if (p === key || p.endsWith('/' + key)) {
-      for (const id of ids) candidates.add(id)
-    }
-  }
-  if (candidates.size === 1) return [...candidates][0]
+  const candidates = maps.suffixMulti.get(key)
+  if (candidates && candidates.size === 1) return [...candidates][0]
 
   return null
 }
@@ -185,7 +194,12 @@ export function resolveLinkTarget(rawTarget: string, maps: LookupMaps): string |
 function buildLookupMaps(
   items: { id: string; title: string; path: string; relativePath: string; aliases?: string[] }[]
 ): LookupMaps {
-  const maps: LookupMaps = { unique: new Map(), multi: new Map() }
+  const maps: LookupMaps = {
+    unique: new Map(),
+    multi: new Map(),
+    suffixUnique: new Map(),
+    suffixMulti: new Map()
+  }
 
   for (const file of items) {
     const id = file.id
@@ -197,11 +211,13 @@ function buildLookupMaps(
     const rel = file.relativePath.replace(/\\/g, '/').replace(/\.md$/i, '')
     addKey(maps, rel, id)
 
-    // Every path suffix: "a/b/c" → "a/b/c", "b/c", "c"
+    // M7.4 (G8): index every '/'-boundary path suffix once — O(paths×segments)
+    // at build time replaces the per-link O(unique) scans in resolveLinkTarget.
+    // Suffixes live in the dedicated suffix indexes (NOT unique/multi) so the
+    // step-1 exact match keeps its old semantics.
     const parts = rel.split('/').filter(Boolean)
     for (let i = 0; i < parts.length; i++) {
-      const suffix = parts.slice(i).join('/')
-      addKey(maps, suffix, id)
+      addSuffix(maps, parts.slice(i).join('/'), id)
     }
 
     // Frontmatter aliases (Obsidian)
@@ -372,20 +388,21 @@ export class GraphEngine {
         isTag: true,
         degree: 0
       })
-      // Pre-M5 behavior preserved: with co-tag star edges ON the old full
-      // rebuild wiped these tagnode edges right after creation — skip creating
-      // them instead of create-then-delete.
-      if (!this.includeCoTagEdges) {
-        for (const noteId of noteIds) {
-          const edgeId = `tagnode:${noteId}->${id}`
-          this.edges.set(edgeId, {
-            id: edgeId,
-            source: noteId,
-            target: id,
-            type: 'tag',
-            weight: 1
-          })
-        }
+      // M7.1 (G4): ALWAYS create note→#tag edges. The old guard skipped these
+      // when co-tag star edges were on, because the pre-WB-3 full rebuild
+      // wiped them right after creation (create-then-delete). Since WB-3 the
+      // star edges are rebuilt incrementally via rebuildDirtyTagEdges() and
+      // nothing removes tagnode: edges anymore — so skipping them just left
+      // every #tag node as an isolated degree-0 island in production.
+      for (const noteId of noteIds) {
+        const edgeId = `tagnode:${noteId}->${id}`
+        this.edges.set(edgeId, {
+          id: edgeId,
+          source: noteId,
+          target: id,
+          type: 'tag',
+          weight: 1
+        })
       }
     }
   }
@@ -1168,16 +1185,25 @@ export class GraphEngine {
       return true
     }
 
+    // M7.4 (G7): build an adjacency list ONCE (O(E)) instead of scanning all
+    // edges for every node in every layer (old: O(depth × nodes × edges)).
+    const adjacency = new Map<string, string[]>()
+    for (const edge of this.edges.values()) {
+      if (!includeTag && edge.type === 'tag') continue
+      if (edge.type !== 'wiki_link' && edge.type !== 'tag') continue
+      let s = adjacency.get(edge.source)
+      if (!s) adjacency.set(edge.source, (s = []))
+      s.push(edge.target)
+      let t = adjacency.get(edge.target)
+      if (!t) adjacency.set(edge.target, (t = []))
+      t.push(edge.source)
+    }
+
     for (let d = 0; d < maxDepth; d++) {
       const nextLayer: string[] = []
       for (const currId of currentLayer) {
-        for (const edge of this.edges.values()) {
-          if (!includeTag && edge.type === 'tag') continue
-          if (edge.type !== 'wiki_link' && edge.type !== 'tag') continue
-          let other: string | null = null
-          if (edge.source === currId) other = edge.target
-          else if (edge.target === currId) other = edge.source
-          if (other && !visitedNodes.has(other) && okNode(other)) {
+        for (const other of adjacency.get(currId) ?? []) {
+          if (!visitedNodes.has(other) && okNode(other)) {
             visitedNodes.add(other)
             nextLayer.push(other)
           }

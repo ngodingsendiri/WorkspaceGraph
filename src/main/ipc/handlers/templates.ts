@@ -52,6 +52,16 @@ export function registerTemplateHandlers(): void {
       if (!tpl) return { ok: false, error: 'Template not found' }
 
       const safeTitle = (title || 'Untitled').replace(/[<>:"/\\|?*]/g, '-').trim() || 'Untitled'
+      // M7.3 (T1): title/filename are CANONICALLY derived from the sanitized
+      // `title` param — extraVars must not override them with raw values
+      // (an unescaped `:`/`#` in YAML frontmatter corrupts the note).
+      const safeExtra: Record<string, string> = {}
+      for (const [k, v] of Object.entries(extraVars || {})) {
+        if (k === 'title' || k === 'filename') continue
+        // Collapse newlines in every extra var — a newline inside a YAML
+        // scalar would inject additional frontmatter lines.
+        safeExtra[k] = String(v ?? '').replace(/\r?\n/g, ' ')
+      }
       // F-4: preview (template:render) and create MUST share the exact same
       // render path — renderById — so a note created from a template always
       // carries the same frontmatter (type/status/created/…) as the preview.
@@ -59,7 +69,7 @@ export function registerTemplateHandlers(): void {
         title: safeTitle,
         filename: safeTitle,
         workspace: path.basename(state.rootPath),
-        ...(extraVars || {})
+        ...safeExtra
       })
       if (content == null) return { ok: false, error: 'Template not found' }
 
