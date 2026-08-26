@@ -137,6 +137,23 @@ export async function syncWorkspaceData(rootPath: string): Promise<void> {
     indexDatabase.open(rootPath)
   }
   await searchEngine.buildIndex(parsedFiles)
+  // M4b.5: index attachment names/paths so document search works (DOM-2)
+  for (const att of attachments) {
+    const synthetic: ParsedMarkdown = {
+      id: filePathId(att.path),
+      filePath: att.path,
+      relativePath: att.relativePath,
+      title: att.relativePath.split('/').pop() || att.relativePath,
+      content: att.relativePath,
+      rawContent: att.relativePath,
+      tags: [],
+      frontmatter: { type: 'document' },
+      wikiLinks: [],
+      headings: [],
+      wordCount: 0
+    }
+    searchEngine.addToIndex(synthetic, false, false)
+  }
   searchEngine.setOrphanIds(graphEngine.getOrphanNodeIds())
 }
 
@@ -168,6 +185,21 @@ export function syncSingleFile(filePath: string, rootPath: string): void {
       relativePath: rel,
       title: path.basename(filePath)
     })
+    // M4b.5: index attachment name/path for document search
+    const synthetic: ParsedMarkdown = {
+      id: filePathId(filePath),
+      filePath,
+      relativePath: rel,
+      title: path.basename(filePath),
+      content: rel,
+      rawContent: rel,
+      tags: [],
+      frontmatter: { type: 'document' },
+      wikiLinks: [],
+      headings: [],
+      wordCount: 0
+    }
+    searchEngine.addToIndex(synthetic, true, false)
     searchEngine.setOrphanIds(graphEngine.getOrphanNodeIds())
   } catch (err) {
     console.error(`Failed to sync attachment: ${filePath}`, err)

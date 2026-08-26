@@ -4824,6 +4824,32 @@ button {
   gap: clamp(var(--space-4), 2vw, var(--space-8));
   align-items: start;
 }
+.dash-status-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1);
+}
+.dash-pill {
+  font-size: var(--text-xs);
+  padding: 2px 6px;
+  border-radius: var(--radius-full);
+  background: var(--bg-hover);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-subtle);
+}
+.dash-badge {
+  font-size: var(--text-xs);
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-surface);
+  color: var(--text-muted);
+  border: 1px solid var(--border-subtle);
+  white-space: nowrap;
+}
+.dash-progress {
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
 .dash-section {
   min-width: 0;
   /* Section yang menyendiri saat wrap (2 kolom) tidak boleh melebar penuh */

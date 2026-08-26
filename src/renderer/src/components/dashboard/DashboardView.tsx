@@ -256,8 +256,23 @@ function AiUsageCard(): React.JSX.Element {
 }
 
 interface DomainOverview {
-  projects: { title: string; path: string; status?: string; relativePath: string }[]
-  tasks: { title: string; path: string; status?: string; priority?: string; relativePath: string }[]
+  projects: {
+    title: string
+    path: string
+    status?: string
+    relativePath: string
+    openCheckboxes?: number
+    doneCheckboxes?: number
+  }[]
+  tasks: {
+    title: string
+    path: string
+    status?: string
+    priority?: string
+    relativePath: string
+    openCheckboxes?: number
+    doneCheckboxes?: number
+  }[]
   people: { title: string; path: string; relativePath: string }[]
   openCheckboxes: { text: string; noteTitle: string; notePath: string }[]
   counts: {
@@ -524,6 +539,20 @@ export const DashboardView: React.FC<{ onOpenSearch: () => void }> = ({ onOpenSe
         {/* Open tasks + checkboxes */}
         <section className="dash-section">
           <SectionHead icon="check" title="Tugas terbuka" count={domain?.counts.openTasks} />
+          {/* M4b.2: status/priority breakdown — tasksByStatus/Priority was computed but never shown */}
+          {domain?.tasksByStatus && Object.keys(domain.tasksByStatus).length > 0 && (
+            <div className="dash-status-pills" style={{ marginBottom: 'var(--space-2)' }}>
+              {Object.entries(domain.tasksByStatus)
+                .filter(([st]) => st !== 'done' && st !== 'completed' && st !== 'archived')
+                .sort(([, a], [, b]) => (b as number) - (a as number))
+                .slice(0, 5)
+                .map(([st, n]) => (
+                  <span key={st} className="dash-pill">
+                    {st} {String(n)}
+                  </span>
+                ))}
+            </div>
+          )}
           {loading ? (
             <SkeletonRows count={4} />
           ) : (
@@ -553,13 +582,46 @@ export const DashboardView: React.FC<{ onOpenSearch: () => void }> = ({ onOpenSe
         {/* Projects + People */}
         <section className="dash-section">
           <SectionHead icon="folder" title="Proyek" count={domain?.projects.length} />
+          {/* M4b.1: status breakdown — projectsByStatus was computed but never shown (DOM-15) */}
+          {domain?.projectsByStatus && Object.keys(domain.projectsByStatus).length > 0 && (
+            <div className="dash-status-pills" style={{ marginBottom: 'var(--space-2)' }}>
+              {Object.entries(domain.projectsByStatus)
+                .sort(([, a], [, b]) => (b as number) - (a as number))
+                .map(([st, n]) => (
+                  <span key={st} className="dash-pill" title={`${n} proyek: ${st}`}>
+                    {st} {String(n)}
+                  </span>
+                ))}
+            </div>
+          )}
           {loading ? (
             <SkeletonRows count={3} />
           ) : (
             <>
               {(domain?.projects || [])
                 .slice(0, 8)
-                .map((p) => listItem(p.title, p.relativePath, () => openNote(p.path), p.status))}
+                .map((p) => {
+                  // M4b.1: progress from checkboxes (open/done) per project
+                  const total = (p.openCheckboxes ?? 0) + (p.doneCheckboxes ?? 0)
+                  const pct = total > 0 ? Math.round(((p.doneCheckboxes ?? 0) / total) * 100) : null
+                  return (
+                    <div key={p.path} className="dash-list-item" onClick={() => openNote(p.path)}>
+                      <div style={{ minWidth: 0, flex: 1 }}>
+                        <div className="dash-list-title truncate">{p.title}</div>
+                        <div className="dash-list-sub truncate">
+                          {p.relativePath}
+                          {pct !== null && (
+                            <span className="dash-progress" title={`${p.doneCheckboxes}/${total} selesai`}>
+                              {' '}
+                              — {pct}%
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      {p.status && <span className="dash-badge">{p.status}</span>}
+                    </div>
+                  )
+                })}
               {(!domain || domain.projects.length === 0) && (
                 <EmptyState text="Belum ada proyek. Buat dari template." />
               )}

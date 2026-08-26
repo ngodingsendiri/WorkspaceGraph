@@ -308,6 +308,7 @@ const api = {
   seedTemplates: () => ipcRenderer.invoke('template:seed'),
   getDomainOverview: () => ipcRenderer.invoke('domain:overview'),
   listDomain: (type: string) => ipcRenderer.invoke('domain:list', type),
+  getPeopleLinkedTo: (filePath: string) => ipcRenderer.invoke('domain:peopleLinkedTo', filePath),
 
   getAutomation: () => ipcRenderer.invoke('automation:get'),
   saveAutomation: (config: unknown) => ipcRenderer.invoke('automation:save', config),

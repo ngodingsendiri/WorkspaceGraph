@@ -18,6 +18,8 @@ export const TemplatePicker: React.FC<{ open: boolean; onClose: () => void }> = 
   const [templates, setTemplates] = useState<Tpl[]>([])
   const [selected, setSelected] = useState('')
   const [title, setTitle] = useState('')
+  const [owner, setOwner] = useState('')
+  const [project, setProject] = useState('')
   const [error, setError] = useState('')
   const openTab = useEditorStore((s) => s.openTab)
   const setActiveView = useWorkspaceStore((s) => s.setActiveView)
@@ -32,6 +34,8 @@ export const TemplatePicker: React.FC<{ open: boolean; onClose: () => void }> = 
     // Load templates + reset the form each time the picker opens.
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setTitle('')
+    setOwner('')
+    setProject('')
     setError('')
   }, [open])
 
@@ -42,7 +46,14 @@ export const TemplatePicker: React.FC<{ open: boolean; onClose: () => void }> = 
     const tpl = templates.find((t) => t.id === selected)
     const name =
       title.trim() || (tpl?.kind === 'daily' ? new Date().toISOString().split('T')[0] : 'Untitled')
-    const res = await window.api.createFromTemplate({ templateId: selected, title: name })
+    const extraVars: Record<string, string> = {}
+    if (owner.trim()) extraVars.owner = owner.trim()
+    if (project.trim()) extraVars.project = project.trim()
+    const res = await window.api.createFromTemplate({
+      templateId: selected,
+      title: name,
+      ...(Object.keys(extraVars).length ? { extraVars } : {})
+    })
     if (!res.ok) {
       setError(res.error || 'Gagal membuat note')
       return
@@ -96,6 +107,41 @@ export const TemplatePicker: React.FC<{ open: boolean; onClose: () => void }> = 
               autoFocus
             />
           </label>
+          {/* M4b.6: owner/project inputs for relevant template kinds */}
+          {(() => {
+            const kind = templates.find((t) => t.id === selected)?.kind
+            const showOwner = kind === 'project' || kind === 'people'
+            const showProject = kind === 'task'
+            if (!showOwner && !showProject) return null
+            return (
+              <>
+                {showOwner && (
+                  <label style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
+                    Owner
+                    <input
+                      className="input"
+                      style={{ width: '100%', marginTop: 4 }}
+                      placeholder="Nama owner"
+                      value={owner}
+                      onChange={(e) => setOwner(e.target.value)}
+                    />
+                  </label>
+                )}
+                {showProject && (
+                  <label style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
+                    Project
+                    <input
+                      className="input"
+                      style={{ width: '100%', marginTop: 4 }}
+                      placeholder="Nama project terkait"
+                      value={project}
+                      onChange={(e) => setProject(e.target.value)}
+                    />
+                  </label>
+                )}
+              </>
+            )
+          })()}
           {error && <div style={{ fontSize: 12, color: 'var(--color-error)' }}>{error}</div>}
           <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
             <button className="btn btn-ghost btn-sm" onClick={onClose}>

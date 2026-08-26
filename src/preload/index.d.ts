@@ -462,6 +462,7 @@ export interface API {
   seedTemplates: () => Promise<{ ok: boolean; count?: number; error?: string }>
   getDomainOverview: () => Promise<any>
   listDomain: (type: string) => Promise<any[]>
+  getPeopleLinkedTo: (filePath: string) => Promise<any[]>
 
   getAutomation: () => Promise<{
     enabled: boolean

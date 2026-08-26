@@ -13,4 +13,10 @@ export function registerDomainHandlers(): void {
   ipcMain.handle('domain:list', async (_, type: string) => {
     return domainEngine.listByType(type as never)
   })
+
+  // M4b.4: people linked to a note (dead code wired to UI)
+  ipcMain.handle('domain:peopleLinkedTo', async (_, filePath: string) => {
+    if (!filePath || typeof filePath !== 'string') return []
+    return domainEngine.peopleLinkedTo(filePath)
+  })
 }
