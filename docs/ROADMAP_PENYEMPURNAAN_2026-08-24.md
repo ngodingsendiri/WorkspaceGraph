@@ -294,8 +294,8 @@ Prioritas berdasar dampak & ketergantungan. **M4a** = perbaikan klasifikasi (blo
 |---|---|---|---|---|
 | 1 | W2 | scanDirectory sinkron + statSync → UI freeze di 10k+ file | Async scan / batas waktu / background | ⬜ (invasif — defer) |
 | 2 | S1 | Metadata search tidak ada | Frontmatter masuk FTS atau tabel key-value; query `metadata:` | ⬜ |
-| 3 | S3 | Ranking tanpa backlink-count/graph proximity/status | Tambah sinyal ranking dari graph + domain | ⬜ |
-| 4 | S4 | Tasks tidak diindeks | Parse checkbox → index | ⬜ |
+| 3 | S3 | Ranking tanpa backlink-count/graph proximity/status | Tambah sinyal ranking dari graph + domain | ✅ backlink-count boost (cap +15%, saturasi 15); proximity/status deferred |
+| 4 | S4 | Tasks tidak diindeks | Parse checkbox → index | ✅ `extractOpenTasks` → Fuse headings + FTS level-6 synthetic |
 | 5 | S7 | `rebuildSqliteFromMemory` kata-per-heading → noise | Simpan heading string asli | ✅ satu entri heading gabungan; FTS text sama tanpa noise |
 | 6 | S6 | Kontradiksi template (listSystemNotes) | Sinkronkan kebijakan Templates/ | ⬜ low |
 | 7 | G1/G2 | Node/edge attrs Created/Updated/Color MISSING | Tambah metadata temporal + color category | ⬜ |
@@ -306,7 +306,7 @@ Prioritas berdasar dampak & ketergantungan. **M4a** = perbaikan klasifikasi (blo
 | 12 | G8 | resolveLinkTarget O(links×keys) | Index path→id | ✅ suffix index prebuilt, O(1)/link; ambiguous suffix ditolak |
 | 13 | C1 | User selection tidak didukung | Parameter selection di buildContextPackage | ⬜ |
 | 14 | C2 | Context package tanpa Project/Tasks | Lookup project/task terkait dokumen aktif | ⬜ |
-| 15 | C3 | Path sinkron tidak memangkas budget | Truncate di path sinkron juga | ⬜ |
+| 15 | C3 | Path sinkron tidak memangkas budget | Truncate di path sinkron juga | ✅ hard-cap budget×4 chars di batas baris |
 | 16 | T1 | `{{title}}` tanpa YAML-escape | Sanitasi setelah merge vars | ✅ extraVars tak bisa menimpa title/filename + collapse newline |
 | 17 | M1/M2/M3/M4 | Footnote/id/Image lokal/link lokal | Implementasikan per spec 06 | ⬜ |
 | 18 | W1/W3 | Manifest tidak lengkap; tanpa validateWorkspaceStructure | Lengkapi manifest + validasi | ⬜ |
