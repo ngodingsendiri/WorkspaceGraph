@@ -284,9 +284,7 @@ Prioritas berdasar dampak & ketergantungan. **M4a** = perbaikan klasifikasi (blo
 
 ---
 
-## PHASE 7 — HARDENING ENGINE & SEARCH
-
-> **Status M7: 🔄 SEBAGIAN — bug/perf inti selesai (G4/S7/T1/G7/G8). Sisa: fitur search lanjutan + async scan (medium).**
+> **Status M7: 🔄 SEBAGIAN — 12/20 selesai (bug/perf inti + search/context + markdown M3/M4). Sisa: W2 async scan, S1 metadata query, G1/G2/G3/G5 attrs/incremental, M1/M2 footnote/id, W1/W3, polish.**
 
 ### M7: Skala & kualitas engine (spec 05-09)
 
@@ -304,13 +302,13 @@ Prioritas berdasar dampak & ketergantungan. **M4a** = perbaikan klasifikasi (blo
 | 10 | G5 | Update single-file rebuild penuh tag/degree | Incremental (hanya node tersentuh) | ⬜ |
 | 11 | G7 | getNeighbors O(depth×nodes×edges) | Adjacency list | ✅ adjacency O(E)/panggilan + BFS O(V+E) |
 | 12 | G8 | resolveLinkTarget O(links×keys) | Index path→id | ✅ suffix index prebuilt, O(1)/link; ambiguous suffix ditolak |
-| 13 | C1 | User selection tidak didukung | Parameter selection di buildContextPackage | ⬜ |
-| 14 | C2 | Context package tanpa Project/Tasks | Lookup project/task terkait dokumen aktif | ⬜ |
+| 13 | C1 | User selection tidak didukung | Parameter selection di buildContextPackage | ✅ `AIRequest.selection` + sync/async path + injeksi verbatim |
+| 14 | C2 | Context package tanpa Project/Tasks | Lookup project/task terkait dokumen aktif | ✅ neighbors Projects//Tasks/ → Related projects/tasks |
 | 15 | C3 | Path sinkron tidak memangkas budget | Truncate di path sinkron juga | ✅ hard-cap budget×4 chars di batas baris |
 | 16 | T1 | `{{title}}` tanpa YAML-escape | Sanitasi setelah merge vars | ✅ extraVars tak bisa menimpa title/filename + collapse newline |
-| 17 | M1/M2/M3/M4 | Footnote/id/Image lokal/link lokal | Implementasikan per spec 06 | ⬜ |
+| 17 | M1/M2/M3/M4 | Footnote/id/Image lokal/link lokal | Implementasikan per spec 06 | 🔶 M3 image lokal + M4 link lokal .md ✅ (safe-src guard); M1 footnote/M2 id deferred |
 | 18 | W1/W3 | Manifest tidak lengkap; tanpa validateWorkspaceStructure | Lengkapi manifest + validasi | ⬜ |
-| 19 | S2/S5/S8/S9 | Link search parsial, recent tanpa "dibuka", O(N) path, token `:` dibuang | Perbaikan parsial | ⬜ |
+| 19 | S2/S5/S8/S9 | Link search parsial, recent tanpa "dibuka", O(N) path, token `:` dibuang | Perbaikan parsial | ✅ S9 colon token di-strip bukan dibuang; sisanya low |
 | 20 | C4/C5/C6, D1/D2, T2/T3, L1/L2, FW1 | Polish kecil | Lihat detail audit | ⬜ |
 
 **Verifikasi M7:** benchmark (10k file scan, search latency, graph update single-file), test search metadata, test graph incremental.
