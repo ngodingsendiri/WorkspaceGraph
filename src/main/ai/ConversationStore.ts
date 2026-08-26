@@ -26,6 +26,13 @@ export interface StoredConversation {
   updatedAt: string
   agentRole?: string
   messages: StoredMessage[]
+  // M3.4 AI-19: optional relations to vault entities + summary/status
+  relatedKnowledge?: string[]
+  relatedProjects?: string[]
+  relatedTasks?: string[]
+  relatedDocuments?: string[]
+  summary?: string
+  status?: 'active' | 'archived'
 }
 
 function chatsDir(): string | null {
@@ -143,6 +150,128 @@ export function deleteConversation(id: string): { ok: boolean; error?: string } 
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) }
   }
+}
+
+// M3.4 AI-20: rename a conversation's title
+export function renameConversation(
+  id: string,
+  newTitle: string
+): { ok: boolean; error?: string } {
+  const clean = safeConversationId(id)
+  if (!clean) return { ok: false, error: 'Invalid conversation id' }
+  const title = String(newTitle || '').trim().slice(0, 200)
+  if (!title) return { ok: false, error: 'Title is required' }
+  const conv = loadConversation(clean)
+  if (!conv) return { ok: false, error: 'Conversation not found' }
+  conv.title = title
+  conv.updatedAt = new Date().toISOString()
+  return saveConversation(conv)
+}
+
+// M3.4 AI-20: archive — move JSON to chats-archive/ with status archived
+function archiveDir(): string | null {
+  const dir = chatsDir()
+  if (!dir) return null
+  const adir = path.join(path.dirname(dir), 'chats-archive')
+  if (!fs.existsSync(adir)) fs.mkdirSync(adir, { recursive: true })
+  return adir
+}
+
+export function archiveConversation(id: string): { ok: boolean; error?: string } {
+  const dir = chatsDir()
+  const adir = archiveDir()
+  if (!dir || !adir) return { ok: false, error: 'No workspace open' }
+  const clean = safeConversationId(id)
+  if (!clean) return { ok: false, error: 'Invalid conversation id' }
+  const src = path.join(dir, `${clean}.json`)
+  const rel = path.relative(path.resolve(dir), path.resolve(src))
+  if (rel.startsWith('..') || path.isAbsolute(rel)) {
+    return { ok: false, error: 'Invalid conversation path' }
+  }
+  if (!fs.existsSync(src)) return { ok: false, error: 'Conversation not found' }
+  try {
+    const conv = loadConversation(clean)
+    if (!conv) return { ok: false, error: 'Conversation not found' }
+    conv.status = 'archived'
+    conv.updatedAt = new Date().toISOString()
+    const dst = path.join(adir, `${clean}.json`)
+    atomicWriteJson(dst, conv)
+    fs.unlinkSync(src)
+    return { ok: true }
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) }
+  }
+}
+
+// M3.4 AI-22: export as Markdown (human-readable) or JSON
+export function exportConversation(
+  id: string,
+  format: 'markdown' | 'json' = 'markdown'
+): { ok: boolean; content?: string; error?: string } {
+  const conv = loadConversation(id)
+  if (!conv) {
+    // Also try archive
+    const adir = archiveDir()
+    if (adir) {
+      const clean = safeConversationId(id)
+      if (clean) {
+        const ap = path.join(adir, `${clean}.json`)
+        if (fs.existsSync(ap)) {
+          try {
+            const parsed = JSON.parse(fs.readFileSync(ap, 'utf-8')) as unknown
+            if (isStoredConversation(parsed)) {
+              const c = parsed as StoredConversation
+              if (format === 'json') return { ok: true, content: JSON.stringify(c, null, 2) }
+              return { ok: true, content: conversationToMarkdown(c) }
+            }
+          } catch {
+            /* ignore */
+          }
+        }
+      }
+    }
+    return { ok: false, error: 'Conversation not found' }
+  }
+  if (format === 'json') return { ok: true, content: JSON.stringify(conv, null, 2) }
+  return { ok: true, content: conversationToMarkdown(conv) }
+}
+
+function conversationToMarkdown(conv: StoredConversation): string {
+  const lines: string[] = [
+    `---`,
+    `title: ${conv.title}`,
+    `id: ${conv.id}`,
+    `created: ${conv.createdAt}`,
+    `updated: ${conv.updatedAt}`,
+    `role: ${conv.agentRole || 'general'}`,
+    `---`,
+    ``,
+    `# ${conv.title}`,
+    ``
+  ]
+  if (conv.summary) lines.push(`> ${conv.summary}`, ``)
+  for (const m of conv.messages) {
+    lines.push(`## ${m.role}`, ``, m.content || '', ``)
+  }
+  return lines.join('\n')
+}
+
+// M3.4 AI-21: simple title/content search over stored conversations
+export function searchConversations(query: string, limit = 20): StoredConversation[] {
+  const q = String(query || '').trim().toLowerCase()
+  if (!q) return []
+  const all = listConversations(200)
+  const scored = all
+    .map((c) => {
+      const hay = `${c.title} ${c.summary || ''} ${c.messages.map((m) => m.content).join(' ')}`.toLowerCase()
+      const idx = hay.indexOf(q)
+      return idx === -1 ? null : { c, score: idx }
+    })
+    .filter((x): x is { c: StoredConversation; score: number } => x !== null)
+    .sort((a, b) => a.score - b.score)
+    .slice(0, limit)
+    .map((x) => x.c)
+  return scored
 }
 
 export function newConversationId(): string {

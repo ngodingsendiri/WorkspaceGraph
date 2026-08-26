@@ -5,6 +5,10 @@ import {
   loadConversation,
   deleteConversation,
   newConversationId,
+  renameConversation,
+  archiveConversation,
+  exportConversation,
+  searchConversations,
   type StoredConversation
 } from '../../ai/ConversationStore'
 
@@ -31,5 +35,22 @@ export function registerChatHandlers(): void {
 
   ipcMain.handle('chat:newId', async () => {
     return newConversationId()
+  })
+
+  // M3.4 (AI-20/21/22)
+  ipcMain.handle('chat:rename', async (_, id: string, title: string) => {
+    return renameConversation(id, title)
+  })
+
+  ipcMain.handle('chat:archive', async (_, id: string) => {
+    return archiveConversation(id)
+  })
+
+  ipcMain.handle('chat:export', async (_, id: string, format?: string) => {
+    return exportConversation(id, format === 'json' ? 'json' : 'markdown')
+  })
+
+  ipcMain.handle('chat:search', async (_, query: string, limit?: number) => {
+    return searchConversations(query, limit)
   })
 }

@@ -283,6 +283,11 @@ const api = {
   loadChat: (id: string) => ipcRenderer.invoke('chat:load', id),
   deleteChat: (id: string) => ipcRenderer.invoke('chat:delete', id),
   newChatId: () => ipcRenderer.invoke('chat:newId'),
+  // M3.4 (AI-20/21/22)
+  renameChat: (id: string, title: string) => ipcRenderer.invoke('chat:rename', id, title),
+  archiveChat: (id: string) => ipcRenderer.invoke('chat:archive', id),
+  exportChat: (id: string, format?: string) => ipcRenderer.invoke('chat:export', id, format),
+  searchChats: (query: string, limit?: number) => ipcRenderer.invoke('chat:search', query, limit),
 
   // R2-2: stream resume checkpoints (.workspacegraph/checkpoints)
   saveCheckpoint: (cp: unknown) => ipcRenderer.invoke('checkpoint:save', cp),

@@ -408,6 +408,14 @@ export interface API {
   loadChat: (id: string) => Promise<any | null>
   newChatId: () => Promise<string>
   deleteChat: (id: string) => Promise<{ ok: boolean; error?: string }>
+  // M3.4 (AI-20/21/22)
+  renameChat: (id: string, title: string) => Promise<{ ok: boolean; error?: string }>
+  archiveChat: (id: string) => Promise<{ ok: boolean; error?: string }>
+  exportChat: (
+    id: string,
+    format?: string
+  ) => Promise<{ ok: boolean; content?: string; error?: string }>
+  searchChats: (query: string, limit?: number) => Promise<any[]>
 
   // R2-2: stream resume checkpoints (.workspacegraph/checkpoints)
   saveCheckpoint: (cp: {
