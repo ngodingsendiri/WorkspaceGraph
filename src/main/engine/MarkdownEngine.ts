@@ -560,9 +560,7 @@ function renderMarkdownToHtml(content: string): string {
         if (!text) return m // unresolvable → keep literal
         fnIdx++
         const anchor = `fn-${fnIdx}-${label.replace(/[^a-zA-Z0-9-]/g, '')}`
-        footnotes.push(
-          `<li id="${anchor}">${escapeHtml(text)}</li>`
-        )
+        footnotes.push(`<li id="${anchor}">${escapeHtml(text)}</li>`)
         return `<sup class="footnote-ref"><a href="#${anchor}">[${fnIdx}]</a></sup>`
       })
       if (footnotes.length > 0) {

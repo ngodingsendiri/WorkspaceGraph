@@ -8,7 +8,9 @@ import {
   loadPromptEntries,
   renderPrompt,
   promptsDir,
-  promptsFilePath
+  promptsFilePath,
+  snapshotPromptHistory,
+  getPromptHistory
 } from './PromptRegistry'
 import { KERNEL_SYSTEM_PROMPT, BOOTSTRAP_USER_PROMPT } from './WorkspaceMemory'
 import { workspaceEngine } from '../engine/WorkspaceEngine'
@@ -132,5 +134,34 @@ describe('PromptRegistry (doc 19 — prompt as versioned asset)', () => {
   it('kernels derived by WorkspaceMemory carry the shipped default text', () => {
     expect(KERNEL_SYSTEM_PROMPT).toContain('workspace kernel assistant')
     expect(BOOTSTRAP_USER_PROMPT).toContain('PELAJARI WORKSPACE')
+  })
+
+  it('M9 TST-2 golden-set: every prompt preserves its behavioral contract (anti-drift)', () => {
+    // These phrases are load-bearing behavior, not prose — if a refactor edits
+    // them, the golden set fails and the change must be reviewed consciously.
+    const golden: Record<string, string[]> = {
+      kernel: ['AI Memory', 'proposals', 'Never invent vault facts'],
+      bootstrap: ['PELAJARI WORKSPACE', 'list_dir', 'AI Memory', 'wikilink'],
+      toolsHead: ['{{tools}}', 'wg-action'],
+      toolsTail: ['proposals', 'wikilinks'],
+      planMode: ['PLAN MODE', 'create_plan', 'JANGAN panggil tool tulis'],
+      subAgent: ['{{role}}', 'sub-agent', 'Balas HANYA dengan hasil kerja']
+    }
+    for (const id of PROMPT_IDS) {
+      for (const phrase of golden[id]) {
+        expect(PROMPT_DEFAULTS[id].template).toContain(phrase)
+      }
+    }
+  })
+
+  it('M3 AI-11/13: prompt entries carry metadata fields + history snapshot infra', () => {
+    expect(PROMPT_DEFAULTS.kernel.author).toBe('WorkspaceGraph')
+    expect(PROMPT_DEFAULTS.kernel.status).toBe('active')
+    expect(typeof PROMPT_DEFAULTS.kernel.name).toBe('string')
+    // history helpers exist and never throw
+    snapshotPromptHistory(vault, 'kernel', PROMPT_DEFAULTS.kernel)
+    const hist = getPromptHistory(vault, 'kernel')
+    expect(Array.isArray(hist)).toBe(true)
+    expect(hist.length).toBeGreaterThanOrEqual(1)
   })
 })

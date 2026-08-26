@@ -20,6 +20,8 @@ export interface GraphNode {
     | 'tag'
     /** Non-markdown vault file (image, pdf, …) */
     | 'attachment'
+    /** M7 G3: synthetic folder containment node */
+    | 'folder'
   path: string
   relativePath: string
   tags: string[]
@@ -40,6 +42,8 @@ export interface GraphNode {
   isTag?: boolean
   /** Non-md file node */
   isAttachment?: boolean
+  /** M7 G3: synthetic folder node (parent-child containment edge) */
+  isFolder?: boolean
   degree: number
   /**
    * Degree counting wiki_link edges ONLY (WB-4) — hub detection must not be
@@ -785,6 +789,7 @@ export class GraphEngine {
     this.rebuildTagIndex()
     this.rebuildTagNodes()
     if (includeTagEdges) this.rebuildDirtyTagEdges()
+    this.buildFolderEdges()
     recomputeDegrees(this.nodes, this.edges)
 
     if (unresolved > 0) {
@@ -794,6 +799,51 @@ export class GraphEngine {
     }
 
     return this.getGraphData()
+  }
+
+  /**
+   * M7 G3: build `folder` containment edges — file → its parent directory
+   * node. Bounded to avoid edge explosion: one folder edge per DIRECT parent
+   * folder (not every ancestor), and folder nodes are deduped by path. Skipped
+   * for ghost/tag/attachment nodes. Called during full rebuild.
+   */
+  private buildFolderEdges(): void {
+    // Remove stale folder nodes + edges
+    for (const [id, n] of this.nodes.entries()) {
+      if (n.isFolder) this.nodes.delete(id)
+    }
+    for (const [edgeId, e] of this.edges.entries()) {
+      if (e.type === 'folder') this.edges.delete(edgeId)
+    }
+    for (const n of this.nodes.values()) {
+      if (n.isGhost || n.isTag || n.isAttachment) continue
+      const rel = (n.relativePath || '').replace(/\\/g, '/')
+      const parent = rel.split('/').slice(0, -1).join('/')
+      if (!parent) continue
+      const folderId = `folder:${parent.toLowerCase()}`
+      if (!this.nodes.has(folderId)) {
+        this.nodes.set(folderId, {
+          id: folderId,
+          title: parent.split('/').pop() || parent,
+          type: 'folder',
+          path: '',
+          relativePath: parent,
+          tags: [],
+          isFolder: true,
+          degree: 0
+        })
+      }
+      const edgeId = `folder:${n.id}->${parent.toLowerCase()}`
+      if (!this.edges.has(edgeId)) {
+        this.edges.set(edgeId, {
+          id: edgeId,
+          source: n.id,
+          target: folderId,
+          type: 'folder',
+          weight: 1
+        })
+      }
+    }
   }
 
   /**
@@ -1090,15 +1140,22 @@ export class GraphEngine {
     includeGhosts?: boolean
     includeTags?: boolean
     includeAttachments?: boolean
+    /** M7 G3: folder containment nodes/edges — off by default until a UI filter exists */
+    includeFolders?: boolean
   }): GraphData {
     pruneGhostEdges(this.nodes, this.edges)
     // Defaults TRUE so Graph View always receives full data (client-side filters)
     const includeGhosts = options?.includeGhosts !== false
     const includeTags = options?.includeTags !== false
     const includeAttachments = options?.includeAttachments !== false
+    // M7 G3: folder nodes/edges are opt-in — off by default to avoid inflating
+    // edge counts in the existing graph view (no folder filter in UI yet).
+    const includeFolders = options?.includeFolders === true
 
     const all = Array.from(this.nodes.values())
-    const realNodeCount = all.filter((n) => !n.isGhost && !n.isTag && !n.isAttachment).length
+    const realNodeCount = all.filter(
+      (n) => !n.isGhost && !n.isTag && !n.isAttachment && !n.isFolder
+    ).length
     const ghostNodeCount = all.filter((n) => n.isGhost).length
     const tagNodeCount = all.filter((n) => n.isTag).length
     const attachmentNodeCount = all.filter((n) => n.isAttachment).length
@@ -1107,6 +1164,7 @@ export class GraphEngine {
         if (!includeGhosts && n.isGhost) return false
         if (!includeTags && n.isTag) return false
         if (!includeAttachments && n.isAttachment) return false
+        if (!includeFolders && n.isFolder) return false
         return true
       })
       .map((n) => {

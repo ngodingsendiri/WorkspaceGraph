@@ -177,7 +177,9 @@ export function promptsFilePath(root: string): string {
  * Snapshots stored as prompts.history.json (bounded to last 10 versions per id).
  */
 export function snapshotPromptHistory(root: string, id: PromptId, entry: PromptEntry): void {
-  const histFile = path.join(promptsDir(root), 'prompts.history.json')
+  const dir = promptsDir(root)
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
+  const histFile = path.join(dir, 'prompts.history.json')
   let history: Record<string, PromptEntry[]> = {}
   try {
     if (fs.existsSync(histFile)) {
