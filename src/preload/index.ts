@@ -323,6 +323,16 @@ const api = {
 
   listPlugins: () => ipcRenderer.invoke('plugins:list'),
   listPluginCommands: () => ipcRenderer.invoke('plugins:commands'),
+  /** M6b PLG-1: declarative context-menu extension point */
+  getPluginContextMenus: () => ipcRenderer.invoke('plugins:contextMenus'),
+  /** M6b PLG-1: declarative search-provider extension point */
+  getPluginSearchProviders: () => ipcRenderer.invoke('plugins:searchProviders'),
+  runPluginSearchProvider: (
+    pluginId: string,
+    providerId: string,
+    query: string,
+    limit?: number
+  ) => ipcRenderer.invoke('plugins:runSearchProvider', { pluginId, providerId, query, limit }),
   reloadPlugins: () => ipcRenderer.invoke('plugins:reload'),
   runPluginCommand: (pluginId: string, commandId: string, args?: Record<string, unknown>) =>
     ipcRenderer.invoke('plugins:runCommand', { pluginId, commandId, args }),
@@ -344,6 +354,8 @@ const api = {
   // M8.6 (SEC-2): manual vault backup
   createBackup: () => ipcRenderer.invoke('backup:create'),
   listBackups: () => ipcRenderer.invoke('backup:list'),
+  // M8 SEC-2: scheduled auto-backup status
+  getBackupStatus: () => ipcRenderer.invoke('backup:status'),
 
   // Window chrome (title bar overlay colors for light/dark)
   setTitleBarTheme: (mode: 'dark' | 'light') => ipcRenderer.invoke('window:setTitleBarTheme', mode)

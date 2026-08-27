@@ -40,7 +40,13 @@ function hashFile(abs: string): string {
 export function createBackup(vaultRoot: string): BackupResult {
   try {
     const stamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
-    const dest = path.join(vaultRoot, '.workspacegraph', BACKUP_DIR, stamp)
+    let dest = path.join(vaultRoot, '.workspacegraph', BACKUP_DIR, stamp)
+    // Second-resolution timestamps collide on rapid backups — append a suffix.
+    let n = 2
+    while (fs.existsSync(dest)) {
+      dest = path.join(vaultRoot, '.workspacegraph', BACKUP_DIR, `${stamp}-${n}`)
+      n++
+    }
     fs.mkdirSync(dest, { recursive: true })
 
     let files = 0
@@ -115,5 +121,86 @@ export function listBackups(vaultRoot: string): { name: string; dir: string; cre
       .sort((a, b) => b.name.localeCompare(a.name))
   } catch {
     return []
+  }
+}
+
+/**
+ * M8 SEC-2: scheduled vault backup. Keeps the newest `maxBackups` archives so a
+ * long-running vault doesn't fill the disk with snapshots. Exposed via a small
+ * module-level scheduler so the vault lifecycle (open/close) can start/stop it.
+ */
+let scheduledTimer: ReturnType<typeof setInterval> | null = null
+let scheduledRoot: string | null = null
+let scheduledIntervalMs = 0
+let scheduledLastRunAt: number | null = null
+let scheduledNextRunAt: number | null = null
+
+export interface ScheduledBackupStatus {
+  active: boolean
+  intervalMs: number
+  lastRunAt: number | null
+  nextRunAt: number | null
+  lastResult: BackupResult | null
+}
+
+let scheduledLastResult: BackupResult | null = null
+
+/** Remove all but the newest `maxBackups` backup dirs (oldest first → delete). */
+export function pruneBackups(vaultRoot: string, maxBackups: number): number {
+  const list = listBackups(vaultRoot)
+  if (maxBackups <= 0) return 0
+  let removed = 0
+  for (const b of list.slice(maxBackups)) {
+    try {
+      fs.rmSync(b.dir, { recursive: true, force: true })
+      removed++
+    } catch {
+      /* best-effort */
+    }
+  }
+  return removed
+}
+
+/**
+ * Start periodic backups of `vaultRoot`. Stops any previous schedule first.
+ * The first backup runs after one full interval (not immediately — a manual
+ * backup covers t=0). Interval below 60s is clamped (respect the disk).
+ */
+export function startScheduledBackups(vaultRoot: string, intervalMs: number, maxBackups = 10): void {
+  stopScheduledBackups()
+  const clamped = Math.max(intervalMs, 60_000)
+  scheduledRoot = vaultRoot
+  scheduledIntervalMs = clamped
+  scheduledNextRunAt = Date.now() + clamped
+  scheduledTimer = setInterval(() => {
+    if (!scheduledRoot) return
+    scheduledLastRunAt = Date.now()
+    scheduledLastResult = createBackup(scheduledRoot)
+    if (scheduledLastResult.ok) pruneBackups(scheduledRoot, maxBackups)
+    scheduledNextRunAt = Date.now() + clamped
+  }, clamped)
+  // Don't keep the process alive just for scheduled backups.
+  if (scheduledTimer && typeof scheduledTimer.unref === 'function') scheduledTimer.unref()
+}
+
+export function stopScheduledBackups(): void {
+  if (scheduledTimer) {
+    clearInterval(scheduledTimer)
+    scheduledTimer = null
+  }
+  scheduledRoot = null
+  scheduledIntervalMs = 0
+  scheduledLastRunAt = null
+  scheduledNextRunAt = null
+  scheduledLastResult = null
+}
+
+export function getScheduledBackupStatus(): ScheduledBackupStatus {
+  return {
+    active: scheduledTimer !== null,
+    intervalMs: scheduledIntervalMs,
+    lastRunAt: scheduledLastRunAt,
+    nextRunAt: scheduledNextRunAt,
+    lastResult: scheduledLastResult
   }
 }

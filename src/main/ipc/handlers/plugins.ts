@@ -15,6 +15,30 @@ export function registerPluginsHandlers(): void {
     return InternalAPI.getPluginCommands()
   })
 
+  // M6b PLG-1: declarative context-menu extension point
+  ipcMain.handle('plugins:contextMenus', async () => {
+    return InternalAPI.getPluginContextMenus()
+  })
+
+  // M6b PLG-1: declarative search-provider extension point
+  ipcMain.handle('plugins:searchProviders', async () => {
+    return InternalAPI.getPluginSearchProviders()
+  })
+
+  ipcMain.handle(
+    'plugins:runSearchProvider',
+    async (_, payload: { pluginId: string; providerId: string; query: string; limit?: number }) => {
+      const perms = readPermissions(workspaceEngine.getSettings())
+      if (!perms.plugins) return { ok: false, error: 'Plugin permission disabled' }
+      return InternalAPI.runPluginSearchProvider(
+        payload.pluginId,
+        payload.providerId,
+        payload.query,
+        payload.limit ?? 10
+      )
+    }
+  )
+
   ipcMain.handle('plugins:reload', async () => {
     const root = workspaceEngine.getState().rootPath
     if (!root) return { ok: false }

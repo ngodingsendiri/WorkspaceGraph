@@ -61,7 +61,33 @@ export const SearchModal: React.FC<{ isOpen: boolean; onClose: () => void }> = (
           if (!cancelled) setResults(recent || [])
         } else {
           const searched = await window.api.searchQuery({ query, limit: 20 })
-          if (!cancelled) setResults(searched || [])
+          // M6b PLG-1: merge plugin search-provider results (sandboxed JS).
+          let merged: SearchResultItem[] = searched || []
+          try {
+            const providers = await window.api.getPluginSearchProviders()
+            if (providers && providers.length > 0) {
+              const extra = await Promise.all(
+                providers.map(async (p) => {
+                  const r = await window.api.runPluginSearchProvider(
+                    p.pluginId,
+                    p.id,
+                    query,
+                    5
+                  )
+                  const rows = Array.isArray(r?.result) ? (r.result as SearchResultItem[]) : []
+                  return rows.map((row) => ({
+                    ...row,
+                    id: `plugin:${p.pluginId}:${row.id ?? row.path ?? row.title}`,
+                    matchedField: row.matchedField || `plugin:${p.name}`
+                  }))
+                })
+              )
+              merged = [...merged, ...extra.flat()].slice(0, 30)
+            }
+          } catch {
+            /* plugin search is best-effort — never blocks local results */
+          }
+          if (!cancelled) setResults(merged)
         }
       } catch (err) {
         if (!cancelled) {

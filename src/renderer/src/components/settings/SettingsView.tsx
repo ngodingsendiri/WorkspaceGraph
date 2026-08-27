@@ -158,6 +158,17 @@ export const SettingsView: React.FC = () => {
   const [backupList, setBackupList] = useState<{ name: string; dir: string; createdAt: string }[]>(
     []
   )
+  // M8 SEC-2: scheduled auto-backup config + live status
+  const [backupAuto, setBackupAuto] = useState(false)
+  const [backupIntervalHours, setBackupIntervalHours] = useState(6)
+  const [backupMaxCount, setBackupMaxCount] = useState(10)
+  const [backupStatus, setBackupStatus] = useState<{
+    active: boolean
+    intervalMs: number
+    lastRunAt: number | null
+    nextRunAt: number | null
+    lastResult: { ok: boolean; files?: number } | null
+  } | null>(null)
   const [section, setSection] = useState<Section>('ai')
   const [indexStats, setIndexStats] = useState<{
     memoryCount: number
@@ -343,6 +354,7 @@ export const SettingsView: React.FC = () => {
         aiEventRetentionDays?: number
         activeProvider?: string
         aiFailoverOrder?: unknown
+        backup?: { auto?: boolean; intervalHours?: number; maxBackups?: number }
       }
       // Keys are never shipped to the renderer (security) — fields stay masked,
       // "saved" state comes from security:status. Only a newly typed key is sent.
@@ -376,6 +388,16 @@ export const SettingsView: React.FC = () => {
       setPluginCmds(await window.api.listPluginCommands())
       setHealth(await window.api.getApiHealth())
       await loadMcp()
+      // M8 SEC-2: scheduled auto-backup config + status
+      const b = (settings?.backup || {}) as { auto?: boolean; intervalHours?: number; maxBackups?: number }
+      setBackupAuto(Boolean(b.auto))
+      setBackupIntervalHours(Number(b.intervalHours) || 6)
+      setBackupMaxCount(Number(b.maxBackups) || 10)
+      try {
+        setBackupStatus(await window.api.getBackupStatus())
+      } catch {
+        /* ignore */
+      }
     } catch {
       /* ignore */
     }
@@ -1709,6 +1731,7 @@ export const SettingsView: React.FC = () => {
           (() => {
             // Load backup list each time the section opens
             void window.api.listBackups().then((list) => setBackupList(list || []))
+            void window.api.getBackupStatus().then((st) => setBackupStatus(st)).catch(() => {})
             return (
               <div className="settings-section">
                 <h2>Backup & Restore</h2>
@@ -1748,6 +1771,70 @@ export const SettingsView: React.FC = () => {
                   >
                     Buat backup
                   </button>
+                </div>
+                {/* M8 SEC-2: scheduled auto-backup */}
+                <div className="settings-row">
+                  <div style={{ flex: 1 }}>
+                    <div style={{ fontWeight: 600 }}>Auto-backup terjadwal</div>
+                    <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
+                      {backupStatus?.active
+                        ? `Aktif — interval ${Math.round(
+                            (backupStatus.intervalMs ?? 0) / 3600000
+                          )} jam; terakhir ${backupStatus.lastRunAt ? new Date(backupStatus.lastRunAt).toLocaleString() : 'belum'}`
+                        : 'Nonaktif. Backups lama dipangkas otomatis.'}
+                    </div>
+                  </div>
+                  <div style={{ display: 'flex', gap: 'var(--space-2)', alignItems: 'center' }}>
+                    <label
+                      style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}
+                      htmlFor="backup-interval"
+                    >
+                      Interval (jam)
+                    </label>
+                    <input
+                      id="backup-interval"
+                      type="number"
+                      min={1}
+                      value={backupIntervalHours}
+                      style={{ width: 64 }}
+                      onChange={(e) => setBackupIntervalHours(Number(e.target.value) || 1)}
+                    />
+                    <input
+                      type="number"
+                      min={1}
+                      title="Max backups disimpan"
+                      value={backupMaxCount}
+                      style={{ width: 64 }}
+                      onChange={(e) => setBackupMaxCount(Number(e.target.value) || 1)}
+                    />
+                    <button
+                      className="btn btn-sm btn-surface"
+                      onClick={async () => {
+                        setBackupAuto((v) => !v)
+                        try {
+                          const settings =
+                            ((await window.api.getSettings()) as Record<string, unknown>) || {}
+                          settings.backup = {
+                            auto: !backupAuto,
+                            intervalHours: backupIntervalHours,
+                            maxBackups: backupMaxCount
+                          }
+                          await window.api.saveSettings(settings)
+                          const st = await window.api.getBackupStatus()
+                          setBackupStatus(st)
+                          flash(
+                            !backupAuto
+                              ? `Auto-backup aktif (tiap ${backupIntervalHours} jam)`
+                              : 'Auto-backup nonaktif'
+                          )
+                        } catch (e) {
+                          flash(e instanceof Error ? e.message : 'Gagal simpan pengaturan backup')
+                        }
+                      }}
+                    >
+                      {backupAuto ? 'Nonaktifkan' : 'Aktifkan'}
+                    </button>
+                  </div>
                 </div>
                 <div className="settings-row">
                   <div>

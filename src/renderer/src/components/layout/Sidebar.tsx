@@ -142,6 +142,27 @@ export const Sidebar: React.FC<{ onOpenSearch: () => void }> = ({ onOpenSearch }
   const [tplOpen, setTplOpen] = useState(false)
   const [trashEnabled, setTrashEnabled] = useState(true)
   const menuRef = useRef<HTMLDivElement>(null)
+  const [pluginMenus, setPluginMenus] = useState<
+    Array<{
+      id: string
+      title: string
+      when?: 'file' | 'folder' | 'any'
+      commandId: string
+      pluginId: string
+      pluginName: string
+    }>
+  >([])
+
+  useEffect(() => {
+    if (!rootPath) {
+      setPluginMenus([])
+      return
+    }
+    window.api
+      .getPluginContextMenus()
+      .then((menus) => setPluginMenus(menus))
+      .catch(() => setPluginMenus([]))
+  }, [rootPath])
 
   useEffect(() => {
     window.api
@@ -613,6 +634,35 @@ export const Sidebar: React.FC<{ onOpenSearch: () => void }> = ({ onOpenSearch }
                     Note baru di Knowledge
                   </button>
                 )}
+                {(() => {
+                  const items = pluginMenus.filter(
+                    (m) =>
+                      m.when === 'any' ||
+                      m.when == null ||
+                      (m.when === 'file' && !ctx.item.isDirectory) ||
+                      (m.when === 'folder' && ctx.item.isDirectory)
+                  )
+                  if (items.length === 0) return null
+                  return (
+                    <>
+                      <hr />
+                      {items.map((m) => (
+                        <button
+                          key={`${m.pluginId}:${m.commandId}`}
+                          type="button"
+                          onClick={() => {
+                            void window.api.runPluginCommand(m.pluginId, m.commandId, {
+                              filePath: ctx.item.path
+                            })
+                            setCtx(null)
+                          }}
+                        >
+                          {m.title}
+                        </button>
+                      ))}
+                    </>
+                  )
+                })()}
               </>
             )
           })()}

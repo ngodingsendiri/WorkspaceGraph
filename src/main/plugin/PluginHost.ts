@@ -18,6 +18,33 @@ export interface PluginCommand {
   handler?: string
 }
 
+/**
+ * M6b PLG-1: declarative context-menu extension point. Items are appended to
+ * the file-tree context menu; clicking runs the referenced plugin command with
+ * the target file/folder path in `args.filePath`.
+ */
+export interface PluginContextMenuItem {
+  id: string
+  title: string
+  /** When to show: 'file' (any non-dir), 'folder', or 'any'. Default 'any'. */
+  when?: 'file' | 'folder' | 'any'
+  /** Command id from this plugin's `commands` to run when clicked. */
+  commandId: string
+}
+
+/**
+ * M6b PLG-1: declarative search-provider extension point. A JS plugin declares
+ * a handler (exported from main.js) that receives `{ query, limit }` as ctx.input
+ * and returns `[{ title, path, relativePath, preview }]`. Results are merged into
+ * the search modal under the provider name.
+ */
+export interface PluginSearchProvider {
+  id: string
+  name: string
+  /** Handler exported by main.js that performs the search. */
+  handler: string
+}
+
 export interface PluginManifest {
   id: string
   name: string
@@ -33,6 +60,12 @@ export interface PluginManifest {
   minSdkVersion?: string
   /** M6b PLG-3: other plugins this one depends on (ids) */
   dependencies?: string[]
+  /** M6b PLG-1: context-menu items appended to the file tree */
+  contextMenus?: PluginContextMenuItem[]
+  /** M6b PLG-1: search providers merged into search results */
+  searchProviders?: PluginSearchProvider[]
+  /** M6b PLG-6: event types this plugin subscribes to (file_created, …) */
+  events?: string[]
 }
 
 /** Current plugin SDK version — bump on breaking api.* surface changes. */
@@ -147,6 +180,59 @@ export class PluginHost {
     return out
   }
 
+  /** M6b PLG-1: context-menu items from all enabled plugins. */
+  listContextMenus(): (PluginContextMenuItem & { pluginId: string; pluginName: string })[] {
+    const out: (PluginContextMenuItem & { pluginId: string; pluginName: string })[] = []
+    for (const p of this.plugins) {
+      if (!p.enabled) continue
+      for (const m of p.manifest.contextMenus || []) {
+        out.push({ ...m, pluginId: p.manifest.id, pluginName: p.manifest.name })
+      }
+    }
+    return out
+  }
+
+  /** M6b PLG-1: search providers from all enabled plugins. */
+  listSearchProviders(): (PluginSearchProvider & { pluginId: string; pluginName: string })[] {
+    const out: (PluginSearchProvider & { pluginId: string; pluginName: string })[] = []
+    for (const p of this.plugins) {
+      if (!p.enabled) continue
+      if (!p.js) continue
+      for (const s of p.manifest.searchProviders || []) {
+        out.push({ ...s, pluginId: p.manifest.id, pluginName: p.manifest.name })
+      }
+    }
+    return out
+  }
+
+  /**
+   * M6b PLG-6: fire an event at enabled JS plugins subscribed via manifest.events
+   * (e.g. ["file_created", "daily_note_created"]). The plugin's `onEvent` handler
+   * receives `{ type, filePath }` as ctx.input. Fire-and-forget: errors are logged,
+   * never propagated (a slow plugin must not stall the vault watcher).
+   */
+  emitEvent(type: string, filePath?: string): void {
+    for (const p of this.plugins) {
+      if (!p.enabled || !p.jsEntry) continue
+      if (!(p.manifest.events || []).includes(type)) continue
+      const runtime = {
+        pluginId: p.manifest.id,
+        pluginName: p.manifest.name,
+        version: p.manifest.version,
+        dir: p.dir,
+        entry: p.jsEntry,
+        permissions: p.manifest.permissions
+      }
+      void runJsPluginCommand(runtime, 'onEvent', { type, filePath }).then((res) => {
+        if (!res.ok) {
+          console.warn(
+            `[PluginHost] ${p.manifest.id} onEvent(${type}) failed: ${res.error ?? 'unknown'}`
+          )
+        }
+      })
+    }
+  }
+
   private writeExamplePlugin(pluginsDir: string): void {
     const example = path.join(pluginsDir, 'example-quick-search')
     fs.mkdirSync(example, { recursive: true })
@@ -244,6 +330,34 @@ module.exports = {
       permissions: p.manifest.permissions
     }
     return runJsPluginCommand(runtime, cmd.handler || '', args)
+  }
+
+  /**
+   * M6b PLG-1: run a plugin's declared search-provider handler with
+   * `input = { query, limit }`. Returns the handler result (expected:
+   * `[{ title, path, relativePath, preview }]`).
+   */
+  async runSearchProvider(
+    pluginId: string,
+    providerId: string,
+    query: string,
+    limit = 10
+  ): Promise<{ ok: boolean; result?: unknown; error?: string }> {
+    const p = this.plugins.find((x) => x.manifest.id === pluginId)
+    if (!p) return { ok: false, error: 'Plugin not found' }
+    if (!p.enabled) return { ok: false, error: 'Plugin disabled' }
+    if (!p.jsEntry) return { ok: false, error: 'Plugin tidak punya JS entry' }
+    const sp = (p.manifest.searchProviders || []).find((s) => s.id === providerId)
+    if (!sp) return { ok: false, error: 'Search provider not found' }
+    const runtime = {
+      pluginId: p.manifest.id,
+      pluginName: p.manifest.name,
+      version: p.manifest.version,
+      dir: p.dir,
+      entry: p.jsEntry,
+      permissions: p.manifest.permissions
+    }
+    return runJsPluginCommand(runtime, sp.handler, { query, limit })
   }
 
   /** Forget session permission grants for a plugin (next op prompts again). */

@@ -513,6 +513,11 @@ export interface API {
     }[]
   >
   listPluginCommands: () => Promise<any[]>
+  /** M6b PLG-1: declarative context-menu extension point */
+  getPluginContextMenus: () => Promise<Array<{ id: string; title: string; when?: 'file' | 'folder' | 'any'; commandId: string; pluginId: string; pluginName: string }>>
+  /** M6b PLG-1: declarative search-provider extension point */
+  getPluginSearchProviders: () => Promise<Array<{ id: string; name: string; handler: string; pluginId: string; pluginName: string }>>
+  runPluginSearchProvider: (pluginId: string, providerId: string, query: string, limit?: number) => Promise<{ ok: boolean; result?: unknown; error?: string }>
   reloadPlugins: () => Promise<{ ok: boolean; count?: number }>
   runPluginCommand: (
     pluginId: string,
@@ -537,6 +542,13 @@ export interface API {
     error?: string
   }>
   listBackups: () => Promise<{ name: string; dir: string; createdAt: string }[]>
+  getBackupStatus: () => Promise<{
+    active: boolean
+    intervalMs: number
+    lastRunAt: number | null
+    nextRunAt: number | null
+    lastResult: { ok: boolean; dir?: string; files?: number; bytes?: number; error?: string } | null
+  }>
 
   setTitleBarTheme: (mode: 'dark' | 'light') => Promise<boolean>
 }

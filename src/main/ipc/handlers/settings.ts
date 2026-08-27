@@ -5,7 +5,7 @@ import { pluginHost } from '../../plugin/PluginHost'
 import { readPermissions } from '../../security/Permissions'
 import { scrubSettingsSecrets, mergeSettingsPreservingSecrets } from '../../security/SecretsStore'
 import { logAudit } from '../../security/AuditLog'
-import { createBackup, listBackups } from '../../security/Backup'
+import { createBackup, listBackups, getScheduledBackupStatus, startScheduledBackups, stopScheduledBackups } from '../../security/Backup'
 import { loadSettingsIntoProviders } from '../shared'
 
 export function registerSettingsHandlers(): void {
@@ -26,6 +26,17 @@ export function registerSettingsHandlers(): void {
     automationEngine.setEnabled(perms.automation)
     pluginHost.setAllowed(perms.plugins)
     loadSettingsIntoProviders()
+    // M8 SEC-2: restart the auto-backup schedule when its settings change
+    const root = workspaceEngine.getState().rootPath
+    const b = (merged.backup || {}) as { auto?: boolean; intervalHours?: number; maxBackups?: number }
+    if (root) {
+      if (b.auto) {
+        const hours = Math.max(1, Number(b.intervalHours) || 6)
+        startScheduledBackups(root, hours * 3600_000, Math.max(1, Number(b.maxBackups) || 10))
+      } else {
+        stopScheduledBackups()
+      }
+    }
     // M8.5 (SEC-1): settings changes are security-relevant — audit them
     try {
       logAudit({
@@ -58,5 +69,10 @@ export function registerSettingsHandlers(): void {
     const root = workspaceEngine.getState().rootPath
     if (!root) return []
     return listBackups(root)
+  })
+
+  // M8 SEC-2: scheduled auto-backup status (last/next run, interval)
+  ipcMain.handle('backup:status', async () => {
+    return getScheduledBackupStatus()
   })
 }

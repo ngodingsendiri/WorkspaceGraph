@@ -339,7 +339,12 @@ export class AutomationEngine {
     }
   }
 
+  /** M6b PLG-6: optional forwarder to plugin event subscribers (set by host). */
+  onPluginEvent?: (type: AutomationTriggerType, filePath?: string) => void
+
   handleEvent(type: AutomationTriggerType, filePath?: string): void {
+    // M6b PLG-6: forward to plugin subscribers regardless of automation state
+    this.onPluginEvent?.(type, filePath)
     if (!this.enabled || !this.rootPath) return
     // A1: stop runaway re-entry (rule write → watcher echo → same rule …).
     // Fail-open on the boundary: skip the event, log once, allow later events.

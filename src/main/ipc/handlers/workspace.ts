@@ -11,6 +11,7 @@ import { pluginHost } from '../../plugin/PluginHost'
 import { mcpManager } from '../../mcp/McpClientManager'
 import { readPermissions } from '../../security/Permissions'
 import { syncWorkspaceData, attachFileWatcher, flushWatcherQueue } from '../shared'
+import { startScheduledBackups, stopScheduledBackups } from '../../security/Backup'
 
 /**
  * AE-2: shared vault-open flow for workspace:open and workspace:create.
@@ -59,6 +60,22 @@ function openVaultFlow(root: string): void {
   automationEngine.start()
   pluginHost.setAllowed(perms.plugins)
   pluginHost.load(root)
+  // M6b PLG-6: plugins subscribed via manifest.events receive the same event
+  // stream automation sees (file_created, project_created, …).
+  automationEngine.onPluginEvent = (type, fp) => pluginHost.emitEvent(type, fp)
+  // M8 SEC-2: scheduled auto-backup (opt-in via settings.backup.auto)
+  try {
+    const s = workspaceEngine.getSettings()
+    const b = (s.backup || {}) as { auto?: boolean; intervalHours?: number; maxBackups?: number }
+    if (b.auto) {
+      const hours = Math.max(1, Number(b.intervalHours) || 6)
+      startScheduledBackups(root, hours * 3600_000, Math.max(1, Number(b.maxBackups) || 10))
+    } else {
+      stopScheduledBackups()
+    }
+  } catch {
+    stopScheduledBackups()
+  }
   if (perms.automation) {
     automationEngine.handleEvent('workspace_opened')
   }
@@ -122,6 +139,7 @@ export function registerWorkspaceHandlers(): void {
     automationEngine.stop()
     automationEngine.unload()
     pluginHost.unload()
+    stopScheduledBackups()
     mcpManager.disconnectAll()
     graphEngine.clear()
     searchEngine.clear()

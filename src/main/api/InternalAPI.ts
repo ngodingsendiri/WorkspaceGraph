@@ -91,6 +91,26 @@ export const InternalAPI = {
     return pluginHost.listCommands()
   },
 
+  /** M6b PLG-1: declarative context-menu extension point. */
+  getPluginContextMenus(): ReturnType<typeof pluginHost.listContextMenus> {
+    return pluginHost.listContextMenus()
+  },
+
+  /** M6b PLG-1: declarative search-provider extension point. */
+  getPluginSearchProviders(): ReturnType<typeof pluginHost.listSearchProviders> {
+    return pluginHost.listSearchProviders()
+  },
+
+  /** M6b PLG-1: run a plugin search provider (sandboxed JS). */
+  runPluginSearchProvider(
+    pluginId: string,
+    providerId: string,
+    query: string,
+    limit = 10
+  ): ReturnType<typeof pluginHost.runSearchProvider> {
+    return pluginHost.runSearchProvider(pluginId, providerId, query, limit)
+  },
+
   runPluginCommand(
     pluginId: string,
     commandId: string,
