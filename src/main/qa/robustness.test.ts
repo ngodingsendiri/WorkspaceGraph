@@ -215,8 +215,9 @@ describe('robustness: corrupt on-disk state must never crash the app', () => {
   })
 
   it('corrupt index.db → Fuse-only fallback, no crash, corrupt file moved aside', () => {
-    const dbDir = path.join(vault, '.workspacegraph')
+    const dbDir = path.join(vault, '.workspacegraph', 'cache')
     const dbPath = path.join(dbDir, 'index.db')
+    fs.mkdirSync(dbDir, { recursive: true })
     fs.writeFileSync(dbPath, 'this is not a sqlite database at all 12345')
     dbMock.failNext = true
     expect(() => indexDatabase.open(vault)).not.toThrow()

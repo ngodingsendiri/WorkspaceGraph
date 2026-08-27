@@ -109,6 +109,25 @@ jobs:
             src/preload/ src/renderer/ --include='*.ts' --include='*.tsx' \
           || { echo "::error::API key literal found in preload/renderer"; exit 1; }
 
+  # M9 (TST-1): Playwright/Electron E2E — drives the real built app through the
+  # full renderer flow (open vault → create note → wiki link → graph → chat).
+  # Needs the native better-sqlite3 rebuilt for Electron (npm ci postinstall),
+  # the built renderer, and an X server (xvfb) for Electron on headless Linux.
+  e2e:
+    name: E2E (Playwright Electron)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+      - run: npm ci
+      - run: npm run build
+      - name: Run E2E
+        run: xvfb-run -a npx playwright test
+        shell: bash
+
   build:
     name: Build
     needs: [typecheck, lint, test, test-flaky]
