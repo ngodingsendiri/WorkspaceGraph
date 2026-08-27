@@ -79,7 +79,9 @@ export const DEFAULT_TIMEOUT_MS = 15_000
 const OP_DETAILS: Record<string, string> = {
   'vault.write': 'menulis / mengubah file di vault',
   'vault.delete': 'menghapus file dari vault (pindah ke .trash)',
-  'automation.runRule': 'menjalankan aturan automation'
+  'automation.runRule': 'menjalankan aturan automation',
+  // M6b PLG-5
+  'settings.set': 'menyimpan pengaturan plugin'
 }
 
 // ─── Default providers (real engines) ──────────────────────────────────────
@@ -181,6 +183,7 @@ const OP_MANIFEST_PERM: Record<string, string | undefined> = {
   'automation.runRule': 'automation',
   'domain.list': 'read',
   'settings.get': undefined,
+  'settings.set': 'read',
   'ui.notify': undefined
 }
 
@@ -277,6 +280,21 @@ async function execApi(
       }
       case 'settings.get':
         return { ok: true, value: providers.getSetting(String(callArgs[0] ?? '')) }
+      // M6b PLG-5: allow sandboxed plugins to persist key-value settings
+      case 'settings.set': {
+        if (!(await gate.check(plugin, 'settings.set'))) {
+          return { ok: false, value: { error: `Permission denied: settings.set` } }
+        }
+        const key = String(callArgs[0] ?? '')
+        const val = callArgs[1]
+        const current = workspaceEngine.getSettings()
+        const pluginScoped = (current.plugin || {}) as Record<string, Record<string, unknown>>
+        const scoped = pluginScoped[plugin.pluginId] ?? {}
+        scoped[key] = val
+        pluginScoped[plugin.pluginId] = scoped
+        workspaceEngine.saveSettings({ ...current, plugin: pluginScoped })
+        return { ok: true, value: true }
+      }
       case 'ui.notify':
         providers.notify(String(callArgs[0] ?? ''))
         return { ok: true, value: true }

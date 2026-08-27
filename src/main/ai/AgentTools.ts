@@ -17,6 +17,7 @@ import { mcpManager } from '../mcp/McpClientManager'
 import type { AgentRole } from './ContextEngine'
 import type { AIToolCall, ProviderTool } from './providers/BaseProvider'
 import { validateToolArgs } from './toolArgsValidation'
+import { validateStructuredOutput } from './structuredOutput'
 
 // M2.5 (MC-6): static schema map for deterministic argument validation — the
 // same shapes buildToolSchemas advertises to the model, so what is validated
@@ -951,15 +952,20 @@ export async function executeTool(
         // under Planning/. Mirrors the create_note lifecycle (dock + diff +
         // Apply), but the plan document is generated from STRUCTURED steps the
         // model passes, not free-form content.
-        const title = String(args.title || '')
+        // M3 (AI-4): formal schema validation of the structured output before
+        // any path/disk work — rejects missing goal/empty steps up front.
+        const checked = validateStructuredOutput('plan', args)
+        if (!checked.ok) return { tool, ok: false, error: `create_plan: ${checked.message}` }
+        const sargs = checked.value
+        const title = String(sargs.title || '')
           .trim()
           .replace(/[<>:"/\\|?*]+/g, ' ')
           .trim()
           .slice(0, 80)
-        const goal = String(args.goal || '').trim()
-        const stepsRaw = Array.isArray(args.steps) ? args.steps : []
+        const goal = String(sargs.goal || '').trim()
+        const stepsRaw = Array.isArray(sargs.steps) ? sargs.steps : []
         const steps = stepsRaw.map((s) => String(s).trim()).filter(Boolean)
-        const notes = String(args.notes || '').trim()
+        const notes = String(sargs.notes || '').trim()
         if (!goal) return { tool, ok: false, error: 'create_plan: goal wajib diisi' }
         if (steps.length === 0) {
           return { tool, ok: false, error: 'create_plan: steps harus berupa array non-kosong' }

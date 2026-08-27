@@ -114,7 +114,7 @@
 
 ### M3: Patuhi Law 004/005 & spec 19/20/21
 
-> **Status M3: 🔄 SEBAGIAN — 10/12 item selesai. Sisa: AI-4 formal schema validation (deferred), pipeline/renderer prompt migration (low).**
+> **Status M3: ✅ SELESAI — 12/12. AI-4 formal schema (`structuredOutput.ts`) + tool args; AI-10 prompt ke PromptRegistry; UI rollback prompt (low) terserap.**
 
 | # | Audit ID | Masalah | Solusi | Status |
 |---|---|---|---|---|
@@ -124,7 +124,7 @@
 | 4 | AI-19 | Struktur conversation kurang relasi & summary | Tambah field Related Knowledge/Projects/Tasks/Documents, Summary, Status | ✅ `StoredConversation` + `related*`/`summary`/`status` |
 | 5 | AI-20 | Rename & Archive session hilang | Tambah `chat:rename` + `chat:archive` (pindah ke chats-archive + status) | ✅ `renameConversation`/`archiveConversation` + IPC `chat:rename`/`chat:archive` |
 | 6 | AI-21 | Tidak ada summarization & conversation search | `chat:summarize` via middleware + index chats ke SearchEngine (title/content/summary) | ✅ `searchConversations` + IPC `chat:search`; summarize via `summary` field (extractive ready) |
-| 7 | AI-4 | Output validation tidak formal | Validasi skema/structured output sebelum dianggap sukses | ✅ `verifyCitations` + `validateToolArgs` sudah ada; formal schema deferred (low) |
+| 7 | AI-4 | Output validation tidak formal | Validasi skema/structured output sebelum dianggap sukses | ✅ `structuredOutput.ts` (plan/knowledge/task schema) + `verifyCitations` + `validateToolArgs` |
 | 8 | AI-1 | Permission gate hanya di IPC, bukan middleware | Double-gate: cek `perms` di dalam `streamMessage`/`sendMessage` | ✅ double-gate di `runStreamInner` |
 | 9 | AI-6 | Capability detection kurang (reasoning/structured output) | Perluas `ProviderCapabilities` | ✅ `reasoning` + `structuredOutput` di 7 provider |
 | 10 | AI-11/13/14 | PromptEntry kurang field; versioning tanpa history; kategori prompt minim | Field Name/Author/Description/Status/LastUpdated; snapshot versi + rollback; kategori Writing/Research/Knowledge/Project/Task/Search/Automation/Agent | ✅ fields + categories + `snapshotPromptHistory`/`getPromptHistory`; UI rollback deferred (low) |
@@ -253,7 +253,7 @@ Prioritas berdasar dampak & ketergantungan. **M4a** = perbaikan klasifikasi (blo
 
 ## PHASE 6 — PLATFORM: AUTOMATION + PLUGIN
 
-> **Status M6: 🔄 SEBAGIAN — M6a 5/8, M6b 4/7. High-priority selesai; sisa medium/low.**
+> **Status M6: ✅ SELESAI — M6a 8/8, M6b 7/8 (PLG-1 contextMenus/searchProviders, PLG-5 settings.set, PLG-6 events.subscribe). Sisa: PLG-2 lifecycle events (low).**
 
 ### M6a: Automation (spec 22)
 
@@ -272,11 +272,11 @@ Prioritas berdasar dampak & ketergantungan. **M4a** = perbaikan klasifikasi (blo
 
 | # | Audit ID | Masalah | Solusi | Status |
 |---|---|---|---|---|
-| 1 | PLG-1 | Hanya 1/9 extension point | Mulai 1-2 berdampak: Context Menu + Search Provider (bisa declarative di manifest tanpa UI SDK penuh) | ⬜ deferred (butuh UI SDK) |
+| 1 | PLG-1 | Hanya 1/9 extension point | Mulai 1-2 berdampak: Context Menu + Search Provider (bisa declarative di manifest tanpa UI SDK penuh) | ✅ `contextMenus` + `searchProviders` manifest; Sidebar ctx-menu + SearchModal merge (IPC + preload) |
 | 2 | PLG-2 | Lifecycle 8 tahap tidak lengkap | Dokumentasikan "folder = install"; tambah validasi SDK version + event lifecycle | 🔶 SDK gate ✅; lifecycle event deferred |
 | 3 | PLG-3 | Manifest kurang dependencies/minimumSdkVersion | Tambah field + `minSdk` gate | ✅ `minSdkVersion`/`dependencies` + semver gate + PLUGIN_SDK_VERSION |
-| 4 | PLG-5 | SDK APIs jauh dari spesifikasi | Tambah read-only Project/Task/Knowledge (via DomainEngine) + `settings.set` + Event subscribe | ✅ `domain.list` read-only (settings.set/event deferred) |
-| 5 | PLG-6 | Event system TIDAK ADA | Minimal `events.subscribe(channel, cb)` dibatasi event yang ada | ⬜ deferred |
+| 4 | PLG-5 | SDK APIs jauh dari spesifikasi | Tambah read-only Project/Task/Knowledge (via DomainEngine) + `settings.set` + Event subscribe | ✅ `domain.list` read-only + `settings.set` (plugin-scoped) |
+| 5 | PLG-6 | Event system TIDAK ADA | Minimal `events.subscribe(channel, cb)` dibatasi event yang ada | ✅ `manifest.events` + `PluginHost.emitEvent` + `AutomationEngine.onPluginEvent` |
 | 6 | PLG-7 | Resource limits tanpa cap memori | `resourceLimits: { maxOldGenerationSizeMb }` pada Worker | ✅ 256MB old / 64MB young |
 | 7 | PLG-8 | Contoh plugin `enabled: true` | Ubah ke `false` (konsisten ADR-0003) | ✅ |
 
@@ -317,7 +317,7 @@ Prioritas berdasar dampak & ketergantungan. **M4a** = perbaikan klasifikasi (blo
 
 ## PHASE 8 — PLATFORM HARDENING
 
-> **Status M8: 🔄 SEBAGIAN — 12/17 selesai. Sisa: SEC backup terjadwal, API-1 full, INS custom, FST pindah index.db (deferred).**
+> **Status M8: 🔄 SEBAGIAN — 15/17. Sisa: API-1 full migration + API-3 typed IPC (bertahap). SEC-2 terjadwal, INS, FST semua selesai.**
 
 ### M8: MCP, Security, API, Installer, File Structure
 
@@ -328,7 +328,7 @@ Prioritas berdasar dampak & ketergantungan. **M4a** = perbaikan klasifikasi (blo
 | 3 | MCP-1 | Handler tanpa validasi array | `Array.isArray` guard | ✅ handler + saveServers |
 | 4 | MCP-4 | Error connectAll di-swallow | Log + set errors map | ✅ per-server console.warn |
 | 5 | SEC-1 | Audit logging tidak lengkap (config/plugin/security) | Perluas jadi event log umum (`audit.jsonl`) | ✅ `security/AuditLog.ts` — settings/plugin/automation/MCP/denial di-audit |
-| 6 | SEC-2 | Backup protection tidak ada | Backup folder manual + checksum + restore point | ✅ `security/Backup.ts` + IPC backup:create/list + Settings UI; terjadwal deferred |
+| 6 | SEC-2 | Backup protection tidak ada | Backup folder manual + checksum + restore point | ✅ `security/Backup.ts` + IPC backup:create/list + Settings UI + auto-backup terjadwal (interval/prune) |
 | 7 | SEC-3 | Enkripsi hanya API keys AI | Terapkan ke env MCP (dengan MCP-3) | ✅ redaction; safeStorage deferred (env di disk tetap, tak terekspos ke renderer) |
 | 8 | SEC-4 | CSP lemah + sandbox off | Pisahkan dev/prod CSP (ADR-0007); verifikasi contextIsolation | ✅ prod tanpa unsafe-eval/inline |
 | 9 | API-1 | InternalAPI bukan kontrak | Migrasi bertahap handler ke InternalAPI (read-only dulu) | 🔶 plugins handler sudah via InternalAPI; search handler tipis; full migration bertahap |
@@ -349,7 +349,7 @@ Prioritas berdasar dampak & ketergantungan. **M4a** = perbaikan klasifikasi (blo
 
 ### M9: E2E, AI eval, cross-platform, security testing (spec 34)
 
-> **Status M9: 🔄 SEBAGIAN — 5/6 selesai (TST-1 E2E, TST-2 golden-set, TST-3 windows CI, TST-4 audit+leak, TST-6 thresholds). Sisa: TST-5 perf baseline gate.**
+> **Status M9: ✅ SELESAI — 6/6 (TST-1 E2E, TST-2 golden-set, TST-3 windows CI, TST-4 audit+leak, TST-5 perf gate, TST-6 thresholds).**
 
 | # | Audit ID | Masalah | Solusi |
 |---|---|---|---|
@@ -357,7 +357,7 @@ Prioritas berdasar dampak & ketergantungan. **M4a** = perbaikan klasifikasi (blo
 | 2 | TST-2 | AI evaluation tidak ada | Golden-set kecil untuk prompt template + konsistensi output + token efficiency | ✅ golden-set 6 prompt (anti-drift) di `PromptRegistry.test.ts` |
 | 3 | TST-3 | Cross-platform tidak di CI | Job `windows-latest` untuk test (path + safeStorage) | ✅ ci.yml job test-windows |
 | 4 | TST-4 | Security testing tidak ada kategori | Fuzz IPC input + leak-sweep otomatis + `npm audit` job | ✅ npm audit + leak sweep in CI |
-| 5 | TST-5 | Performance tanpa baseline gate | 2-3 metrik dengan threshold longgar sebagai gate |
+| 5 | TST-5 | Performance tanpa baseline gate | 2-3 metrik dengan threshold longgar sebagai gate | ✅ PerformanceBaseline.test.ts (graph 1000n<5s, update<2s, search 1000<15s, query<1s) |
 | 6 | TST-6 | Coverage tanpa threshold | `coverage.thresholds` di vitest.config + job security CI | ✅ vitest.coverage.thresholds + CI |
 
 **Verifikasi M9:** CI hijau dengan job baru; E2E menangkap regression alur penuh.
