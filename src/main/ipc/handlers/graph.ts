@@ -12,10 +12,11 @@ import {
   deleteGraphView,
   mergeGraphSettings
 } from '../../engine/GraphLayoutStore'
+import { InternalAPI } from '../../api/InternalAPI'
 
 export function registerGraphHandlers(): void {
   ipcMain.handle('graph:getData', async () => {
-    return graphEngine.getGraphData()
+    return InternalAPI.getGraph()
   })
 
   /**
@@ -23,11 +24,11 @@ export function registerGraphHandlers(): void {
    * Suitable for Global Graph view on large vaults — much lighter IPC payload.
    */
   ipcMain.handle('graph:getSkeleton', async () => {
-    return graphEngine.getGraphSkeleton()
+    return InternalAPI.getGraphSkeleton()
   })
 
   ipcMain.handle('graph:getNeighbors', async (_, nodeId: string, depth?: number) => {
-    return graphEngine.getNeighbors(nodeId, depth ?? 1)
+    return InternalAPI.getGraphNeighbors(nodeId, depth ?? 1)
   })
 
   /** Phase 4: shortest path between two notes (wiki graph). */
@@ -73,25 +74,14 @@ export function registerGraphHandlers(): void {
   )
 
   ipcMain.handle('graph:getOrphans', async () => {
-    const ids = graphEngine.getOrphanNodeIds()
-    return {
-      ids,
-      nodes: ids.map((id) => graphEngine.getNodeById(id)).filter(Boolean),
-      count: ids.length
-    }
+    return InternalAPI.getGraphOrphans()
   })
 
   ipcMain.handle('graph:getHubs', async (_, minDegree?: number) => {
     const settings = workspaceEngine.getSettings()
     const gs = readGraphSettingsFromAppSettings(settings)
     const thr = minDegree ?? gs.filters.hubDegreeThreshold
-    const nodes = graphEngine.getHubNodes(thr)
-    return {
-      minDegree: thr,
-      ids: nodes.map((n) => n.id),
-      nodes,
-      count: nodes.length
-    }
+    return InternalAPI.getGraphHubs(Number(thr) || 3)
   })
 
   ipcMain.handle('graph:getLayout', async () => {
@@ -212,18 +202,14 @@ export function registerGraphHandlers(): void {
   })
 
   ipcMain.handle('graph:getBacklinks', async (_, nodeIdOrPath: string) => {
-    const nodeId = graphEngine.resolveNodeId(nodeIdOrPath)
-    if (!nodeId) return { nodes: [], edges: [] }
-    return graphEngine.getBacklinks(nodeId)
+    return InternalAPI.getGraphBacklinks(nodeIdOrPath)
   })
 
   ipcMain.handle('graph:getOutgoing', async (_, nodeIdOrPath: string) => {
-    const nodeId = graphEngine.resolveNodeId(nodeIdOrPath)
-    if (!nodeId) return { nodes: [], edges: [] }
-    return graphEngine.getOutgoingLinks(nodeId)
+    return InternalAPI.getGraphOutgoing(nodeIdOrPath)
   })
 
   ipcMain.handle('graph:resolveLink', async (_, target: string) => {
-    return graphEngine.resolveTitleToPath(target)
+    return InternalAPI.resolveWikiLink(target)
   })
 }

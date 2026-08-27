@@ -3,13 +3,12 @@ import { workspaceEngine } from '../../engine/WorkspaceEngine'
 import { automationEngine, AutomationEngine } from '../../engine/AutomationEngine'
 import { readPermissions } from '../../security/Permissions'
 import { logAudit } from '../../security/AuditLog'
+import { InternalAPI } from '../../api/InternalAPI'
 
 export function registerAutomationHandlers(): void {
   ipcMain.handle('automation:get', async () => {
     return {
-      enabled: automationEngine.isEnabled(),
-      config: automationEngine.getConfig(),
-      logs: automationEngine.getLogs(40),
+      ...InternalAPI.getAutomation(),
       schedule: automationEngine.getSchedulerInfo()
     }
   })

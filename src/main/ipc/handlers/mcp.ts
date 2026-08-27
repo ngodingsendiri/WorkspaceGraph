@@ -3,6 +3,17 @@ import { mcpManager, type McpServerConfig } from '../../mcp/McpClientManager'
 import { workspaceEngine } from '../../engine/WorkspaceEngine'
 import { readPermissions } from '../../security/Permissions'
 import { logAudit } from '../../security/AuditLog'
+import { validateArrayOf, validateShape, type FieldSpec } from '../../api/ipcValidation'
+
+const MCP_SERVER_SHAPE: Record<string, FieldSpec> = {
+  id: { type: 'string' },
+  name: { type: 'string' },
+  command: { type: 'string', optional: true },
+  args: { type: 'array', optional: true },
+  enabled: { type: 'boolean', optional: true },
+  env: { type: 'object', optional: true },
+  url: { type: 'string', optional: true }
+}
 
 /**
  * R0-1 — MCP server registry IPC. Settings → MCP drives these; the agent side
@@ -49,8 +60,9 @@ export function registerMcpHandlers(): void {
    * sends back the redacted env shape — preserve existing real env values
    * server-side instead of trusting the renderer round-trip. */
   ipcMain.handle('mcp:saveServers', async (_, servers: unknown) => {
-    if (!Array.isArray(servers)) {
-      return { ok: false, error: 'Invalid payload: expected an array of servers' }
+    const checked = validateArrayOf<McpServerConfig>(servers, MCP_SERVER_SHAPE)
+    if (!checked.ok) {
+      return { ok: false, error: `Invalid payload: ${checked.error}` }
     }
     if (!mcpAllowed()) {
       // M8.5 (SEC-1): denied MCP config writes are audited
@@ -64,7 +76,7 @@ export function registerMcpHandlers(): void {
     // Merge: keep the REAL env of existing servers; honor new env from the
     // form only when it carries non-redacted values.
     const prev = mcpManager.getServers()
-    const merged = (servers as McpServerConfig[]).map((s) => {
+    const merged = checked.value.map((s) => {
       const old = prev.find((p) => p.id === s.id)
       const redactedSent =
         s.env &&
@@ -93,13 +105,22 @@ export function registerMcpHandlers(): void {
    * M8.1: gated on aiTools (spawns an arbitrary process).
    */
   ipcMain.handle('mcp:testServer', async (_, server: unknown) => {
-    if (!server || typeof server !== 'object') {
-      return { ok: false, error: 'Invalid server config' }
+    const checked = validateShape<McpServerConfig>(server, {
+      id: { type: 'string' },
+      name: { type: 'string' },
+      command: { type: 'string', optional: true },
+      url: { type: 'string', optional: true },
+      args: { type: 'array', optional: true },
+      env: { type: 'object', optional: true },
+      enabled: { type: 'boolean', optional: true }
+    })
+    if (!checked.ok) {
+      return { ok: false, error: `Invalid server config: ${checked.error}` }
     }
     if (!mcpAllowed()) {
       return { ok: false, error: 'MCP dinonaktifkan — aktifkan AI Tools di Settings → Security' }
     }
-    return mcpManager.testServer(server as McpServerConfig)
+    return mcpManager.testServer(checked.value)
   })
 
   /** All discovered tools across connected servers (flattened, for display). */

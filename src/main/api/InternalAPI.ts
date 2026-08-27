@@ -39,12 +39,84 @@ export const InternalAPI = {
     return searchEngine.search({ query, limit })
   },
 
+  searchRecentNotes(limit: number): ReturnType<typeof searchEngine.getRecentFiles> {
+    return searchEngine.getRecentFiles(limit)
+  },
+
+  searchByTag(tag: string): ReturnType<typeof searchEngine.searchByTag> {
+    return searchEngine.searchByTag(tag)
+  },
+
+  getSearchTags(): ReturnType<typeof searchEngine.getAllTags> {
+    return searchEngine.getAllTags()
+  },
+
   getGraph(): GraphData {
     return graphEngine.getGraphData()
   },
 
+  getGraphSkeleton(): ReturnType<typeof graphEngine.getGraphSkeleton> {
+    return graphEngine.getGraphSkeleton()
+  },
+
+  getGraphNeighbors(nodeId: string, depth = 1): ReturnType<typeof graphEngine.getNeighbors> {
+    return graphEngine.getNeighbors(nodeId, depth)
+  },
+
+  getGraphOrphans(): {
+    ids: string[]
+    nodes: unknown[]
+    count: number
+  } {
+    const ids = graphEngine.getOrphanNodeIds()
+    return {
+      ids,
+      nodes: ids.map((id) => graphEngine.getNodeById(id)).filter(Boolean),
+      count: ids.length
+    }
+  },
+
+  getGraphHubs(minDegree: number): {
+    minDegree: number
+    ids: string[]
+    nodes: unknown[]
+    count: number
+  } {
+    const nodes = graphEngine.getHubNodes(minDegree)
+    return {
+      minDegree,
+      ids: nodes.map((n) => n.id),
+      nodes,
+      count: nodes.length
+    }
+  },
+
+  getGraphBacklinks(nodeIdOrPath: string): ReturnType<typeof graphEngine.getBacklinks> {
+    const nodeId = graphEngine.resolveNodeId(nodeIdOrPath)
+    if (!nodeId) return { nodes: [], edges: [] }
+    return graphEngine.getBacklinks(nodeId)
+  },
+
+  getGraphOutgoing(nodeIdOrPath: string): ReturnType<typeof graphEngine.getOutgoingLinks> {
+    const nodeId = graphEngine.resolveNodeId(nodeIdOrPath)
+    if (!nodeId) return { nodes: [], edges: [] }
+    return graphEngine.getOutgoingLinks(nodeId)
+  },
+
+  resolveWikiLink(target: string): ReturnType<typeof graphEngine.resolveTitleToPath> {
+    return graphEngine.resolveTitleToPath(target)
+  },
+
   getDomainOverview(): DomainOverview {
     return domainEngine.getOverview()
+  },
+
+  listDomain(type: string): ReturnType<typeof domainEngine.listByType> {
+    return domainEngine.listByType(type as never)
+  },
+
+  peopleLinkedTo(filePath: string): ReturnType<typeof domainEngine.peopleLinkedTo> {
+    return domainEngine.peopleLinkedTo(filePath)
   },
 
   listTemplates(): TemplateDef[] {

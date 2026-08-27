@@ -5,11 +5,11 @@ import { workspaceEngine } from '../../engine/WorkspaceEngine'
 import { templateEngine } from '../../engine/TemplateEngine'
 import { assertPathInVault } from '../../security/PathSandbox'
 import { syncSingleFile, debounceEmit } from '../shared'
+import { InternalAPI } from '../../api/InternalAPI'
 
 export function registerTemplateHandlers(): void {
   ipcMain.handle('template:list', async () => {
-    const root = workspaceEngine.getState().rootPath
-    return templateEngine.listTemplates(root).map((t) => ({
+    return InternalAPI.listTemplates().map((t) => ({
       id: t.id,
       name: t.name,
       kind: t.kind,

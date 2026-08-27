@@ -317,7 +317,7 @@ Prioritas berdasar dampak & ketergantungan. **M4a** = perbaikan klasifikasi (blo
 
 ## PHASE 8 — PLATFORM HARDENING
 
-> **Status M8: 🔄 SEBAGIAN — 15/17. Sisa: API-1 full migration + API-3 typed IPC (bertahap). SEC-2 terjadwal, INS, FST semua selesai.**
+> **Status M8: ✅ SELESAI — 17/17. API-1 handler → InternalAPI (search/domain/graph/automation/templates), API-3 `ipcValidation` typed payload gate (chat/checkpoint/plugins/mcp).**
 
 ### M8: MCP, Security, API, Installer, File Structure
 
@@ -331,9 +331,9 @@ Prioritas berdasar dampak & ketergantungan. **M4a** = perbaikan klasifikasi (blo
 | 6 | SEC-2 | Backup protection tidak ada | Backup folder manual + checksum + restore point | ✅ `security/Backup.ts` + IPC backup:create/list + Settings UI + auto-backup terjadwal (interval/prune) |
 | 7 | SEC-3 | Enkripsi hanya API keys AI | Terapkan ke env MCP (dengan MCP-3) | ✅ redaction; safeStorage deferred (env di disk tetap, tak terekspos ke renderer) |
 | 8 | SEC-4 | CSP lemah + sandbox off | Pisahkan dev/prod CSP (ADR-0007); verifikasi contextIsolation | ✅ prod tanpa unsafe-eval/inline |
-| 9 | API-1 | InternalAPI bukan kontrak | Migrasi bertahap handler ke InternalAPI (read-only dulu) | 🔶 plugins handler sudah via InternalAPI; search handler tipis; full migration bertahap |
+| 9 | API-1 | InternalAPI bukan kontrak | Migrasi bertahap handler ke InternalAPI (read-only dulu) | ✅ search/domain/graph/automation/templates via InternalAPI (graph path/local/layout tetap handler) |
 | 10 | API-2 | Versioning tidak nyata | Sinkronkan apiVersion dengan app | ✅ '2.0.0' |
-| 11 | API-3 | IPC tidak typed | Kurangi `any`; validasi bentuk di handler | 🔶 sebagian (MCP handlers divalidasi) |
+| 11 | API-3 | IPC tidak typed | Kurangi `any`; validasi bentuk di handler | ✅ `api/ipcValidation.ts` (validateShape/validateArrayOf) di chat/checkpoint/plugins/mcp + InternalAPI boundary |
 | 12 | API-4/5 | Error handling 3 gaya; type basi | Envelope `{ok,data?,error?}`; hapus resolveKerjaVault/openKerjaVault | ✅ type basi dihapus |
 | 13 | INS-1 | Tidak ada update system | electron-updater + publish config ATAU ADR non-goal | 📋 ADR-0013: adopsi di v2 |
 | 14 | INS-2 | Migrasi tanpa backup config | Snapshot sebelum migrasi + validasi hasil | ✅ backup-vN.json sebelum migrate |

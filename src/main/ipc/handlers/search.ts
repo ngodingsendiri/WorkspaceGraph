@@ -1,28 +1,30 @@
 import { ipcMain } from 'electron'
 import { workspaceEngine } from '../../engine/WorkspaceEngine'
-import { searchEngine } from '../../engine/SearchEngine'
 import { indexDatabase } from '../../engine/IndexDatabase'
 import { syncWorkspaceData } from '../shared'
+import { InternalAPI } from '../../api/InternalAPI'
 
 export function registerSearchHandlers(): void {
-  ipcMain.handle('search:query', async (_, options) => {
-    return searchEngine.search(options)
+  ipcMain.handle('search:query', async (_, options: { query?: string; limit?: number } = {}) => {
+    // M8 API-1: route through the stable InternalAPI facade
+    return InternalAPI.search(String(options?.query ?? ''), Number(options?.limit) || 20)
   })
 
   ipcMain.handle('search:recentNotes', async (_, limit: number) => {
-    return searchEngine.getRecentFiles(limit)
+    return InternalAPI.searchRecentNotes(Number(limit) || 12)
   })
 
   ipcMain.handle('search:byTag', async (_, tag: string) => {
-    return searchEngine.searchByTag(tag)
+    if (typeof tag !== 'string') return []
+    return InternalAPI.searchByTag(tag)
   })
 
   ipcMain.handle('search:getTags', async () => {
-    return searchEngine.getAllTags()
+    return InternalAPI.getSearchTags()
   })
 
   ipcMain.handle('search:getStats', async () => {
-    return searchEngine.getIndexStats()
+    return InternalAPI.getIndexStats()
   })
 
   ipcMain.handle('search:rebuildIndex', async () => {
@@ -33,14 +35,11 @@ export function registerSearchHandlers(): void {
     if (!indexDatabase.isOpen()) {
       indexDatabase.open(state.rootPath)
     }
-    // Full rescan from disk → memory + sqlite (keep original fire-and-forget timing)
     syncWorkspaceData(state.rootPath)
-    const stats = searchEngine.getIndexStats()
+    const stats = InternalAPI.getIndexStats()
     return {
       ok: true,
-      count: stats.sqlite.count || stats.memoryCount,
-      path: stats.sqlite.path,
-      lastRebuild: stats.sqlite.lastRebuild
+      count: stats.memoryCount ?? 0
     }
   })
 }
