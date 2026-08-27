@@ -21,6 +21,7 @@
   --color-primary-active: hsl(252, 60%, 55%);
   --color-primary-subtle: hsla(252, 60%, 65%, 0.15);
   --color-primary-glow: transparent;
+  --text-on-primary: #fff;
 
   --color-accent: hsl(195, 90%, 55%);
   --color-accent-subtle: hsl(195, 70%, 15%);
@@ -223,6 +224,7 @@
   --color-primary-hover: hsl(252, 55%, 42%);
   --color-primary-active: hsl(252, 55%, 38%);
   --color-primary-subtle: hsla(252, 55%, 48%, 0.12);
+  --text-on-primary: #fff;
 
   --color-accent: hsl(195, 70%, 38%);
   --color-accent-subtle: hsla(195, 70%, 38%, 0.12);
@@ -310,6 +312,7 @@
   --color-primary: hsl(60, 100%, 50%);
   --color-primary-hover: hsl(60, 100%, 60%);
   --color-primary-active: hsl(60, 100%, 40%);
+  --text-on-primary: #000;
   --color-success: hsl(120, 100%, 50%);
   --color-warning: hsl(45, 100%, 50%);
   --color-error: hsl(0, 100%, 60%);

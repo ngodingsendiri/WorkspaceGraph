@@ -37,7 +37,7 @@ export class ErrorBoundary extends React.Component<
             boxSizing: 'border-box'
           }}
         >
-          <h1 style={{ fontSize: 18, margin: '0 0 12px' }}>{label} crash</h1>
+          <h1 style={{ fontSize: 'var(--text-lg)', margin: '0 0 12px' }}>{label} crash</h1>
           <p style={{ opacity: 0.8, marginBottom: 12 }}>
             UI gagal render. Salin error di bawah (DevTools: Ctrl+Shift+I).
           </p>
@@ -46,7 +46,7 @@ export class ErrorBoundary extends React.Component<
               background: 'var(--bg-input)',
               padding: 12,
               borderRadius: 8,
-              fontSize: 12,
+              fontSize: 'var(--text-sm)',
               whiteSpace: 'pre-wrap',
               wordBreak: 'break-word',
               border: '1px solid var(--border-default)',

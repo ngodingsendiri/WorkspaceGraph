@@ -1106,7 +1106,7 @@ export const SettingsView: React.FC = () => {
                 </div>
                 <p
                   style={{
-                    fontSize: 12,
+                    fontSize: 'var(--text-sm)',
                     color: 'var(--text-muted)',
                     marginBottom: 10,
                     lineHeight: 1.45
@@ -1399,7 +1399,7 @@ export const SettingsView: React.FC = () => {
               </div>
               <p
                 style={{
-                  fontSize: 12,
+                  fontSize: 'var(--text-sm)',
                   color: 'var(--text-muted)',
                   marginBottom: 10,
                   lineHeight: 1.45
@@ -1456,7 +1456,7 @@ export const SettingsView: React.FC = () => {
                       ? null
                       : !p.configured && (
                           <span
-                            style={{ fontSize: 11, color: 'var(--text-muted)' }}
+                            style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}
                             title="Belum dikonfigurasi — main-side melewati provider ini saat failover"
                           >
                             belum dikonfigurasi
@@ -1466,7 +1466,7 @@ export const SettingsView: React.FC = () => {
                       <button
                         type="button"
                         className="btn btn-ghost btn-sm"
-                        style={{ fontSize: 10, padding: '0 6px' }}
+                        style={{ fontSize: 'var(--text-xs)', padding: '0 6px' }}
                         aria-label={`Naikkan ${p.name} dalam urutan failover`}
                         disabled={i === 0}
                         onClick={() =>
@@ -1484,7 +1484,7 @@ export const SettingsView: React.FC = () => {
                       <button
                         type="button"
                         className="btn btn-ghost btn-sm"
-                        style={{ fontSize: 10, padding: '0 6px' }}
+                        style={{ fontSize: 'var(--text-xs)', padding: '0 6px' }}
                         aria-label={`Turunkan ${p.name} dalam urutan failover`}
                         disabled={i === failoverCandidates.length - 1}
                         onClick={() =>
@@ -1503,7 +1503,7 @@ export const SettingsView: React.FC = () => {
                   </div>
                 ))}
                 {failoverCandidates.length === 0 && (
-                  <div style={{ fontSize: 12, color: 'var(--text-muted)', padding: '6px 2px' }}>
+                  <div style={{ fontSize: 'var(--text-sm)', color: 'var(--text-muted)', padding: '6px 2px' }}>
                     Tidak ada kandidat cadangan — konfigurasi provider cloud lain untuk mengisi
                     daftar failover.
                   </div>
@@ -1517,7 +1517,7 @@ export const SettingsView: React.FC = () => {
                       ⠿
                     </span>
                     <span className="truncate">{ollamaRow.name}</span>
-                    <span style={{ fontSize: 11, color: 'var(--text-muted)', marginLeft: 'auto' }}>
+                    <span style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', marginLeft: 'auto' }}>
                       lokal — bukan kandidat
                     </span>
                   </div>
@@ -1542,7 +1542,7 @@ export const SettingsView: React.FC = () => {
                 </button>
               </div>
             </div>
-            <p style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 12, lineHeight: 1.5 }}>
+            <p style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', marginTop: 12, lineHeight: 1.5 }}>
               Alur: tambah provider (nama + base URL + key) → <b>Simpan</b> → tes otomatis (ping
               API) + daftar model dimuat ulang. Di Chat pilih model, atau <b>Setel default</b>.
               Provider custom memakai protokol OpenAI-compatible (butuh API key; Ollama lokal gratis
@@ -1577,7 +1577,7 @@ export const SettingsView: React.FC = () => {
                 </strong>{' '}
                 · {indexStats?.sqlite.count ?? 0} rows
               </div>
-              <div style={{ fontSize: 11, color: 'var(--text-muted)', wordBreak: 'break-all' }}>
+              <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', wordBreak: 'break-all' }}>
                 {indexStats?.sqlite.path || '—'}
               </div>
             </div>
@@ -1612,7 +1612,7 @@ export const SettingsView: React.FC = () => {
                   </span>
                 )}
               </div>
-              <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>
+              <div style={{ fontSize: 'var(--text-sm)', color: 'var(--text-secondary)' }}>
                 Model:{' '}
                 <strong
                   style={{
@@ -1626,7 +1626,7 @@ export const SettingsView: React.FC = () => {
                 · {embeddingStatus?.totalChunks ?? 0} chunks · {embeddingStatus?.indexedFiles ?? 0}{' '}
                 files
               </div>
-              <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+              <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
                 Dipakai Context AI (semantic recall) saat vault terbuka.
               </div>
             </div>
@@ -1719,7 +1719,7 @@ export const SettingsView: React.FC = () => {
                 {label}
               </label>
             ))}
-            <p style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 12 }}>
+            <p style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', marginTop: 12 }}>
               AI write selalu butuh konfirmasi Apply (tidak ada auto-write). Path di luar vault
               ditolak. Plugin JS jalan di sandbox vm + worker; operasi tulis butuh prompt izin.
               Automation & Plugins default nonaktif (WC-4) — aktifkan di sini jika dipakai.
@@ -1946,7 +1946,7 @@ export const SettingsView: React.FC = () => {
               />
               Engine enabled
             </label>
-            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 16 }}>
+            <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', marginBottom: 16 }}>
               Scheduler:{' '}
               <b
                 style={{
@@ -1986,7 +1986,7 @@ export const SettingsView: React.FC = () => {
               >
                 <div style={{ minWidth: 0 }}>
                   <div style={{ fontWeight: 600, fontSize: 'var(--text-sm)' }}>{r.name}</div>
-                  <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                  <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
                     {r.trigger.type === 'schedule' ? (
                       <span style={{ color: 'var(--color-primary)' }}>
                         ⏰ {describeSchedule(r.trigger.schedule)}
@@ -2000,7 +2000,7 @@ export const SettingsView: React.FC = () => {
                   </div>
                 </div>
                 <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
-                  <label style={{ fontSize: 11, display: 'flex', alignItems: 'center', gap: 4 }}>
+                  <label style={{ fontSize: 'var(--text-xs)', display: 'flex', alignItems: 'center', gap: 4 }}>
                     <input
                       type="checkbox"
                       checked={r.enabled}
@@ -2010,7 +2010,7 @@ export const SettingsView: React.FC = () => {
                   </label>
                   <button
                     className="btn btn-ghost btn-sm"
-                    style={{ fontSize: 10 }}
+                    style={{ fontSize: 'var(--text-xs)' }}
                     onClick={async () => {
                       const res = await window.api.runAutomationRule(r.id)
                       flash(res.ok ? `Ran ${r.id}` : res.error || 'Failed')
@@ -2088,7 +2088,7 @@ export const SettingsView: React.FC = () => {
                   />
                 )}
                 <div>
-                  <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 4 }}>
+                  <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', marginBottom: 4 }}>
                     Hari (kosong = setiap hari)
                   </div>
                   <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
@@ -2096,7 +2096,7 @@ export const SettingsView: React.FC = () => {
                       <label
                         key={label}
                         style={{
-                          fontSize: 11,
+                          fontSize: 'var(--text-xs)',
                           display: 'flex',
                           alignItems: 'center',
                           gap: 2,
@@ -2169,7 +2169,7 @@ export const SettingsView: React.FC = () => {
             {(automation?.logs || []).slice(0, 8).map((l, i) => (
               <div
                 key={i}
-                style={{ fontSize: 11, color: l.ok ? 'var(--text-muted)' : 'var(--color-error)' }}
+                style={{ fontSize: 'var(--text-xs)', color: l.ok ? 'var(--text-muted)' : 'var(--color-error)' }}
               >
                 {l.at.slice(11, 19)} [{l.ruleId}] {l.message}
               </div>
@@ -2229,7 +2229,7 @@ export const SettingsView: React.FC = () => {
                         className="badge"
                         style={{
                           background: 'var(--color-primary)',
-                          color: '#fff',
+                          color: 'var(--text-on-primary)',
                           marginLeft: 6
                         }}
                         title="Plugin JS berjalan di sandbox (vm + worker), operasi tulis butuh izin"
@@ -2241,7 +2241,7 @@ export const SettingsView: React.FC = () => {
                   {p.js && (
                     <button
                       className="btn btn-ghost btn-sm"
-                      style={{ fontSize: 10, flexShrink: 0 }}
+                      style={{ fontSize: 'var(--text-xs)', flexShrink: 0 }}
                       onClick={async () => {
                         await window.api.revokePluginPermissions(p.id)
                         flash(`Izin ${p.name} di-reset — prompt muncul lagi`)
@@ -2251,7 +2251,7 @@ export const SettingsView: React.FC = () => {
                     </button>
                   )}
                 </div>
-                <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)' }}>
                   {p.description || p.id} · {p.commands} commands ·{' '}
                   {p.enabled ? 'enabled' : 'disabled'}
                 </div>
@@ -2377,7 +2377,7 @@ export const SettingsView: React.FC = () => {
                       {st?.connected ? `terhubung · ${st.tools} tools` : 'putus'}
                     </span>
                   </div>
-                  <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4 }}>
+                  <div style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', marginTop: 4 }}>
                     {s.transport === 'stdio'
                       ? `command: ${s.command} ${(s.args || []).join(' ')}`
                       : `url: ${s.url}`}
@@ -2394,7 +2394,7 @@ export const SettingsView: React.FC = () => {
                       alignItems: 'center'
                     }}
                   >
-                    <label style={{ fontSize: 11, display: 'flex', alignItems: 'center', gap: 4 }}>
+                    <label style={{ fontSize: 'var(--text-xs)', display: 'flex', alignItems: 'center', gap: 4 }}>
                       <input
                         type="checkbox"
                         checked={s.enabled}
@@ -2409,7 +2409,7 @@ export const SettingsView: React.FC = () => {
                       Enabled
                     </label>
                     <label
-                      style={{ fontSize: 11, display: 'flex', alignItems: 'center', gap: 4 }}
+                      style={{ fontSize: 'var(--text-xs)', display: 'flex', alignItems: 'center', gap: 4 }}
                       title="Write tools (bukan readOnlyHint) hanya jalan jika ini ON — read tools selalu jalan"
                     >
                       <input
@@ -2434,7 +2434,7 @@ export const SettingsView: React.FC = () => {
                     </button>
                     <button
                       className="btn btn-ghost btn-sm"
-                      style={{ fontSize: 10 }}
+                      style={{ fontSize: 'var(--text-xs)' }}
                       onClick={() => void saveMcp(mcpServers.filter((x) => x.id !== s.id))}
                     >
                       Hapus
@@ -2508,7 +2508,7 @@ export const SettingsView: React.FC = () => {
                     onChange={(e) => setMcpDraft({ ...mcpDraft, url: e.target.value })}
                   />
                 )}
-                <label style={{ fontSize: 11, display: 'flex', alignItems: 'center', gap: 4 }}>
+                <label style={{ fontSize: 'var(--text-xs)', display: 'flex', alignItems: 'center', gap: 4 }}>
                   <input
                     type="checkbox"
                     checked={mcpDraft.allowWriteTools}
@@ -2551,7 +2551,7 @@ export const SettingsView: React.FC = () => {
                 </div>
               </div>
             )}
-            <p style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 12, lineHeight: 1.5 }}>
+            <p style={{ fontSize: 'var(--text-xs)', color: 'var(--text-muted)', marginTop: 12, lineHeight: 1.5 }}>
               Alur: tambah → <b>Tes</b> (handshake + tools/list) → <b>Simpan</b>. Tool read selalu
               dipakai AI; tool write butuh toggle <b>Izinkan tool write</b> + role berizin menulis
               (researcher hanya baca). Contoh server: filesystem, context7, memory, GitHub,
@@ -2767,7 +2767,7 @@ export const SettingsView: React.FC = () => {
             {health && (
               <pre
                 style={{
-                  fontSize: 10,
+                  fontSize: 'var(--text-xs)',
                   background: 'var(--bg-surface)',
                   padding: 12,
                   borderRadius: 6,

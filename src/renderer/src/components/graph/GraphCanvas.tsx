@@ -5046,7 +5046,7 @@ export const GraphCanvas: React.FC<{ embedded?: boolean }> = ({ embedded = false
       {ctxMenu && (
         <div
           className="ctx-menu"
-          style={{ position: 'fixed', left: ctxMenu.x, top: ctxMenu.y, zIndex: 9999 }}
+          style={{ position: 'fixed', left: ctxMenu.x, top: ctxMenu.y, zIndex: 'var(--z-dropdown)' }}
           onContextMenu={(e) => e.preventDefault()}
         >
           {!ctxMenu.node.isGhost && ctxMenu.node.type !== 'ghost' && ctxMenu.node.path && (

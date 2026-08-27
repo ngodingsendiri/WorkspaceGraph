@@ -142,7 +142,7 @@ export const TemplatePicker: React.FC<{ open: boolean; onClose: () => void }> = 
               </>
             )
           })()}
-          {error && <div style={{ fontSize: 12, color: 'var(--color-error)' }}>{error}</div>}
+          {error && <div style={{ fontSize: 'var(--text-sm)', color: 'var(--color-error)' }}>{error}</div>}
           <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
             <button className="btn btn-ghost btn-sm" onClick={onClose}>
               Batal

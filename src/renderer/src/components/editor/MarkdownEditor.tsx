@@ -82,7 +82,7 @@ function makeNoteShellTheme(dark: boolean): ReturnType<typeof EditorView.theme> 
         color: 'var(--text-faint, var(--text-muted))',
         border: 'none',
         fontFamily: 'var(--font-mono)',
-        fontSize: '11px'
+        fontSize: 'var(--text-xs)'
       },
       '.cm-lineNumbers .cm-gutterElement': {
         padding: '0 8px 0 4px',
