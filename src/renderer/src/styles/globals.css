@@ -5196,6 +5196,22 @@ button {
   flex-shrink: 0;
   opacity: 0.45;
 }
+/* M5 UI-9: action button (Undo etc.) inside a toast */
+.toast-action {
+  background: transparent;
+  border: 1px solid var(--border-color, rgba(128, 128, 128, 0.35));
+  color: var(--text-strong, inherit);
+  border-radius: 6px;
+  padding: 2px 8px;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  cursor: pointer;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.toast-action:hover {
+  background: rgba(128, 128, 128, 0.15);
+}
 .toast:hover .toast-close {
   opacity: 0.85;
 }
@@ -5331,6 +5347,16 @@ button {
   display: inline-flex;
   align-items: center;
   gap: 4px;
+}
+/* M5 UI-10: indexing/loading tone replaces the green "Siap" */
+.status-busy {
+  color: var(--color-warning);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.status-busy .wg-icon {
+  animation: spin 1s linear infinite;
 }
 .status-embed {
   display: inline-flex;

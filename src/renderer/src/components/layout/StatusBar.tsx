@@ -65,7 +65,7 @@ function EmbeddingBadge(): React.JSX.Element | null {
 }
 
 export const StatusBar: React.FC = () => {
-  const { totalFiles, totalFolders, totalNotes, rootPath } = useWorkspaceStore()
+  const { totalFiles, totalFolders, totalNotes, rootPath, indexing } = useWorkspaceStore()
   const nodeCount = useGraphStore((s) => s.nodes.length)
   const edgeCount = useGraphStore((s) => s.edges.length)
   const surfaceMode = useEditorStore((s) => s.surfaceMode)
@@ -141,10 +141,17 @@ export const StatusBar: React.FC = () => {
       {/* Right group — system status */}
       <span className="status-right">
         <EmbeddingBadge />
-        <span className="status-ready" title="Vault aktif & terindeks">
-          <Icon name="checkCircle" size={12} />
-          Siap
-        </span>
+        {indexing ? (
+          <span className="status-busy" title="Vault sedang diindeks — pencarian/graph sebagian">
+            <Icon name="sync" size={12} />
+            Mengindeks…
+          </span>
+        ) : (
+          <span className="status-ready" title="Vault aktif & terindeks">
+            <Icon name="checkCircle" size={12} />
+            Siap
+          </span>
+        )}
       </span>
     </div>
   )

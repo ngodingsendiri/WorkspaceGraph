@@ -195,6 +195,12 @@ export function nodeEntryProgress(
   maxOrder: number | undefined
 ): number {
   if (born == null) return 1
+  // M5 UI-15: skip entry animation under prefers-reduced-motion (a11y)
+  try {
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return 1
+  } catch {
+    /* matchMedia unavailable — animate normally */
+  }
   const delay = (NODE_ENTRY_STAGGER_MS * (enterOrder ?? 0)) / Math.max(1, maxOrder ?? 1)
   // A-1: easeOutBack overshoots (~1.09) then settles — node "pops" in with a
   // spring instead of gliding (both renderers derive entry from this function).

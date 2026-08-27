@@ -25,6 +25,8 @@ export interface WorkspaceStore {
   activeView: 'dashboard' | 'editor' | 'graph' | 'settings' | 'welcome'
   showSidebar: boolean
   showAIChat: boolean
+  /** M5 UI-10: true while the background index pass is running */
+  indexing: boolean
 
   openWorkspace: (folderPath: string) => Promise<boolean>
   closeWorkspace: () => Promise<void>
@@ -33,6 +35,7 @@ export interface WorkspaceStore {
   toggleSidebar: () => void
   toggleAIChat: () => void
   fetchRecentWorkspaces: () => Promise<void>
+  setIndexing: (indexing: boolean) => void
   lastError: string | null
   clearError: () => void
 }
@@ -49,6 +52,7 @@ export const useWorkspaceStore = create<WorkspaceStore>((set) => ({
   showSidebar: true,
   // F-14: default closed so focus sessions start on the workspace, not the chat panel
   showAIChat: false,
+  indexing: false,
   lastError: null,
 
   clearError: () => set({ lastError: null }),
@@ -64,6 +68,7 @@ export const useWorkspaceStore = create<WorkspaceStore>((set) => ({
         totalFolders: state.totalFolders,
         totalNotes: state.totalNotes ?? 0,
         activeView: 'dashboard',
+        indexing: state.indexing === true,
         lastError: null
       })
       // Keep recent list in sync with main process
@@ -136,7 +141,8 @@ export const useWorkspaceStore = create<WorkspaceStore>((set) => ({
           files: state.files || [],
           totalFiles: state.totalFiles ?? 0,
           totalFolders: state.totalFolders ?? 0,
-          totalNotes: state.totalNotes ?? 0
+          totalNotes: state.totalNotes ?? 0,
+          indexing: state.indexing === true
         })
       }
     } catch (err) {
@@ -148,6 +154,7 @@ export const useWorkspaceStore = create<WorkspaceStore>((set) => ({
   setActiveView: (view) => set({ activeView: view }),
   toggleSidebar: () => set((state) => ({ showSidebar: !state.showSidebar })),
   toggleAIChat: () => set((state) => ({ showAIChat: !state.showAIChat })),
+  setIndexing: (indexing) => set({ indexing }),
 
   fetchRecentWorkspaces: async () => {
     try {

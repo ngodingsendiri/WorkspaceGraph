@@ -181,7 +181,7 @@ Prioritas berdasar dampak & ketergantungan. **M4a** = perbaikan klasifikasi (blo
 
 ## PHASE 5 — UI/UX & TEMA
 
-> **Status M5: ✅ SELESAI sebagian — 7/8 high/medium selesai. Sisa: Custom theme plugin API (deferred, low) + widget drag/drop + graph layout 6/7 (deferred).**
+> **Status M5: ✅ SELESAI — 7/8 + low items. UI-9 undo (toast action infra + rename), UI-10 indexing tone, UI-14 error duration, UI-15 reduced-motion, UI-29 debug leak sudah; sisa font/hex + Custom theme API (deferred, low).**
 
 ### M5a: Design tokens & styling — ✅
 
@@ -189,8 +189,8 @@ Prioritas berdasar dampak & ketergantungan. **M4a** = perbaikan klasifikasi (blo
 |---|---|---|---|---|
 | 1 | UI-1 | ±100 font-size px mentah (<10px) + warna hex + z-index inline | Migrasi ke token; hapus zIndex 9999; ganti font <10px | ✅ zIndex + file-tree a11y; sisa font/hex deferred (100+ tempat, low) |
 | 2 | UI-2 | Token kategori hilang | Tambah --color-secondary, --opacity-*, --border-w-*, skala typography | ✅ 3 token kategori + typography Display/Heading |
-| 3 | UI-1 (graph) | Palet node/edge diduplikasi di TS | Satu sumber warna via CSS var + theme observer | ⬜ deferred (TS→CSS var, low) |
-| 4 | UI-29 | Debug leak data-theme di Settings | Sembunyikan | ⬜ low |
+| 3 | UI-1 (graph) | Palet node/edge diduplikasi di TS | Satu sumber warna via CSS var + theme observer | ✅ `readPalette()` + MutationObserver data-theme |
+| 4 | UI-29 | Debug leak data-theme di Settings | Sembunyikan | ✅ |
 
 ### M5b: A11y & feedback — ✅
 
@@ -201,10 +201,10 @@ Prioritas berdasar dampak & ketergantungan. **M4a** = perbaikan klasifikasi (blo
 | 3 | UI-13 | Dashboard list items div onClick | role/tabIndex atau <button> | ✅ |
 | 4 | UI-5 | Dashboard load gagal diam | Inline error + tombol Retry | ✅ |
 | 5 | UI-7 | Search error tampil "Tidak ada hasil" | State error + Retry | ✅ |
-| 6 | UI-9 | Tidak ada undo (rename/apply proposal/clear log) | Toast + undo 5 detik | ⬜ deferred (butuh toast action infra, low) |
-| 7 | UI-10 | StatusBar "Siap" saat indexing | Tone warning saat indexing/loading model | ⬜ low |
-| 8 | UI-14 | Toast error hilang 3.5s tanpa aksi | Error duration lebih lama + tombol aksi opsional | ⬜ low |
-| 9 | UI-15 | Graph animation tidak di-gate reduced-motion | Gate zoom tween/entry animation | ⬜ low |
+| 6 | UI-9 | Tidak ada undo (rename/apply proposal/clear log) | Toast + undo 5 detik | ✅ toast action infra + rename undo (toast.action + toast-action CSS) |
+| 7 | UI-10 | StatusBar "Siap" saat indexing | Tone warning saat indexing/loading model | ✅ `indexing` state → `status-busy` (warning tone + spin) |
+| 8 | UI-14 | Toast error hilang 3.5s tanpa aksi | Error duration lebih lama + tombol aksi opsional | ✅ error 8s / warning 5s; action button via toast.action |
+| 9 | UI-15 | Graph animation tidak di-gate reduced-motion | Gate zoom tween/entry animation | ✅ zoom tween (line 1998) + nodeEntryProgress gate prefers-reduced-motion |
 
 ### M5c: Dashboard — ✅
 ### M5d: Graph View — ✅ (edge types 3→7)

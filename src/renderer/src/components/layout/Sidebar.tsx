@@ -310,12 +310,31 @@ export const Sidebar: React.FC<{ onOpenSearch: () => void }> = ({ onOpenSearch }
     const newPath = `${parent}${sep}${clean}`
     try {
       const result = await window.api.renameFile(item.path, newPath)
+      const undoRename = async (): Promise<void> => {
+        try {
+          await window.api.renameFile(newPath, item.path)
+          await fetchState()
+          toast('Rename dibatalkan', { variant: 'success' })
+        } catch {
+          toast('Gagal membatalkan rename', { variant: 'error' })
+        }
+      }
       // Show WikiLink update toast if any links were updated
       if (result && typeof result === 'object' && result.renamedLinks > 0) {
         toast(
           `✏️ Rename selesai — ${result.renamedLinks} WikiLink diperbarui di ${result.affectedFiles.length} file`,
-          { variant: 'success', duration: 5000 }
+          {
+            variant: 'success',
+            duration: 6000,
+            action: { label: 'Undo', onClick: () => void undoRename() }
+          }
         )
+      } else {
+        toast(`✏️ Diubah nama ke ${clean}`, {
+          variant: 'success',
+          duration: 5000,
+          action: { label: 'Undo', onClick: () => void undoRename() }
+        })
       }
       // Update open tab path if this file was open
       const editor = useEditorStore.getState()

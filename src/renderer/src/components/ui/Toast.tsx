@@ -18,11 +18,18 @@ import { Icon, type IconName } from './Icons'
 
 export type ToastVariant = 'info' | 'success' | 'warning' | 'error'
 
+export interface ToastAction {
+  label: string
+  onClick: () => void
+}
+
 export interface ToastItem {
   id: string
   message: string
   variant: ToastVariant
   duration: number
+  /** M5 UI-9: optional action button (e.g. "Undo") */
+  action?: ToastAction
 }
 
 interface ToastStore {
@@ -39,7 +46,10 @@ const useToastStore = create<ToastStore>((set) => ({
 
 /** Show a toast notification from anywhere in the app */
 // eslint-disable-next-line react-refresh/only-export-components -- imperative toast API, not a component
-export function toast(message: string, opts?: { variant?: ToastVariant; duration?: number }): void {
+export function toast(
+  message: string,
+  opts?: { variant?: ToastVariant; duration?: number; action?: ToastAction }
+): void {
   const id = Math.random().toString(36).slice(2)
   // M5 UI-14: errors persist longer so users can read + react
   const defaultDuration =
@@ -48,7 +58,8 @@ export function toast(message: string, opts?: { variant?: ToastVariant; duration
     id,
     message,
     variant: opts?.variant ?? 'info',
-    duration: opts?.duration ?? defaultDuration
+    duration: opts?.duration ?? defaultDuration,
+    action: opts?.action
   })
 }
 
@@ -78,6 +89,19 @@ function ToastEntry({ item }: { item: ToastItem }): React.JSX.Element {
         <Icon name={VARIANT_ICON[item.variant]} size={16} />
       </span>
       <span className="toast-msg">{item.message}</span>
+      {item.action && (
+        <button
+          type="button"
+          className="toast-action"
+          onClick={(e) => {
+            e.stopPropagation()
+            item.action?.onClick()
+            remove(item.id)
+          }}
+        >
+          {item.action.label}
+        </button>
+      )}
       <span className="toast-close">
         <Icon name="close" size={12} />
       </span>
