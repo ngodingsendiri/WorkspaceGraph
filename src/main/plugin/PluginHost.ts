@@ -159,9 +159,13 @@ export class PluginHost {
     } catch {
       /* ignore */
     }
+    // M6b PLG-2: after (re)load, subscribed plugins can react to host lifecycle
+    this.emitEvent('plugin_loaded')
   }
 
   unload(): void {
+    // M6b PLG-2: notify subscribed plugins they're being unloaded (vault close)
+    this.emitEvent('plugin_unloaded')
     this.plugins = []
   }
 

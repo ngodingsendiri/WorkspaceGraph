@@ -253,7 +253,7 @@ Prioritas berdasar dampak & ketergantungan. **M4a** = perbaikan klasifikasi (blo
 
 ## PHASE 6 — PLATFORM: AUTOMATION + PLUGIN
 
-> **Status M6: ✅ SELESAI — M6a 8/8, M6b 7/8 (PLG-1 contextMenus/searchProviders, PLG-5 settings.set, PLG-6 events.subscribe). Sisa: PLG-2 lifecycle events (low).**
+> **Status M6: ✅ SELESAI — M6a 8/8, M6b 8/8 (PLG-1 contextMenus/searchProviders, PLG-5 settings.set, PLG-6 events.subscribe, PLG-2 lifecycle events).**
 
 ### M6a: Automation (spec 22)
 
@@ -273,7 +273,7 @@ Prioritas berdasar dampak & ketergantungan. **M4a** = perbaikan klasifikasi (blo
 | # | Audit ID | Masalah | Solusi | Status |
 |---|---|---|---|---|
 | 1 | PLG-1 | Hanya 1/9 extension point | Mulai 1-2 berdampak: Context Menu + Search Provider (bisa declarative di manifest tanpa UI SDK penuh) | ✅ `contextMenus` + `searchProviders` manifest; Sidebar ctx-menu + SearchModal merge (IPC + preload) |
-| 2 | PLG-2 | Lifecycle 8 tahap tidak lengkap | Dokumentasikan "folder = install"; tambah validasi SDK version + event lifecycle | 🔶 SDK gate ✅; lifecycle event deferred |
+| 2 | PLG-2 | Lifecycle 8 tahap tidak lengkap | Dokumentasikan "folder = install"; tambah validasi SDK version + event lifecycle | ✅ SDK gate + `plugin_loaded`/`plugin_unloaded` lifecycle events via emitEvent |
 | 3 | PLG-3 | Manifest kurang dependencies/minimumSdkVersion | Tambah field + `minSdk` gate | ✅ `minSdkVersion`/`dependencies` + semver gate + PLUGIN_SDK_VERSION |
 | 4 | PLG-5 | SDK APIs jauh dari spesifikasi | Tambah read-only Project/Task/Knowledge (via DomainEngine) + `settings.set` + Event subscribe | ✅ `domain.list` read-only + `settings.set` (plugin-scoped) |
 | 5 | PLG-6 | Event system TIDAK ADA | Minimal `events.subscribe(channel, cb)` dibatasi event yang ada | ✅ `manifest.events` + `PluginHost.emitEvent` + `AutomationEngine.onPluginEvent` |
