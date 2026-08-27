@@ -181,13 +181,13 @@ Prioritas berdasar dampak & ketergantungan. **M4a** = perbaikan klasifikasi (blo
 
 ## PHASE 5 — UI/UX & TEMA
 
-> **Status M5: ✅ SELESAI — 8/8 + low polish. UI-1 font <10px→token, inline hex→token, zIndex 9999→--z-dropdown, JSX fontSize→token; UI-9 undo toast, UI-10 indexing tone, UI-14/15/29, palette CSS-var semua selesai.**
+> **Status M5: ✅ SELESAI — 8/8 + polish penuh. UI-1 semua text font-size→token (icon-size tetap px), hex→token, zIndex 9999→--z-dropdown; UI-9/10/14/15/29 + palette CSS-var selesai.**
 
 ### M5a: Design tokens & styling — ✅
 
 | # | Audit ID | Masalah | Solusi | Status |
 |---|---|---|---|---|
-| 1 | UI-1 | ±100 font-size px mentah (<10px) + warna hex + z-index inline | Migrasi ke token; hapus zIndex 9999; ganti font <10px | ✅ <10px→var(--text-xs), 31 JSX fontSize→token, zIndex 9999→--z-dropdown, hex #fff→--text-on-primary; sisa 127 CSS font-size (low, 100+ tempat) |
+| 1 | UI-1 | ±100 font-size px mentah (<10px) + warna hex + z-index inline | Migrasi ke token; hapus zIndex 9999; ganti font <10px | ✅ 119 text font-size→token (8 <10px, 31 JSX, 112 CSS text; 7 icon-size dipertahankan px) + zIndex 9999→--z-dropdown + hex→--text-on-primary |
 | 2 | UI-2 | Token kategori hilang | Tambah --color-secondary, --opacity-*, --border-w-*, skala typography | ✅ 3 token kategori + typography Display/Heading |
 | 3 | UI-1 (graph) | Palet node/edge diduplikasi di TS | Satu sumber warna via CSS var + theme observer | ✅ `readPalette()` + MutationObserver data-theme |
 | 4 | UI-29 | Debug leak data-theme di Settings | Sembunyikan | ✅ |
